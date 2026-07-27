@@ -49,7 +49,7 @@ type Config struct {
 	DefaultQueue string `json:",default=default"`
 }
 
-var fillDefaultUnmarshaler = mapping.NewUnmarshaler("json", mapping.WithDefault())
+var fillDefaultUnmarshaler = mapping.NewDefaultUnmarshaler()
 
 func fillDefault(cfg Config) Config {
 	var c Config

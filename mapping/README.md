@@ -206,6 +206,21 @@ err := mapping.UnmarshalJsonMap(m, &cfg)
 func UnmarshalKey(m map[string]any, v any) error
 ```
 
+### NewDefaultUnmarshaler
+
+创建仅填充默认值的反序列化器（等价于 `NewUnmarshaler("json", WithDefault())`），
+是 conf、logger、orm、redisx、jwt、httpx、taskq、trace 等模块中 fillDefault
+模式的统一入口：
+
+```go
+func NewDefaultUnmarshaler() *Unmarshaler
+```
+
+```go
+u := mapping.NewDefaultUnmarshaler()
+err := u.Unmarshal(map[string]any{}, &cfg)
+```
+
 ### NewUnmarshaler
 
 创建自定义配置的反序列化器：

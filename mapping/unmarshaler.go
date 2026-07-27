@@ -49,6 +49,13 @@ func WithCanonicalKeyFunc(f func(string) string) UnmarshalOption {
 	}
 }
 
+// NewDefaultUnmarshaler 创建一个用于填充默认值的反序列化器。
+// 等价于 NewUnmarshaler("json", WithDefault())。
+// 是 conf、redisx、orm 等模块中 fillDefault 模式的推荐入口。
+func NewDefaultUnmarshaler() *Unmarshaler {
+	return NewUnmarshaler("json", WithDefault())
+}
+
 // NewUnmarshaler 创建一个新的反序列化器。
 func NewUnmarshaler(key string, opts ...UnmarshalOption) *Unmarshaler {
 	u := &Unmarshaler{key: key}

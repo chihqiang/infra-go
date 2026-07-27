@@ -90,7 +90,7 @@ type Config struct {
 }
 
 // fillDefaultUnmarshaler 用于填充默认值的反序列化器。
-var fillDefaultUnmarshaler = mapping.NewUnmarshaler("json", mapping.WithDefault())
+var fillDefaultUnmarshaler = mapping.NewDefaultUnmarshaler()
 
 // Logger 日志记录器，实现 LoggerInterface。
 type Logger struct {

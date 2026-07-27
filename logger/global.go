@@ -2,48 +2,41 @@ package logger
 
 import (
 	"context"
-	"sync"
+	"sync/atomic"
 )
 
 var (
 	// global 全局 Logger 实例。
-	global     ILogger
-	globalLock sync.Mutex
+	global atomic.Pointer[ILogger]
 )
 
 func init() {
 	// 初始化全局 Logger，默认输出到 stderr。
-	global = New(Config{
+	l := ILogger(New(Config{
 		Level:       InfoLevel,
 		Encoding:    JSONEncoding,
 		Output:      []string{"stderr"},
 		ErrorOutput: "stderr",
 		Caller:      true,
-	})
+	}))
+	global.Store(&l)
 }
 
 // SetGlobal 设置全局 Logger。
 func SetGlobal(l ILogger) {
-	globalLock.Lock()
-	global = l
-	globalLock.Unlock()
+	global.Store(&l)
 }
 
 // GetGlobal 返回全局 Logger。
 func GetGlobal() ILogger {
-	globalLock.Lock()
-	defer globalLock.Unlock()
-	return global
+	return *global.Load()
 }
 
 // ReplaceGlobal 创建一个新 Logger 替换全局 Logger，返回旧的 Logger。
 func ReplaceGlobal(cfg Config) ILogger {
 	newLogger := New(cfg)
-	globalLock.Lock()
-	old := global
-	global = newLogger
-	globalLock.Unlock()
-	return old
+	old := global.Swap(&newLogger)
+	return *old
 }
 
 // --- 结构化日志 ---

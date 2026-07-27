@@ -10,10 +10,13 @@ Config.Driver ──▶ New() ──┬── "oss"  ──▶ NewOSS()  ──�
                           └── "kodo" ──▶ NewKODO() ──▶ kodoStorage
 
 所有实现都满足 Storage 接口：
-    Write(path string, content []byte) error
-    Delete(path string) (int64, error)
-    URL(path string) (string, error)
+    Write(ctx context.Context, path string, content []byte) error
+    Delete(ctx context.Context, path string) (int64, error)
+    URL(ctx context.Context, path string) (string, error)
 ```
+
+ctx 用于控制请求超时和取消。注意：阿里云 OSS SDK 不支持原生 context 取消，
+OSS 实现仅做快速失败检测；KODO 的 Delete 使用了不支持 context 的 Batch API，同样仅做快速失败检测。
 
 ## 快速开始
 
@@ -21,6 +24,7 @@ Config.Driver ──▶ New() ──┬── "oss"  ──▶ NewOSS()  ──�
 package main
 
 import (
+    "context"
     "log"
 
     "github.com/chihqiang/infra-go/storage"
@@ -42,20 +46,21 @@ func main() {
     }
 
     // 写入文件
-    err = s.Write("test/hello.txt", []byte("hello world"))
+    ctx := context.Background()
+    err = s.Write(ctx, "test/hello.txt", []byte("hello world"))
     if err != nil {
         log.Fatal(err)
     }
 
     // 获取文件访问 URL
-    u, err := s.URL("test/hello.txt")
+    u, err := s.URL(ctx, "test/hello.txt")
     if err != nil {
         log.Fatal(err)
     }
     log.Printf("file URL: %s", u)
 
     // 删除文件
-    count, err := s.Delete("test/hello.txt")
+    count, err := s.Delete(ctx, "test/hello.txt")
     if err != nil {
         log.Fatal(err)
     }

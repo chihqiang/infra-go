@@ -71,10 +71,10 @@ func (s *kodoStorage) uploadToken() string {
 }
 
 // Write 将内容写入 KODO 指定路径。
-func (s *kodoStorage) Write(path string, content []byte) error {
+func (s *kodoStorage) Write(ctx context.Context, path string, content []byte) error {
 	formUploader := qstorage.NewFormUploader(s.storageConfig)
 	dataLen := int64(len(content))
-	err := formUploader.Put(context.Background(),
+	err := formUploader.Put(ctx,
 		&qstorage.PutRet{},
 		s.uploadToken(),
 		path,
@@ -89,7 +89,7 @@ func (s *kodoStorage) Write(path string, content []byte) error {
 }
 
 // Delete 删除 KODO 指定路径的对象，返回删除的对象数量。
-func (s *kodoStorage) Delete(path string) (int64, error) {
+func (s *kodoStorage) Delete(ctx context.Context, path string) (int64, error) {
 	bucketManager := qstorage.NewBucketManager(s.mac, s.storageConfig)
 	rets, err := bucketManager.Batch([]string{qstorage.URIDelete(s.bucket, path)})
 	if err != nil {
@@ -107,7 +107,7 @@ func (s *kodoStorage) Delete(path string) (int64, error) {
 // URL 根据路径生成完整的 KODO 访问 URL。
 // 使用七牛云 SDK 的 MakePublicURL 生成标准的公开访问 URL。
 // 若配置中未设置 URL 则返回错误。
-func (s *kodoStorage) URL(path string) (string, error) {
+func (s *kodoStorage) URL(_ context.Context, path string) (string, error) {
 	if s.url == "" {
 		return "", fmt.Errorf("storage: KODO URL is empty, please set URL field in config")
 	}

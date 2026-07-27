@@ -21,8 +21,6 @@ const (
 	defaultRoomType = "memory"
 	// roomTypeRedis Redis 房间类型（用于 switch 判断）。
 	roomTypeRedis = "redis"
-	// defaultRoomPrefix 默认 Redis 房间键前缀。
-	defaultRoomPrefix = "ws:room:"
 	// defaultRedisAddr 默认 Redis 地址。
 	defaultRedisAddr = "127.0.0.1:6379"
 )
@@ -65,7 +63,7 @@ type Config struct {
 }
 
 // fillDefaultUnmarshaler 用于填充默认值的反序列化器。
-var fillDefaultUnmarshaler = mapping.NewUnmarshaler("json", mapping.WithDefault())
+var fillDefaultUnmarshaler = mapping.NewDefaultUnmarshaler()
 
 // fillDefault 填充默认值，然后用用户配置中的非零字段覆盖。
 func fillDefault(cfg Config) Config {

@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
-	"errors"
 	"hash"
 	"io"
 	"os"
@@ -187,8 +186,3 @@ func HexEncode(data []byte) string {
 func HexDecode(s string) ([]byte, error) {
 	return hex.DecodeString(s)
 }
-
-// --- 错误定义 ---
-
-// ErrEmptyData 表示输入数据为空。
-var ErrEmptyData = errors.New("hash: input data is empty")

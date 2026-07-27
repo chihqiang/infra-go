@@ -25,8 +25,6 @@ const (
 	defaultWriteTimeout = 3 * time.Second
 	// defaultPoolTimeout 默认连接池获取超时。
 	defaultPoolTimeout = 4 * time.Second
-	// defaultIdleConnTimeout 默认空闲连接超时。
-	defaultIdleConnTimeout = 5 * time.Minute
 	// defaultConnMaxIdleTime 默认连接最大空闲时间。
 	defaultConnMaxIdleTime = 5 * time.Minute
 )
@@ -62,8 +60,6 @@ type Config struct {
 	WriteTimeout time.Duration `json:",default=3s"`
 	// PoolTimeout 连接池获取连接超时时间，默认 ReadTimeout + 1 秒。
 	PoolTimeout time.Duration `json:",default=4s"`
-	// IdleConnTimeout 空闲连接超时时间，超过此时间的连接会被关闭，默认 5 分钟。
-	IdleConnTimeout time.Duration `json:",default=5m"`
 	// MaxIdleConnsToCheck 定期检查空闲连接的最大数量，默认 0（不检查）。
 	ConnMaxIdleTime time.Duration `json:",default=5m"`
 
@@ -72,7 +68,7 @@ type Config struct {
 }
 
 // fillDefaultUnmarshaler 用于填充默认值的反序列化器。
-var fillDefaultUnmarshaler = mapping.NewUnmarshaler("json", mapping.WithDefault())
+var fillDefaultUnmarshaler = mapping.NewDefaultUnmarshaler()
 
 // fillDefault 填充默认值，然后用用户配置中的非零字段覆盖。
 func fillDefault(cfg Config) Config {
@@ -117,9 +113,6 @@ func fillDefault(cfg Config) Config {
 	}
 	if cfg.PoolTimeout != 0 {
 		c.PoolTimeout = cfg.PoolTimeout
-	}
-	if cfg.IdleConnTimeout != 0 {
-		c.IdleConnTimeout = cfg.IdleConnTimeout
 	}
 	if cfg.ConnMaxIdleTime != 0 {
 		c.ConnMaxIdleTime = cfg.ConnMaxIdleTime

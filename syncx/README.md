@@ -171,10 +171,10 @@ for v := range merged {
 
 ### FanOut
 
-将输入 channel 的值分发到多个输出 channel：
+将输入 channel 的每个值广播到所有输出 channel，各 output 之间并发发送互不阻塞。
 
 ```go
-outs := syncx.FanOut(ctx, input, 3) // 3 个输出 channel
+outs := syncx.FanOut(ctx, input, 3) // 3 个输出 channel，均收到全部值
 for _, out := range outs {
     go func(ch <-chan T) {
         for v := range ch {
@@ -183,6 +183,8 @@ for _, out := range outs {
     }(out)
 }
 ```
+
+每个输出 channel 都会收到 `input` 中的每一个值。若某个消费者处理缓慢，不会阻塞其他消费者的接收。context 取消时所有等待发送的操作自动解除阻塞。
 
 ## 目录结构
 

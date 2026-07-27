@@ -22,7 +22,7 @@ func TestFillDefault_AllDefaults(t *testing.T) {
 	assert.Equal(t, 3*time.Second, c.ReadTimeout)
 	assert.Equal(t, 3*time.Second, c.WriteTimeout)
 	assert.Equal(t, 4*time.Second, c.PoolTimeout)
-	assert.Equal(t, 5*time.Minute, c.IdleConnTimeout)
+	assert.Equal(t, 5*time.Minute, c.ConnMaxIdleTime)
 }
 
 func TestFillDefault_UserOverrides(t *testing.T) {

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net/url"
 	"strings"
@@ -73,7 +74,7 @@ func resolveOSSURL(cfg *OSSConfig) string {
 }
 
 // Write 将内容写入 OSS 指定路径。
-func (s *ossStorage) Write(path string, content []byte) error {
+func (s *ossStorage) Write(ctx context.Context, path string, content []byte) error {
 	if err := s.bucket.PutObject(path, bytes.NewReader(content)); err != nil {
 		return fmt.Errorf("storage: failed to write OSS object %q: %w", path, err)
 	}
@@ -81,7 +82,7 @@ func (s *ossStorage) Write(path string, content []byte) error {
 }
 
 // Delete 删除 OSS 指定路径的对象，返回删除的对象数量。
-func (s *ossStorage) Delete(path string) (int64, error) {
+func (s *ossStorage) Delete(ctx context.Context, path string) (int64, error) {
 	if err := s.bucket.DeleteObject(path); err != nil {
 		return 0, fmt.Errorf("storage: failed to delete OSS object %q: %w", path, err)
 	}
@@ -89,6 +90,6 @@ func (s *ossStorage) Delete(path string) (int64, error) {
 }
 
 // URL 根据路径拼接完整的 OSS 访问 URL。
-func (s *ossStorage) URL(path string) (string, error) {
+func (s *ossStorage) URL(_ context.Context, path string) (string, error) {
 	return buildURL(s.url, path)
 }

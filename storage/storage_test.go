@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -125,7 +126,7 @@ func TestNewOSS_URL_DefaultFromBucketAndEndpoint(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	u, err := s.URL("path/to/file.txt")
+	u, err := s.URL(context.Background(), "path/to/file.txt")
 	require.NoError(t, err)
 	assert.Equal(t, "https://test-bucket.oss-cn-hangzhou.aliyuncs.com/path/to/file.txt", u)
 }
@@ -140,7 +141,7 @@ func TestNewOSS_URL_CustomDomain(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	u, err := s.URL("path/to/file.txt")
+	u, err := s.URL(context.Background(), "path/to/file.txt")
 	require.NoError(t, err)
 	assert.Equal(t, "https://cdn.example.com/path/to/file.txt", u)
 }
@@ -155,7 +156,7 @@ func TestNewOSS_URL_PathWithLeadingSlash(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	u, err := s.URL("/path/to/file.txt")
+	u, err := s.URL(context.Background(), "/path/to/file.txt")
 	require.NoError(t, err)
 	assert.Equal(t, "https://cdn.example.com/path/to/file.txt", u)
 }
@@ -169,7 +170,7 @@ func TestNewOSS_URL_EndpointWithProtocol(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	u, err := s.URL("path/to/file.txt")
+	u, err := s.URL(context.Background(), "path/to/file.txt")
 	require.NoError(t, err)
 	assert.Equal(t, "https://test-bucket.oss-cn-hangzhou.aliyuncs.com/path/to/file.txt", u)
 }
@@ -183,7 +184,7 @@ func TestNewOSS_URL_EndpointWithHTTP(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	u, err := s.URL("path/to/file.txt")
+	u, err := s.URL(context.Background(), "path/to/file.txt")
 	require.NoError(t, err)
 	assert.Equal(t, "http://test-bucket.oss-cn-hangzhou.aliyuncs.com/path/to/file.txt", u)
 }
@@ -252,7 +253,7 @@ func TestNewCOS_URL_DefaultFromBucketURL(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	u, err := s.URL("path/to/file.txt")
+	u, err := s.URL(context.Background(), "path/to/file.txt")
 	require.NoError(t, err)
 	assert.Equal(t, "https://test-bucket.cos.ap-beijing.myqcloud.com/path/to/file.txt", u)
 }
@@ -266,7 +267,7 @@ func TestNewCOS_URL_CustomDomain(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	u, err := s.URL("path/to/file.txt")
+	u, err := s.URL(context.Background(), "path/to/file.txt")
 	require.NoError(t, err)
 	assert.Equal(t, "https://cdn.example.com/path/to/file.txt", u)
 }
@@ -335,7 +336,7 @@ func TestNewKODO_URL_EmptyReturnsError(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = s.URL("path/to/file.txt")
+	_, err = s.URL(context.Background(), "path/to/file.txt")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "KODO URL is empty")
 }
@@ -349,7 +350,7 @@ func TestNewKODO_URL_CustomDomain(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	u, err := s.URL("path/to/file.txt")
+	u, err := s.URL(context.Background(), "path/to/file.txt")
 	require.NoError(t, err)
 	assert.Equal(t, "https://cdn.example.com/path/to/file.txt", u)
 }

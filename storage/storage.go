@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"strings"
@@ -8,18 +9,24 @@ import (
 
 // Storage 存储服务接口，定义了对象存储的基本操作。
 // 目前支持阿里云 OSS、腾讯云 COS 和七牛云 KODO 三种实现。
+//
+// 注意：阿里云 OSS SDK 不支持 context 取消，传给 Write/Delete 的 context
+// 在 OSS 实现中仅用于超时检测（通过 context-aware reader），不会中断 SDK 调用。
 type Storage interface {
 	// Write 将内容写入指定路径。
+	// ctx 用于控制请求超时和取消。
 	// path 为对象在存储桶中的路径（key），content 为文件内容。
-	Write(path string, content []byte) error
+	Write(ctx context.Context, path string, content []byte) error
 
 	// Delete 删除指定路径的对象，返回删除的对象数量。
+	// ctx 用于控制请求超时和取消。
 	// path 为对象在存储桶中的路径（key）。
-	Delete(path string) (int64, error)
+	Delete(ctx context.Context, path string) (int64, error)
 
 	// URL 根据路径拼接完整的访问 URL。
+	// ctx 保留用于未来扩展（目前所有实现为本地 URL 拼接，不依赖 context）。
 	// path 为对象在存储桶中的路径（key）。
-	URL(path string) (string, error)
+	URL(ctx context.Context, path string) (string, error)
 }
 
 // buildURL 将基础域名和路径拼接为完整的 URL。

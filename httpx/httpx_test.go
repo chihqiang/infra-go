@@ -432,7 +432,7 @@ func TestOkJSON_GenericError(t *testing.T) {
 
 func TestOkJSONCtx(t *testing.T) {
 	w := httptest.NewRecorder()
-	OkJSONCtx(context.TODO(), w, map[string]string{"key": "value"})
+	OkJSONCtx(context.Background(), w, map[string]string{"key": "value"})
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	var resp Response[map[string]string]
@@ -496,7 +496,7 @@ func TestOkXML_Error(t *testing.T) {
 
 func TestOkXMLCtx(t *testing.T) {
 	w := httptest.NewRecorder()
-	OkXMLCtx(context.TODO(), w, xmlMessage{Name: "anyone"})
+	OkXMLCtx(context.Background(), w, xmlMessage{Name: "anyone"})
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), `<name>anyone</name>`)
 }
@@ -531,7 +531,7 @@ func TestOkHTML(t *testing.T) {
 func TestOkHTMLCtx(t *testing.T) {
 	w := httptest.NewRecorder()
 	html := "<h1>Hello, World!</h1>"
-	OkHTMLCtx(context.TODO(), w, html)
+	OkHTMLCtx(context.Background(), w, html)
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, html, w.Body.String())
 }

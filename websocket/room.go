@@ -7,8 +7,6 @@ type ConnID = uint64
 // 提供内存和 Redis 两种实现：
 //   - MemoryRoom：基于 sync.RWMutex + map，适用于单机部署。
 //   - RedisRoom：基于 Redis SET，适用于多实例部署。
-//
-// 提供内存和 Redis 两种实现。
 type Room interface {
 	// Add 将连接加入房间。
 	// 如果连接已在房间中，不会重复添加。

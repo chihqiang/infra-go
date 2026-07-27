@@ -9,7 +9,7 @@ import (
 )
 
 // fillDefaultUnmarshaler 用于填充默认值的反序列化器。
-var fillDefaultUnmarshaler = mapping.NewUnmarshaler("json", mapping.WithDefault())
+var fillDefaultUnmarshaler = mapping.NewDefaultUnmarshaler()
 
 // fillDefault 填充默认值，然后用用户配置中的非零字段覆盖。
 func fillDefault(cfg Config) Config {

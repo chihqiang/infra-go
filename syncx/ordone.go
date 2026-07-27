@@ -69,8 +69,10 @@ func Merge[T any](ctx context.Context, channels ...<-chan T) <-chan T {
 	return out
 }
 
-// FanOut 将输入 channel 的值分发到 n 个输出 channel。
-// 用于并行处理。
+// FanOut 将输入 channel 的每个值广播到所有 n 个输出 channel。
+// 每个输出 channel 都会收到 src 中的每一个值。
+// 如果某个输出 channel 的消费者处理缓慢，不会阻塞其他输出 channel 的消费者。
+// 当 context 取消时，所有等待发送的操作自动解除阻塞。
 func FanOut[T any](ctx context.Context, src <-chan T, n int) []<-chan T {
 	outs := make([]chan T, n)
 	for i := range outs {
@@ -85,13 +87,20 @@ func FanOut[T any](ctx context.Context, src <-chan T, n int) []<-chan T {
 		}()
 
 		for v := range OrDoneCtx(ctx, src) {
-			for _, out := range outs {
-				select {
-				case out <- v:
-				case <-ctx.Done():
-					return
-				}
+			v := v
+			var wg sync.WaitGroup
+			// 并发广播到所有 output，慢消费者不阻塞其他
+			for i := range outs {
+				wg.Add(1)
+				go func(out chan T) {
+					defer wg.Done()
+					select {
+					case out <- v:
+					case <-ctx.Done():
+					}
+				}(outs[i])
 			}
+			wg.Wait()
 		}
 	}()
 
