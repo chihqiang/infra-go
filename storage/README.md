@@ -216,6 +216,46 @@ s := storage.MustNew(storage.Config{
 defer log.FatalIfFunc(s.Close, "close storage failed")
 ```
 
+## 多存储实例 Storages
+
+`Storages` 是 `map[string]Storage` 类型，key 为实例别名，value 为已实例化的 `Storage`，
+支持一个集合管理多个存储桶/多套凭证（如不同业务的头像、附件、视频桶），每个实例可有
+独立的访问地址。先分别实例化，再注入工厂：
+
+```go
+images, err := storage.NewOSS(&storage.OSSConfig{
+    Endpoint:        "oss-cn-hangzhou.aliyuncs.com",
+    AccessKeyID:     "your-access-key-id",
+    AccessKeySecret: "your-access-key-secret",
+    Bucket:          "prod-images",
+    URL:             "https://img.example.com",
+})
+docs, err := storage.NewOSS(&storage.OSSConfig{
+    Endpoint:        "oss-cn-hangzhou.aliyuncs.com",
+    AccessKeyID:     "your-access-key-id",
+    AccessKeySecret: "your-access-key-secret",
+    Bucket:          "prod-docs",
+    URL:             "https://docs.example.com",
+})
+
+storages := storage.NewStorages(map[string]Storage{
+    "images": images,
+    "docs":   docs,
+})
+
+ctx := context.Background()
+
+// 按别名写入/删除/取 URL
+err = storages.Write(ctx, "images", "a.png", []byte("..."))
+count, err := storages.Delete(ctx, "images", "a.png")
+u, err := storages.URL(ctx, "docs", "manual.pdf")
+
+// 或取出单个实例
+s, ok := storages.Get("images")
+```
+
+`Storages` 也支持多种驱动共存（OSS + COS + KODO 混用）。
+
 ## 文件说明
 
 | 文件 | 说明 |
@@ -225,4 +265,5 @@ defer log.FatalIfFunc(s.Close, "close storage failed")
 | `oss.go` | 阿里云 OSS 存储实现 |
 | `cos.go` | 腾讯云 COS 存储实现 |
 | `kodo.go` | 七牛云 KODO 存储实现 |
-| `factory.go` | 工厂方法，根据配置选择存储实现 |
+| `factory.go` | 工厂方法，根据配置选择存储实现；`NewStorages` 注入实例组织多存储集合 |
+| `storage.go` | `Storage` 接口定义、驱动类型常量与 `Storages` 多实例集合 |

@@ -511,3 +511,84 @@ func TestMustNew_PanicOnNilConfig(t *testing.T) {
 		MustNew(Config{Driver: DriverOSS})
 	})
 }
+
+// --- Storages ---
+
+func TestNewStorages_Success(t *testing.T) {
+	images, err := NewOSS(&OSSConfig{
+		Endpoint:        "oss-cn-hangzhou.aliyuncs.com",
+		AccessKeyID:     "test-access-key-id",
+		AccessKeySecret: "test-access-key-secret",
+		Bucket:          "prod-images",
+		URL:             "https://img.example.com",
+	})
+	require.NoError(t, err)
+	docs, err := NewOSS(&OSSConfig{
+		Endpoint:        "oss-cn-hangzhou.aliyuncs.com",
+		AccessKeyID:     "test-access-key-id",
+		AccessKeySecret: "test-access-key-secret",
+		Bucket:          "prod-docs",
+		URL:             "https://docs.example.com",
+	})
+	require.NoError(t, err)
+
+	storages := NewStorages(map[string]Storage{
+		"images": images,
+		"docs":   docs,
+	})
+	require.Len(t, storages, 2)
+
+	// 每个实例有独立的访问地址
+	u, err := storages.URL(context.Background(), "images", "a.png")
+	require.NoError(t, err)
+	assert.Equal(t, "https://img.example.com/a.png", u)
+
+	u, err = storages.URL(context.Background(), "docs", "manual.pdf")
+	require.NoError(t, err)
+	assert.Equal(t, "https://docs.example.com/manual.pdf", u)
+}
+
+func TestStorages_Get(t *testing.T) {
+	s, err := NewOSS(&OSSConfig{
+		Endpoint:        "oss-cn-hangzhou.aliyuncs.com",
+		AccessKeyID:     "test-access-key-id",
+		AccessKeySecret: "test-access-key-secret",
+		Bucket:          "prod-images",
+	})
+	require.NoError(t, err)
+
+	storages := NewStorages(map[string]Storage{"images": s})
+
+	got, ok := storages.Get("images")
+	assert.True(t, ok)
+	assert.Equal(t, s, got)
+
+	_, ok = storages.Get("unknown")
+	assert.False(t, ok)
+}
+
+func TestStorages_WriteUnknownStorage(t *testing.T) {
+	storages := NewStorages(map[string]Storage{})
+	err := storages.Write(context.Background(), "unknown", "path", []byte("data"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unknown storage "unknown"`)
+}
+
+func TestStorages_DeleteUnknownStorage(t *testing.T) {
+	storages := NewStorages(map[string]Storage{})
+	_, err := storages.Delete(context.Background(), "unknown", "path")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unknown storage "unknown"`)
+}
+
+func TestStorages_URLUnknownStorage(t *testing.T) {
+	storages := NewStorages(map[string]Storage{})
+	_, err := storages.URL(context.Background(), "unknown", "path")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unknown storage "unknown"`)
+}
+
+func TestStorages_CompileTimeCheck(t *testing.T) {
+	// Storages 本身不需要满足 Storage，但需保证类型定义可用
+	var _ map[string]Storage = Storages{}
+}

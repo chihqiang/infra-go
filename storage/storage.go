@@ -53,3 +53,41 @@ const (
 	// DriverKODO 七牛云 KODO 存储。
 	DriverKODO Driver = "kodo"
 )
+
+// Storages 存储实例集合，key 为实例别名（如 "images"、"docs"），
+// value 为已实例化的 Storage 实现。一套凭证或多种驱动可按别名共存。
+type Storages map[string]Storage
+
+// Get 按别名获取存储实例。
+func (s Storages) Get(name string) (Storage, bool) {
+	st, ok := s[name]
+	return st, ok
+}
+
+// Write 将内容写入指定别名的存储实例。
+// name 为存储实例别名，path 为对象在存储中的路径（key）。
+func (s Storages) Write(ctx context.Context, name, path string, content []byte) error {
+	st, ok := s[name]
+	if !ok {
+		return fmt.Errorf("storage: unknown storage %q", name)
+	}
+	return st.Write(ctx, path, content)
+}
+
+// Delete 删除指定别名的存储实例中的对象，返回删除的对象数量。
+func (s Storages) Delete(ctx context.Context, name, path string) (int64, error) {
+	st, ok := s[name]
+	if !ok {
+		return 0, fmt.Errorf("storage: unknown storage %q", name)
+	}
+	return st.Delete(ctx, path)
+}
+
+// URL 根据路径拼接指定别名的存储实例的完整访问 URL。
+func (s Storages) URL(ctx context.Context, name, path string) (string, error) {
+	st, ok := s[name]
+	if !ok {
+		return "", fmt.Errorf("storage: unknown storage %q", name)
+	}
+	return st.URL(ctx, path)
+}
