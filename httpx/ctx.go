@@ -1,6 +1,22 @@
 package httpx
 
-import "context"
+import (
+	"context"
+
+	"github.com/chihqiang/infra-go/logger"
+)
+
+func init() {
+	logger.RegisterContextExtractor(func(ctx context.Context) []logger.Field {
+		ri := RequestIDFromContext(ctx)
+		if ri == "" {
+			return nil
+		}
+		return []logger.Field{
+			logger.String("request_id", ri),
+		}
+	})
+}
 
 // requestIDKey request_id 的 context key 类型（私有类型，避免与其他库冲突）。
 type requestIDKey struct{}
