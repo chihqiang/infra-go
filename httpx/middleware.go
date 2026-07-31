@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/chihqiang/infra-go/logger"
+	"github.com/google/uuid"
 )
 
 // --- CORS 常量 ---
@@ -175,6 +176,31 @@ func WithRecovery() Middleware {
 				}
 			}()
 			next(w, r)
+		}
+	}
+}
+
+// --- Request ID 中间件 ---
+
+// HeaderRequestID 请求 ID 使用的 HTTP Header 名。
+const HeaderRequestID = "X-Request-Id"
+
+// WithRequestID 返回一个 request_id 中间件。
+// 从 X-Request-Id 请求头读取，不存在则自动生成（google/uuid），
+// 注入 context 并回写响应头 X-Request-Id。
+//
+//	server.Use(httpx.WithRequestID())
+//
+// 配合 OkJSONCtx / OkXMLCtx / WriteHTTPErrorCtx 使用，request_id 会自动出现在响应中。
+func WithRequestID() Middleware {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			id := r.Header.Get(HeaderRequestID)
+			if id == "" {
+				id = uuid.NewString()
+			}
+			w.Header().Set(HeaderRequestID, id)
+			next(w, r.WithContext(ContextWithRequestID(r.Context(), id)))
 		}
 	}
 }

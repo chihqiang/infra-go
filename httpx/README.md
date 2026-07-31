@@ -14,8 +14,12 @@ HTTP 工具包，提供请求参数绑定（参考 gin 的设计）和统一响�
 - **参数验证**：基于 `go-playground/validator/v10`，使用 `binding` 标签
 - **默认值**：通过 `default=xxx` 标签选项设置字段默认值
 - **泛型响应**：`Response[T]` 统一响应结构，data 字段类型安全
+- **请求 ID**：`WithRequestID` 中间件自动生成/透传 `request_id`，`Ctx` 响应函数自动携带到响应中
 - **智能包装**：`OkJSON` / `OkXML` 自动识别 error / CodeError / 普通数据
 - **多格式响应**：支持 JSON、XML、HTML 三种响应格式
+- **重定向**：`Redirect` 系列函数，支持 301/302 及自定义状态码
+- **静态文件**：`StaticFile` / `StaticFS` 提供单文件与文件系统静态资源服务
+- **自定义 404 响应**：`SetNotFoundHandler` 自定义未匹配路由的响应内容
 - **Context 变体**：每个响应函数都有对应的 `Ctx` 版本
 - **类型丰富**：支持 int/uint/bool/float/string/time.Time/time.Duration/slice/指针等
 - **MustBind**：绑定+验证+自动写入错误响应，一步到位
@@ -277,9 +281,10 @@ type SearchRequest struct {
 
 ```go
 type Response[T any] struct {
-    Code int    `json:"code" xml:"code"`           // 业务码，0 表示成功
-    Msg  string `json:"msg" xml:"msg"`             // 提示信息
-    Data T      `json:"data,omitempty" xml:"data,omitempty"` // 响应数据
+    Code      int    `json:"code" xml:"code"`                     // 业务码，0 表示成功
+    Msg       string `json:"msg" xml:"msg"`                       // 提示信息
+    Data      T      `json:"data,omitempty" xml:"data,omitempty"` // 响应数据
+    RequestID string `json:"request_id,omitempty" xml:"request_id,omitempty"` // 请求 ID（可选）
 }
 ```
 
@@ -344,6 +349,34 @@ httpx.OkHTMLCtx(ctx, w, "<h1>Hello</h1>")
 httpx.WriteHTML(w, http.StatusOK, "<h1>Hello</h1>")
 ```
 
+### 重定向
+
+`Redirect` 系列函数基于 `http.Redirect`，自动设置 `Location` 响应头：
+
+```go
+// 指定状态码重定向
+httpx.Redirect(w, r, "/login", http.StatusFound)
+
+// 带 context 的版本
+httpx.RedirectCtx(ctx, w, r, "/login", http.StatusFound)
+
+// 便捷封装：临时重定向（302 Found）
+httpx.RedirectTemporary(w, r, "/temporary")
+httpx.RedirectTemporaryCtx(ctx, w, r, "/temporary")
+
+// 便捷封装：永久重定向（301 Moved Permanently）
+httpx.RedirectPermanent(w, r, "/permanent")
+httpx.RedirectPermanentCtx(ctx, w, r, "/permanent")
+```
+
+| 函数 | 状态码 | 说明 |
+| ---- | ------ | ---- |
+| `Redirect(w, r, url, status)` | 自定义 | 指定状态码重定向 |
+| `RedirectTemporary(w, r, url)` | 302 | 临时重定向 |
+| `RedirectPermanent(w, r, url)` | 301 | 永久重定向 |
+
+> 注意：`Redirect` 系列函数需要 `*http.Request` 参数，因此没有 `OkJSON` 那样的 `w` 单参版本。
+
 ### 业务码
 
 | 码 | 常量 | 说明 |
@@ -392,6 +425,40 @@ if err := httpx.ParseJSONWithLimit(r, &req, 1<<20); err != nil {
     // handle error
 }
 ```
+
+## 请求 ID（Request ID）
+
+用于链路追踪与问题排查。`WithRequestID` 中间件从 `X-Request-Id` 请求头读取，不存在则自动生成，注入 context 并回写响应头。
+
+```go
+// 启用中间件（建议放在最前）
+server.Use(httpx.WithRequestID())
+```
+
+`Ctx` 响应函数会自动将 `request_id` 写入响应：
+
+```go
+func handler(w http.ResponseWriter, r *http.Request) {
+    // context 由中间件注入了 request_id
+    httpx.OkJSONCtx(r.Context(), w, user)              // {"code":0,"msg":"ok","data":...,"request_id":"a1b2c3d4"}
+    httpx.OkXMLCtx(r.Context(), w, user)               // XML 同样携带
+    httpx.WriteHTTPErrorCtx(r.Context(), w, 404, "not found") // {"code":404,"msg":"not found","request_id":"..."}
+}
+```
+
+### 手动注入
+
+非 HTTP 场景可手动注入/提取：
+
+```go
+ctx := httpx.ContextWithRequestID(context.Background(), "req-123")
+id := httpx.RequestIDFromContext(ctx) // "req-123"
+```
+
+> 注意：
+> - 无 `request_id` 时 `RequestID` 字段自动省略（`omitempty`），不改变原有输出结构
+> - 只有智能包装函数（`OkJSONCtx` / `OkXMLCtx` / `WriteHTTPErrorCtx`）会注入；低级函数 `WriteJSONCtx` / `WriteXMLCtx` 不做包装，传什么写什么
+> - 中间件回写 `X-Request-Id` 响应头，客户端可拿到本次请求的 ID 用于上报排查
 
 ## 路由与服务器
 
@@ -661,6 +728,63 @@ server.AddRoute(httpx.Route{
 })
 ```
 
+### 静态文件
+
+`StaticFile` 和 `StaticFS` 返回 `Route`，可直接注册到 Server（与 `PprofRoutes` 同类的独立函数）：
+
+```go
+// 单个文件（自动设置 Content-Type，支持 Range 断点续传）
+server.AddRoute(httpx.StaticFile("/favicon.ico", "./static/favicon.ico"))
+
+// 目录文件系统（os.DirFS / embed.FS 等任意 fs.FS）
+server.AddRoute(httpx.StaticFS("/static/", os.DirFS("./public")))
+// 访问 /static/app.js 将返回 ./public/app.js
+
+// 与路由组前缀组合使用
+server.AddRoute(httpx.StaticFS("/static/", os.DirFS("./public")), httpx.WithPrefix("/api"))
+// 访问 /api/static/app.js
+```
+
+> 注意：`StaticFS` 的 pattern 需以 `/` 结尾，才会匹配该前缀下的所有子路径。
+
+#### embed.FS 示例
+
+```go
+import "embed"
+
+//go:embed public
+var publicFS embed.FS
+
+server.AddRoute(httpx.StaticFS("/static/", publicFS))
+```
+
+### 自定义 404 响应
+
+`SetNotFoundHandler` 用于自定义 404 响应，替代默认的 `404 page not found`：
+
+```go
+// 自定义 404 响应：所有未被路由匹配的请求都会走这里
+server.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
+    httpx.WriteHTTPError(w, http.StatusNotFound, "resource not found: "+r.URL.Path)
+})
+```
+
+执行顺序：
+
+```text
+mux → 404 拦截 → 全局中间件
+```
+
+- 404 拦截紧贴 mux，只对真正未匹配的请求生效，不影响 405 Method Not Allowed 和已注册路由
+
+### panic 恢复
+
+路由或中间件抛出 panic 时，使用内置 `WithRecovery` 中间件即可捕获并返回 500，避免连接被 net/http 直接关闭：
+
+```go
+server.Use(httpx.WithRecovery())
+```
+
 ### Server 配置
 
 `ServerConfig` 使用 `json` 标签声明默认值和约束，兼容 `conf` 包从配置文件加载：
@@ -760,9 +884,13 @@ for _, r := range routes {
 httpx/
 ├── bind.go              — 公开 API：Bind*, MustBind*, Validate, ParseJSON*
 ├── binding.go           — 绑定器实现：接口定义、MIME 常量、内置绑定器、反射映射、验证器
-├── response.go          — 公开 API：Response[T], CodeError, OkJSON/OkXML/OkHTML, Write*
-├── server.go            — 公开 API：Route, Middleware, Server, Group, WithPrefix, Start/Shutdown
+├── response.go          — 公开 API：Response[T], CodeError, OkJSON/OkXML/OkHTML, Write*, Redirect*
+├── server.go            — 公开 API：Route, Middleware, Server, Group, WithPrefix, Start/Shutdown, SetNotFoundHandler
+├── route.go             — 独立路由函数：PprofRoutes, StaticFile, StaticFS
+├── middleware.go        — 内置中间件：WithRecovery, WithLogger, WithCors, WithRequestID
+├── ctx.go               — context 工具：ContextWithRequestID / RequestIDFromContext
 ├── httpx_test.go
+├── middleware_test.go
 └── server_test.go
 ```
 

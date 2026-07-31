@@ -748,3 +748,121 @@ func TestResponse_WithSlice(t *testing.T) {
 	assert.Len(t, result.Data, 2)
 	assert.Equal(t, "a", result.Data[0].Name)
 }
+
+// --- 请求 ID 测试 ---
+
+func TestContextWithRequestID_RoundTrip(t *testing.T) {
+	ctx := ContextWithRequestID(context.Background(), "req-123")
+	assert.Equal(t, "req-123", RequestIDFromContext(ctx))
+}
+
+func TestRequestIDFromContext_Empty(t *testing.T) {
+	assert.Equal(t, "", RequestIDFromContext(context.Background()))
+	assert.Equal(t, "", RequestIDFromContext(nil))
+}
+
+func TestOkJSONCtx_WithRequestID(t *testing.T) {
+	ctx := ContextWithRequestID(context.Background(), "req-123")
+	w := httptest.NewRecorder()
+	OkJSONCtx(ctx, w, map[string]string{"name": "Alice"})
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp Response[any]
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "req-123", resp.RequestID)
+}
+
+func TestOkJSONCtx_WithoutRequestID(t *testing.T) {
+	w := httptest.NewRecorder()
+	OkJSONCtx(context.Background(), w, "hello")
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp Response[any]
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "", resp.RequestID)
+	assert.NotContains(t, w.Body.String(), "request_id")
+}
+
+func TestOkXMLCtx_WithRequestID(t *testing.T) {
+	ctx := ContextWithRequestID(context.Background(), "req-123")
+	w := httptest.NewRecorder()
+	OkXMLCtx(ctx, w, xmlMessage{Name: "anyone"})
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `<request_id>req-123</request_id>`)
+}
+
+func TestWriteHTTPErrorCtx_WithRequestID(t *testing.T) {
+	ctx := ContextWithRequestID(context.Background(), "req-123")
+	w := httptest.NewRecorder()
+	WriteHTTPErrorCtx(ctx, w, http.StatusNotFound, "not found")
+	assert.Equal(t, http.StatusNotFound, w.Code)
+
+	var resp Response[any]
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, http.StatusNotFound, resp.Code)
+	assert.Equal(t, "req-123", resp.RequestID)
+}
+
+func TestResponse_RequestIDOmitted(t *testing.T) {
+	resp := Response[any]{Code: CodeOK, Msg: MsgOK}
+	data, err := json.Marshal(resp)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "request_id")
+}
+
+func TestResponse_RequestIDSerialized(t *testing.T) {
+	resp := Response[any]{Code: CodeOK, Msg: MsgOK, RequestID: "req-123"}
+	data, err := json.Marshal(resp)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"request_id":"req-123"`)
+}
+
+// --- 重定向测试 ---
+
+func newRedirectRequest(t *testing.T) (*httptest.ResponseRecorder, *http.Request) {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/old", nil)
+	return w, req
+}
+
+func TestRedirect(t *testing.T) {
+	w, req := newRedirectRequest(t)
+	Redirect(w, req, "/new", http.StatusFound)
+	assert.Equal(t, http.StatusFound, w.Code)
+	assert.Equal(t, "/new", w.Header().Get("Location"))
+}
+
+func TestRedirectCtx(t *testing.T) {
+	w, req := newRedirectRequest(t)
+	RedirectCtx(context.Background(), w, req, "/new", http.StatusMovedPermanently)
+	assert.Equal(t, http.StatusMovedPermanently, w.Code)
+	assert.Equal(t, "/new", w.Header().Get("Location"))
+}
+
+func TestRedirectTemporary(t *testing.T) {
+	w, req := newRedirectRequest(t)
+	RedirectTemporary(w, req, "/new")
+	assert.Equal(t, http.StatusFound, w.Code)
+	assert.Equal(t, "/new", w.Header().Get("Location"))
+}
+
+func TestRedirectTemporaryCtx(t *testing.T) {
+	w, req := newRedirectRequest(t)
+	RedirectTemporaryCtx(context.Background(), w, req, "/new")
+	assert.Equal(t, http.StatusFound, w.Code)
+	assert.Equal(t, "/new", w.Header().Get("Location"))
+}
+
+func TestRedirectPermanent(t *testing.T) {
+	w, req := newRedirectRequest(t)
+	RedirectPermanent(w, req, "/new")
+	assert.Equal(t, http.StatusMovedPermanently, w.Code)
+	assert.Equal(t, "/new", w.Header().Get("Location"))
+}
+
+func TestRedirectPermanentCtx(t *testing.T) {
+	w, req := newRedirectRequest(t)
+	RedirectPermanentCtx(context.Background(), w, req, "/new")
+	assert.Equal(t, http.StatusMovedPermanently, w.Code)
+	assert.Equal(t, "/new", w.Header().Get("Location"))
+}

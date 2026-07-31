@@ -324,3 +324,53 @@ func TestWithCors_AllowAllOverridesList(t *testing.T) {
 	// allowAll 时不设 Vary
 	assert.Empty(t, rec.Header().Get(corsHeaderVary))
 }
+
+// --- WithRequestID 测试 ---
+
+func TestWithRequestID_FromHeader(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithRequestID())
+	s.AddRoute(Route{
+		Method: "GET", Path: "/test", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSONCtx(r.Context(), w, "ok")
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set(HeaderRequestID, "req-abc")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, "req-abc", rec.Header().Get(HeaderRequestID))
+	assert.Contains(t, rec.Body.String(), `"request_id":"req-abc"`)
+}
+
+func TestWithRequestID_Generate(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithRequestID())
+	s.AddRoute(Route{
+		Method: "GET", Path: "/test", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSONCtx(r.Context(), w, "ok")
+		},
+	})
+
+	rec := doRequest(t, s, http.MethodGet, "/test", nil)
+
+	id := rec.Header().Get(HeaderRequestID)
+	assert.NotEmpty(t, id)
+	assert.Contains(t, rec.Body.String(), `"request_id":"`+id+`"`)
+}
+
+func TestWithRequestID_OverridesResponseHeaderOnRebuild(t *testing.T) {
+	s := newTestServer()
+	s.AddRoute(Route{
+		Method: "GET", Path: "/test", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSONCtx(r.Context(), w, "ok")
+		},
+	})
+
+	// 未使用中间件时不注入
+	rec := doRequest(t, s, http.MethodGet, "/test", nil)
+	assert.Empty(t, rec.Header().Get(HeaderRequestID))
+	assert.NotContains(t, rec.Body.String(), "request_id")
+}

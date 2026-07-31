@@ -76,6 +76,8 @@ type Response[T any] struct {
 	Msg string `json:"msg" xml:"msg"`
 	// Data 响应数据。
 	Data T `json:"data,omitempty" xml:"data,omitempty"`
+	// RequestID 请求 ID（可选），从 context 提取，无则省略。
+	RequestID string `json:"request_id,omitempty" xml:"request_id,omitempty"`
 }
 
 // xmlResponse 带 XML 声明的响应结构。
@@ -130,7 +132,9 @@ func NewCodeErrorWithCause(code int, msg string, cause error) *CodeError {
 //   - *CodeError / CodeError → 使用其 Code 和 Msg
 //   - error                  → Code = CodeError, Msg = error.Error()
 //   - 其他                   → Code = CodeOK, Msg = MsgOK, Data = v
-func wrapResponse(v any) Response[any] {
+//
+// 若 ctx 中含有 request_id，会一并写入响应。
+func wrapResponse(ctx context.Context, v any) Response[any] {
 	var resp Response[any]
 	switch data := v.(type) {
 	case *CodeError:
@@ -147,15 +151,18 @@ func wrapResponse(v any) Response[any] {
 		resp.Msg = MsgOK
 		resp.Data = v
 	}
+	if rid := RequestIDFromContext(ctx); rid != "" {
+		resp.RequestID = rid
+	}
 	return resp
 }
 
 // wrapXMLResponse 将 v 包装为带 XML 声明的响应结构。
-func wrapXMLResponse(v any) xmlResponse[any] {
+func wrapXMLResponse(ctx context.Context, v any) xmlResponse[any] {
 	return xmlResponse[any]{
 		Version:   xmlVersion,
 		Encoding:  xmlEncoding,
-		Response:  wrapResponse(v),
+		Response:  wrapResponse(ctx, v),
 	}
 }
 
@@ -179,12 +186,14 @@ func WriteJSONCtx(ctx context.Context, w http.ResponseWriter, status int, v any)
 // 如果 v 是 *CodeError、CodeError 或 error，自动设置对应的错误码和消息；
 // 否则设置 Code=0, Msg="ok", Data=v。
 func OkJSON(w http.ResponseWriter, v any) {
-	WriteJSON(w, http.StatusOK, wrapResponse(v))
+	WriteJSON(w, http.StatusOK, wrapResponse(context.Background(), v))
 }
 
 // OkJSONCtx 同 OkJSON，带有 context。
+// 若 context 中含有 request_id（通过 ContextWithRequestID / WithRequestID 中间件注入），
+// 会将其一并写入响应。
 func OkJSONCtx(ctx context.Context, w http.ResponseWriter, v any) {
-	OkJSON(w, v)
+	WriteJSON(w, http.StatusOK, wrapResponse(ctx, v))
 }
 
 // writeJSON 实际执行 JSON 序列化和写入。
@@ -210,12 +219,13 @@ func WriteXMLCtx(ctx context.Context, w http.ResponseWriter, status int, v any) 
 
 // OkXML 智能包装 v 并以 XML 格式写入响应（HTTP 200）。
 func OkXML(w http.ResponseWriter, v any) {
-	WriteXML(w, http.StatusOK, wrapXMLResponse(v))
+	WriteXML(w, http.StatusOK, wrapXMLResponse(context.Background(), v))
 }
 
 // OkXMLCtx 同 OkXML，带有 context。
+// 若 context 中含有 request_id，会将其一并写入响应。
 func OkXMLCtx(ctx context.Context, w http.ResponseWriter, v any) {
-	OkXML(w, v)
+	WriteXML(w, http.StatusOK, wrapXMLResponse(ctx, v))
 }
 
 // writeXML 实际执行 XML 序列化和写入。
@@ -292,4 +302,47 @@ func WriteHTTPError(w http.ResponseWriter, status int, msg string) {
 		Code: status,
 		Msg:  msg,
 	})
+}
+
+// WriteHTTPErrorCtx 同 WriteHTTPError，带有 context。
+// 若 context 中含有 request_id，会将其一并写入响应。
+func WriteHTTPErrorCtx(ctx context.Context, w http.ResponseWriter, status int, msg string) {
+	WriteJSON(w, status, Response[any]{
+		Code:      status,
+		Msg:       msg,
+		RequestID: RequestIDFromContext(ctx),
+	})
+}
+
+// --- 重定向 ---
+
+// Redirect 以指定状态码重定向到 url。
+// 会设置 Location 响应头，并触发浏览器跳转。
+func Redirect(w http.ResponseWriter, r *http.Request, url string, status int) {
+	http.Redirect(w, r, url, status)
+}
+
+// RedirectCtx 同 Redirect，带有 context。
+func RedirectCtx(ctx context.Context, w http.ResponseWriter, r *http.Request, url string, status int) {
+	Redirect(w, r, url, status)
+}
+
+// RedirectTemporary 临时重定向（HTTP 302 Found）。
+func RedirectTemporary(w http.ResponseWriter, r *http.Request, url string) {
+	Redirect(w, r, url, http.StatusFound)
+}
+
+// RedirectTemporaryCtx 同 RedirectTemporary，带有 context。
+func RedirectTemporaryCtx(ctx context.Context, w http.ResponseWriter, r *http.Request, url string) {
+	Redirect(w, r, url, http.StatusFound)
+}
+
+// RedirectPermanent 永久重定向（HTTP 301 Moved Permanently）。
+func RedirectPermanent(w http.ResponseWriter, r *http.Request, url string) {
+	Redirect(w, r, url, http.StatusMovedPermanently)
+}
+
+// RedirectPermanentCtx 同 RedirectPermanent，带有 context。
+func RedirectPermanentCtx(ctx context.Context, w http.ResponseWriter, r *http.Request, url string) {
+	Redirect(w, r, url, http.StatusMovedPermanently)
 }

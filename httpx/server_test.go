@@ -1,11 +1,14 @@
 package httpx
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -891,4 +894,126 @@ func newTestListener() (*testListener, error) {
 	addr := ln.Addr().(*net.TCPAddr)
 	ln.Close()
 	return &testListener{addr: &testAddr{network: "tcp", port: addr.Port}}, nil
+}
+
+// --- 静态文件测试 ---
+
+func TestStaticFile(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "hello.txt")
+	require.NoError(t, os.WriteFile(file, []byte("hello world"), 0o644))
+
+	s := newTestServer()
+	s.AddRoute(StaticFile("/hello.txt", file))
+
+	rec := doRequest(t, s, http.MethodGet, "/hello.txt", nil)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "hello world", rec.Body.String())
+	assert.Contains(t, rec.Header().Get("Content-Type"), "text/plain")
+}
+
+func TestStaticFile_NotFound(t *testing.T) {
+	s := newTestServer()
+	s.AddRoute(StaticFile("/missing.txt", filepath.Join(t.TempDir(), "nope.txt")))
+
+	rec := doRequest(t, s, http.MethodGet, "/missing.txt", nil)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestStaticFile_MethodNotAllowed(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "hello.txt")
+	require.NoError(t, os.WriteFile(file, []byte("hello world"), 0o644))
+
+	s := newTestServer()
+	s.AddRoute(StaticFile("/hello.txt", file))
+
+	rec := doRequest(t, s, http.MethodPost, "/hello.txt", nil)
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+}
+
+func TestStaticFS(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.js"), []byte("var x = 1;"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html></html>"), 0o644))
+
+	s := newTestServer()
+	s.AddRoute(StaticFS("/static/", os.DirFS(dir)))
+
+	rec := doRequest(t, s, http.MethodGet, "/static/app.js", nil)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "var x = 1;", rec.Body.String())
+	assert.Contains(t, rec.Header().Get("Content-Type"), "text/javascript")
+}
+
+func TestStaticFS_NotFound(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.js"), []byte("var x = 1;"), 0o644))
+
+	s := newTestServer()
+	s.AddRoute(StaticFS("/static/", os.DirFS(dir)))
+
+	rec := doRequest(t, s, http.MethodGet, "/static/missing.js", nil)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestStaticFS_WithPrefix(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.js"), []byte("var x = 1;"), 0o644))
+
+	s := newTestServer()
+	s.AddRoute(StaticFS("/static/", os.DirFS(dir)), WithPrefix("/api"))
+
+	rec := doRequest(t, s, http.MethodGet, "/api/static/app.js", nil)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "var x = 1;", rec.Body.String())
+}
+
+// --- 自定义错误响应测试 ---
+
+func TestSetNotFoundHandler(t *testing.T) {
+	s := newTestServer()
+	s.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
+		WriteHTTPError(w, http.StatusNotFound, "custom not found")
+	})
+
+	rec := doRequest(t, s, http.MethodGet, "/nonexistent", nil)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+
+	var resp Response[any]
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "custom not found", resp.Msg)
+	assert.NotContains(t, rec.Body.String(), "404 page not found")
+}
+
+func TestSetNotFoundHandler_ExistingRoute(t *testing.T) {
+	s := newTestServer()
+	s.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
+		OkJSON(w, NewCodeError(CodeNotFound, "custom not found"))
+	})
+	s.AddRoute(Route{
+		Method: "GET", Path: "/users", Handler: func(w http.ResponseWriter, r *http.Request) { OkJSON(w, "users") },
+	})
+
+	rec := doRequest(t, s, http.MethodGet, "/users", nil)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "users")
+
+	rec = doRequest(t, s, http.MethodGet, "/nonexistent", nil)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "custom not found")
+}
+
+func TestSetNotFoundHandler_MethodNotAllowed(t *testing.T) {
+	s := newTestServer()
+	s.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
+		OkJSON(w, NewCodeError(CodeNotFound, "custom not found"))
+	})
+	s.AddRoute(Route{
+		Method: "GET", Path: "/users", Handler: func(w http.ResponseWriter, r *http.Request) { OkJSON(w, "users") },
+	})
+
+	// 405 不应被 404 处理器接管
+	rec := doRequest(t, s, http.MethodPost, "/users", nil)
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 }

@@ -151,6 +151,9 @@ type Server struct {
 	routes     []Route
 	httpServer *http.Server
 	tlsConfig  *tls.Config
+
+	// notFoundHandler 自定义 404 响应处理器（可选），通过 SetNotFoundHandler 设置。
+	notFoundHandler http.HandlerFunc
 }
 
 // --- 路由组选项（RouteOption）---
@@ -419,21 +422,82 @@ func (s *Server) Handler() http.Handler {
 	return s.gh
 }
 
-// buildGlobalHandler 构建应用了全局中间件的根 handler（懒加载）。
+// buildGlobalHandler 构建应用了全局中间件、自定义 404 的根 handler（懒加载）。
 // 全局中间件按添加顺序执行（先添加的先执行），包装整个 mux。
 // 组中间件已在路由注册时烧录到各路由 handler，执行顺序为：
 // 全局中间件 → 组中间件 → 路由 handler。
+//
+// handler 链（从内到外）：
+//
+//	mux → 404 拦截 → 全局中间件
 func (s *Server) buildGlobalHandler() {
-	if len(s.gmw) == 0 {
+	if len(s.gmw) == 0 && s.notFoundHandler == nil {
 		s.gh = s.mux
 		return
 	}
-	// 用全局中间件包装整个 mux（逆序包装，使先添加的中间件先执行）
+	// 404 拦截紧贴 mux，只对真正未匹配的路由生效
 	handler := http.HandlerFunc(s.mux.ServeHTTP)
+	if s.notFoundHandler != nil {
+		handler = s.wrapNotFound(handler)
+	}
+	// 全局中间件（逆序包装，使先添加的中间件先执行）
 	for i := len(s.gmw) - 1; i >= 0; i-- {
 		handler = s.gmw[i](handler)
 	}
 	s.gh = handler
+}
+
+// --- 自定义错误响应 ---
+
+// SetNotFoundHandler 设置路由未找到（404）时的自定义响应处理器。
+// 所有未被任何路由匹配的请求都会交给该处理器，替代默认的 "404 page not found"。
+//
+//	server.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
+//	    httpx.OkJSON(w, httpx.NewCodeError(httpx.CodeNotFound, "resource not found"))
+//	})
+func (s *Server) SetNotFoundHandler(h http.HandlerFunc) {
+	s.notFoundHandler = h
+	s.gh = nil
+}
+
+// wrapNotFound 包装 mux，将 404 响应拦截并转交给自定义处理器。
+func (s *Server) wrapNotFound(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		next(&notFoundResponseWriter{
+			ResponseWriter: w,
+			request:        r,
+			handler:        s.notFoundHandler,
+		}, r)
+	}
+}
+
+// notFoundResponseWriter 拦截 ServeMux 写入的 404 响应，改为调用自定义处理器。
+// 自定义处理器处理完成后，后续的 404 正文写入会被吞掉，避免覆盖响应。
+type notFoundResponseWriter struct {
+	http.ResponseWriter
+	request    *http.Request
+	handler    http.HandlerFunc
+	handled    bool // 是否已转交给自定义 404 处理器
+	suppressed bool // 是否吞掉后续写入
+}
+
+// WriteHeader 拦截 404 状态码，转交给自定义处理器。
+func (w *notFoundResponseWriter) WriteHeader(status int) {
+	if status == http.StatusNotFound && !w.handled {
+		w.handled = true
+		w.suppressed = true
+		w.handler(w.ResponseWriter, w.request)
+		return
+	}
+	w.ResponseWriter.WriteHeader(status)
+}
+
+// Write 在已转交自定义处理器后吞掉 ServeMux 的默认 404 正文。
+func (w *notFoundResponseWriter) Write(p []byte) (int, error) {
+	if w.suppressed {
+		return len(p), nil
+	}
+	return w.ResponseWriter.Write(p)
 }
 
 // --- 路由组（Group）---
@@ -560,6 +624,7 @@ func buildPattern(method, path string) string {
 }
 
 // joinPath 连接前缀和路径，处理多余的斜杠。
+// 若 p 以 "/" 结尾（子树匹配模式，如 /static/），保留结尾斜杠；裸 "/" 除外。
 func joinPath(prefix, p string) string {
 	if prefix == "" {
 		return p
@@ -567,6 +632,9 @@ func joinPath(prefix, p string) string {
 	joined := path.Join(prefix, p)
 	if !strings.HasPrefix(joined, "/") {
 		joined = "/" + joined
+	}
+	if strings.HasSuffix(p, "/") && p != "/" && !strings.HasSuffix(joined, "/") {
+		joined += "/"
 	}
 	return joined
 }
