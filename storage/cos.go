@@ -1,11 +1,11 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/tencentyun/cos-go-sdk-v5"
 )
@@ -65,7 +65,7 @@ func resolveCOSURL(cfg *COSConfig) string {
 
 // Write 将内容写入 COS 指定路径。
 func (s *cosStorage) Write(ctx context.Context, path string, content []byte) error {
-	_, err := s.client.Object.Put(ctx, path, strings.NewReader(string(content)), nil)
+	_, err := s.client.Object.Put(ctx, path, bytes.NewReader(content), nil)
 	if err != nil {
 		return fmt.Errorf("storage: failed to write COS object %q: %w", path, err)
 	}

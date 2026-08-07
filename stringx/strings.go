@@ -3,6 +3,7 @@ package stringx
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // IsEmpty 判断字符串是否为空。
@@ -33,11 +34,18 @@ func Reverse(s string) string {
 }
 
 // Capitalize 将字符串首字母转为大写。
+// 使用 utf8.DecodeRuneInString 定位首字符边界，
+// 正确支持多字节 UTF-8 字符（如中文、Emoji），不会产生字节截断。
 func Capitalize(s string) string {
-	for i, v := range s {
-		return string(unicode.ToUpper(v)) + s[i+1:]
+	if s == "" {
+		return ""
 	}
-	return ""
+	r, size := utf8.DecodeRuneInString(s)
+	// 无效 UTF-8 编码时原样返回，避免破坏原字符串。
+	if r == utf8.RuneError && size == 1 {
+		return s
+	}
+	return string(unicode.ToUpper(r)) + s[size:]
 }
 
 // ToSnakeCase 将驼峰命名转为蛇形命名。

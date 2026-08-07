@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
@@ -101,7 +102,15 @@ func Default(method, contentType string) Binding {
 		return Form
 	}
 
-	switch contentType {
+	// 解析 Content-Type，去除参数（如 ; charset=utf-8）并忽略大小写，
+	// 避免 "application/json; charset=utf-8" 等常见格式匹配失败。
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return Form
+	}
+	mediaType = strings.ToLower(mediaType)
+
+	switch mediaType {
 	case MIMEJSON:
 		return JSON
 	case MIMEXML, MIMEXML2:

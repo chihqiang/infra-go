@@ -14,7 +14,7 @@ import (
 
 func TestToInt(t *testing.T) {
 	tests := []struct {
-		name string
+		name  string
 		input any
 		want  int
 	}{
@@ -33,7 +33,8 @@ func TestToInt(t *testing.T) {
 		{"bool_true", true, 1},
 		{"bool_false", false, 0},
 		{"string", "123", 123},
-		{"string_hex", "0xff", 255},
+		{"string_zero_padded", "08", 8},
+		{"string_hex_not_supported", "0xff", 0}, // 十六进制不再被意外接受，统一按十进制解析
 		{"json.Number", json.Number("42"), 42},
 		{"nil", nil, 0},
 	}

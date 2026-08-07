@@ -60,7 +60,7 @@ type Config struct {
 	WriteTimeout time.Duration `json:",default=3s"`
 	// PoolTimeout 连接池获取连接超时时间，默认 ReadTimeout + 1 秒。
 	PoolTimeout time.Duration `json:",default=4s"`
-	// MaxIdleConnsToCheck 定期检查空闲连接的最大数量，默认 0（不检查）。
+	// ConnMaxIdleTime 连接最大空闲时间，空闲超过此时长的连接会被关闭并回收，默认 5 分钟。
 	ConnMaxIdleTime time.Duration `json:",default=5m"`
 
 	// KeyPrefix 键名前缀，所有操作会自动添加此前缀，默认空。

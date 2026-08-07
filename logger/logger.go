@@ -160,26 +160,59 @@ func (l *Logger) Fatal(msg string, fields ...Field) { l.zap.Fatal(msg, fields...
 
 // --- 格式化日志方法 ---
 
-func (l *Logger) Debugf(format string, args ...any) { l.zap.Debug(fmt.Sprintf(format, args...)) }
-func (l *Logger) Infof(format string, args ...any)  { l.zap.Info(fmt.Sprintf(format, args...)) }
-func (l *Logger) Warnf(format string, args ...any)  { l.zap.Warn(fmt.Sprintf(format, args...)) }
-func (l *Logger) Errorf(format string, args ...any) { l.zap.Error(fmt.Sprintf(format, args...)) }
+// 格式化日志方法在级别未启用时跳过 fmt.Sprintf，避免无谓的格式化开销。
+// Panic/Fatal 系列保持原样：zap 的 Panic/Fatal 即使级别未启用也会触发
+// panic/os.Exit，此处不改变其行为。
+func (l *Logger) Debugf(format string, args ...any) {
+	if l.zap.Core().Enabled(zapcore.DebugLevel) {
+		l.zap.Debug(fmt.Sprintf(format, args...))
+	}
+}
+func (l *Logger) Infof(format string, args ...any) {
+	if l.zap.Core().Enabled(zapcore.InfoLevel) {
+		l.zap.Info(fmt.Sprintf(format, args...))
+	}
+}
+func (l *Logger) Warnf(format string, args ...any) {
+	if l.zap.Core().Enabled(zapcore.WarnLevel) {
+		l.zap.Warn(fmt.Sprintf(format, args...))
+	}
+}
+func (l *Logger) Errorf(format string, args ...any) {
+	if l.zap.Core().Enabled(zapcore.ErrorLevel) {
+		l.zap.Error(fmt.Sprintf(format, args...))
+	}
+}
 func (l *Logger) Panicf(format string, args ...any) { l.zap.Panic(fmt.Sprintf(format, args...)) }
 func (l *Logger) Fatalf(format string, args ...any) { l.zap.Fatal(fmt.Sprintf(format, args...)) }
 
 // --- 带上下文的结构化日志方法 ---
 
+// 带上下文方法先检查级别，未启用时直接返回，避免 extractContextFields 的
+// 开销；启用时直接将 context 字段并入 fields，避免 zap.With 派生新 logger。
 func (l *Logger) DebugCtx(ctx context.Context, msg string, fields ...Field) {
-	l.zap.With(extractContextFields(ctx)...).Debug(msg, fields...)
+	if !l.zap.Core().Enabled(zapcore.DebugLevel) {
+		return
+	}
+	l.zap.Debug(msg, append(extractContextFields(ctx), fields...)...)
 }
 func (l *Logger) InfoCtx(ctx context.Context, msg string, fields ...Field) {
-	l.zap.With(extractContextFields(ctx)...).Info(msg, fields...)
+	if !l.zap.Core().Enabled(zapcore.InfoLevel) {
+		return
+	}
+	l.zap.Info(msg, append(extractContextFields(ctx), fields...)...)
 }
 func (l *Logger) WarnCtx(ctx context.Context, msg string, fields ...Field) {
-	l.zap.With(extractContextFields(ctx)...).Warn(msg, fields...)
+	if !l.zap.Core().Enabled(zapcore.WarnLevel) {
+		return
+	}
+	l.zap.Warn(msg, append(extractContextFields(ctx), fields...)...)
 }
 func (l *Logger) ErrorCtx(ctx context.Context, msg string, fields ...Field) {
-	l.zap.With(extractContextFields(ctx)...).Error(msg, fields...)
+	if !l.zap.Core().Enabled(zapcore.ErrorLevel) {
+		return
+	}
+	l.zap.Error(msg, append(extractContextFields(ctx), fields...)...)
 }
 func (l *Logger) PanicCtx(ctx context.Context, msg string, fields ...Field) {
 	l.zap.With(extractContextFields(ctx)...).Panic(msg, fields...)
@@ -191,16 +224,28 @@ func (l *Logger) FatalCtx(ctx context.Context, msg string, fields ...Field) {
 // --- 带上下文的格式化日志方法 ---
 
 func (l *Logger) DebugfCtx(ctx context.Context, format string, args ...any) {
-	l.zap.With(extractContextFields(ctx)...).Debug(fmt.Sprintf(format, args...))
+	if !l.zap.Core().Enabled(zapcore.DebugLevel) {
+		return
+	}
+	l.zap.Debug(fmt.Sprintf(format, args...), extractContextFields(ctx)...)
 }
 func (l *Logger) InfofCtx(ctx context.Context, format string, args ...any) {
-	l.zap.With(extractContextFields(ctx)...).Info(fmt.Sprintf(format, args...))
+	if !l.zap.Core().Enabled(zapcore.InfoLevel) {
+		return
+	}
+	l.zap.Info(fmt.Sprintf(format, args...), extractContextFields(ctx)...)
 }
 func (l *Logger) WarnfCtx(ctx context.Context, format string, args ...any) {
-	l.zap.With(extractContextFields(ctx)...).Warn(fmt.Sprintf(format, args...))
+	if !l.zap.Core().Enabled(zapcore.WarnLevel) {
+		return
+	}
+	l.zap.Warn(fmt.Sprintf(format, args...), extractContextFields(ctx)...)
 }
 func (l *Logger) ErrorfCtx(ctx context.Context, format string, args ...any) {
-	l.zap.With(extractContextFields(ctx)...).Error(fmt.Sprintf(format, args...))
+	if !l.zap.Core().Enabled(zapcore.ErrorLevel) {
+		return
+	}
+	l.zap.Error(fmt.Sprintf(format, args...), extractContextFields(ctx)...)
 }
 func (l *Logger) PanicfCtx(ctx context.Context, format string, args ...any) {
 	l.zap.With(extractContextFields(ctx)...).Panic(fmt.Sprintf(format, args...))

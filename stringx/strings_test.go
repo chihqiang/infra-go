@@ -78,6 +78,13 @@ func TestCapitalize(t *testing.T) {
 		{"Hello", "Hello"},
 		{"", ""},
 		{"a", "A"},
+		// 多字节 UTF-8 字符：中文无大小写概念，应原样保留
+		{"你好世界", "你好世界"},
+		{"中文abc", "中文abc"},
+		// Emoji 等非字母字符应保留
+		{"😀abc", "😀abc"},
+		// 首字符是拉丁字母的混合内容
+		{"élan", "Élan"},
 	}
 	for _, tt := range tests {
 		if got := Capitalize(tt.input); got != tt.want {
@@ -143,9 +150,9 @@ func TestRepeat(t *testing.T) {
 
 func TestSubstr(t *testing.T) {
 	tests := []struct {
-		input       string
-		start, end  int
-		want        string
+		input      string
+		start, end int
+		want       string
 	}{
 		{"hello", 1, 3, "el"},
 		{"hello", 0, 5, "hello"},

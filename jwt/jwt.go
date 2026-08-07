@@ -119,6 +119,9 @@ func (j *JWT) Config() Config {
 // 如果 claims 中未设置 "token_type"，需调用方自行设置。
 // expire 为令牌有效期。
 func (j *JWT) GenerateToken(claims Claims, expire time.Duration) (string, error) {
+	// 复制 claims，避免修改调用方传入的 map。
+	claims = copyClaims(claims)
+
 	now := time.Now()
 
 	// 注入标准声明
@@ -138,12 +141,14 @@ func (j *JWT) GenerateToken(claims Claims, expire time.Duration) (string, error)
 
 // GenerateAccessToken 生成访问令牌，自动设置 token_type 为 access。
 func (j *JWT) GenerateAccessToken(claims Claims) (string, error) {
+	claims = copyClaims(claims)
 	claims[ClaimKeyTokenType] = TokenTypeAccess
 	return j.GenerateToken(claims, j.config.AccessTokenExpire)
 }
 
 // GenerateRefreshToken 生成刷新令牌，自动设置 token_type 为 refresh。
 func (j *JWT) GenerateRefreshToken(claims Claims) (string, error) {
+	claims = copyClaims(claims)
 	claims[ClaimKeyTokenType] = TokenTypeRefresh
 	return j.GenerateToken(claims, j.config.RefreshTokenExpire)
 }

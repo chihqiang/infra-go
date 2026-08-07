@@ -174,6 +174,7 @@ err := client.SetNXWithLock(ctx, "task:1", 30*time.Second, func(ctx context.Cont
 | `ReadTimeout` | `time.Duration` | `3s` | 读取超时 |
 | `WriteTimeout` | `time.Duration` | `3s` | 写入超时 |
 | `PoolTimeout` | `time.Duration` | `4s` | 连接池获取超时 |
+| `ConnMaxIdleTime` | `time.Duration` | `5m` | 连接最大空闲时间 |
 | `KeyPrefix` | `string` | `""` | 键名前缀 |
 
 ## 错误处理

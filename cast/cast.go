@@ -116,7 +116,7 @@ func ToIntE(v any) (int, error) {
 		}
 		return 0, nil
 	case string:
-		n, err := strconv.ParseInt(strings.TrimSpace(val), 0, 0)
+		n, err := strconv.ParseInt(strings.TrimSpace(val), 10, 0)
 		if err != nil {
 			return 0, castErr("string", "int")
 		}
@@ -167,7 +167,7 @@ func ToInt64E(v any) (int64, error) {
 		}
 		return 0, nil
 	case string:
-		n, err := strconv.ParseInt(strings.TrimSpace(val), 0, 64)
+		n, err := strconv.ParseInt(strings.TrimSpace(val), 10, 64)
 		if err != nil {
 			return 0, castErr("string", "int64")
 		}
@@ -248,7 +248,7 @@ func ToUint64E(v any) (uint64, error) {
 		}
 		return 0, nil
 	case string:
-		n, err := strconv.ParseUint(strings.TrimSpace(val), 0, 64)
+		n, err := strconv.ParseUint(strings.TrimSpace(val), 10, 64)
 		if err != nil {
 			return 0, castErr("string", "uint64")
 		}

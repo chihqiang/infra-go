@@ -700,6 +700,26 @@ func TestDefault_PostMultipart(t *testing.T) {
 	assert.Equal(t, "form", b.Name())
 }
 
+func TestDefault_PostJSON_WithCharset(t *testing.T) {
+	b := Default(http.MethodPost, "application/json; charset=utf-8")
+	assert.Equal(t, "json", b.Name())
+}
+
+func TestDefault_PostJSON_CaseInsensitive(t *testing.T) {
+	b := Default(http.MethodPost, "Application/JSON")
+	assert.Equal(t, "json", b.Name())
+}
+
+func TestDefault_PostXML_WithParam(t *testing.T) {
+	b := Default(http.MethodPost, "application/xml; charset=utf-8")
+	assert.Equal(t, "xml", b.Name())
+}
+
+func TestDefault_InvalidContentType(t *testing.T) {
+	b := Default(http.MethodPost, "not-a-valid-mime;;")
+	assert.Equal(t, "form", b.Name())
+}
+
 // --- 响应结构序列化测试 ---
 
 func TestResponse_Serialization(t *testing.T) {

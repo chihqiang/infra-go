@@ -104,22 +104,25 @@ func (r *RedisRoom) GetRooms(fd ConnID) []string {
 }
 
 // Clear 清空所有房间和连接映射。
-// 通过 SCAN 命令删除所有匹配前缀的键。
+// 仅删除房间和连接映射相关的键（rooms: 和 fds: 前缀），
+// 不会误删同前缀下的其他业务键。
 func (r *RedisRoom) Clear() {
 	ctx := context.Background()
 
-	var cursor uint64
-	for {
-		keys, nextCursor, err := r.client.Scan(ctx, cursor, r.prefix+"*", 100).Result()
-		if err != nil {
-			return
-		}
-		if len(keys) > 0 {
-			r.client.Del(ctx, keys...)
-		}
-		cursor = nextCursor
-		if cursor == 0 {
-			break
+	for _, pattern := range []string{r.prefix + "rooms:*", r.prefix + "fds:*"} {
+		var cursor uint64
+		for {
+			keys, nextCursor, err := r.client.Scan(ctx, cursor, pattern, 100).Result()
+			if err != nil {
+				return
+			}
+			if len(keys) > 0 {
+				r.client.Del(ctx, keys...)
+			}
+			cursor = nextCursor
+			if cursor == 0 {
+				break
+			}
 		}
 	}
 }

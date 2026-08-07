@@ -9,10 +9,12 @@ import (
 // --- SingleFlight ---
 
 // singleFlightCall 表示一次正在执行的调用。
+// done 为惰性创建的完成通知 channel，多个等待者共享，避免每个等待者各自创建 goroutine。
 type singleFlightCall[T any] struct {
-	wg  sync.WaitGroup
-	val T
-	err error
+	wg   sync.WaitGroup
+	val  T
+	err  error
+	done chan struct{}
 }
 
 // SingleFlight 防止缓存击穿，相同 key 的并发调用只执行一次，结果共享给所有调用者。
@@ -77,17 +79,20 @@ func (sf *SingleFlight[T]) DoCtx(ctx context.Context, key string, fn func(contex
 
 	sf.mu.Lock()
 	if call, ok := sf.calls[key]; ok {
+		// 惰性创建共享的 done channel，所有等待者复用同一个 goroutine。
+		// 首次创建发生在持锁状态下，后续等待者直接复用，无需重复启动 goroutine。
+		if call.done == nil {
+			call.done = make(chan struct{})
+			go func() {
+				call.wg.Wait()
+				close(call.done)
+			}()
+		}
 		sf.mu.Unlock()
 
 		// 等待结果或 context 取消
-		done := make(chan struct{})
-		go func() {
-			call.wg.Wait()
-			close(done)
-		}()
-
 		select {
-		case <-done:
+		case <-call.done:
 			return call.val, call.err
 		case <-ctx.Done():
 			var zero T
