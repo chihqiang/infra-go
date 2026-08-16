@@ -133,44 +133,6 @@ func TestWithLogger_CombinedWithRecovery(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "internal server error")
 }
 
-// --- statusRecorder 单元测试 ---
-
-func TestStatusRecorder_DefaultStatus(t *testing.T) {
-	// handler 不调 WriteHeader，直接 Write，status 应为 200
-	w := httptest.NewRecorder()
-	rec := newStatusRecorder(w)
-	n, err := rec.Write([]byte("hello"))
-	assert.NoError(t, err)
-	assert.Equal(t, 5, n)
-	assert.Equal(t, http.StatusOK, rec.status, "未显式 WriteHeader 时默认 200")
-	assert.Equal(t, 5, rec.bytes)
-}
-
-func TestStatusRecorder_CustomStatus(t *testing.T) {
-	w := httptest.NewRecorder()
-	rec := newStatusRecorder(w)
-	rec.WriteHeader(http.StatusNotFound)
-	assert.Equal(t, http.StatusNotFound, rec.status)
-	assert.True(t, rec.wroteHead)
-}
-
-func TestStatusRecorder_FirstStatusWins(t *testing.T) {
-	// 多次 WriteHeader 只记录第一次（符合 HTTP 规范）
-	w := httptest.NewRecorder()
-	rec := newStatusRecorder(w)
-	rec.WriteHeader(http.StatusTeapot)
-	rec.WriteHeader(http.StatusOK)
-	assert.Equal(t, http.StatusTeapot, rec.status)
-}
-
-func TestStatusRecorder_AccumulatesBytes(t *testing.T) {
-	w := httptest.NewRecorder()
-	rec := newStatusRecorder(w)
-	_, _ = rec.Write([]byte("abc"))
-	_, _ = rec.Write([]byte("defg"))
-	assert.Equal(t, 7, rec.bytes)
-}
-
 // --- WithCors 测试 ---
 
 // doCorsRequest 发送带 Origin 头的请求，返回响应。
@@ -180,7 +142,7 @@ func doCorsRequest(t *testing.T, s *Server, method, path, origin string) *httpte
 	req := httptest.NewRequest(method, path, nil)
 	req.Host = "testserver"
 	if origin != "" {
-		req.Header.Set(corsHeaderOrigin, origin)
+		req.Header.Set("Origin", origin)
 	}
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
@@ -195,7 +157,7 @@ func TestWithCors_NoOrigin(t *testing.T) {
 
 	rec := doCorsRequest(t, s, http.MethodGet, "/test", "")
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Empty(t, rec.Header().Get(corsHeaderAllowOrigin))
+	assert.Empty(t, rec.Header().Get("Access-Control-Allow-Origin"))
 }
 
 func TestWithCors_SameOrigin(t *testing.T) {
@@ -206,23 +168,23 @@ func TestWithCors_SameOrigin(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	req.Host = "example.com"
-	req.Header.Set(corsHeaderOrigin, "http://example.com")
+	req.Header.Set("Origin", "http://example.com")
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Empty(t, rec.Header().Get(corsHeaderAllowOrigin))
+	assert.Empty(t, rec.Header().Get("Access-Control-Allow-Origin"))
 }
 
 func TestWithCors_AllowAll(t *testing.T) {
 	// allowAll="*" → Allow-Origin: *
 	s := newTestServer()
-	s.Use(WithCors(corsAllowAllOrigins))
+	s.Use(WithCors("*"))
 	s.AddRoute(Route{Method: "GET", Path: "/test", Handler: func(w http.ResponseWriter, r *http.Request) { OkJSON(w, "ok") }})
 
 	rec := doCorsRequest(t, s, http.MethodGet, "/test", "http://evil.com")
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, corsAllowAllOrigins, rec.Header().Get(corsHeaderAllowOrigin))
+	assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
 }
 
 func TestWithCors_AllowSpecific(t *testing.T) {
@@ -233,8 +195,8 @@ func TestWithCors_AllowSpecific(t *testing.T) {
 
 	rec := doCorsRequest(t, s, http.MethodGet, "/test", "http://allowed.com")
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "http://allowed.com", rec.Header().Get(corsHeaderAllowOrigin))
-	assert.Equal(t, corsHeaderOrigin, rec.Header().Get(corsHeaderVary))
+	assert.Equal(t, "http://allowed.com", rec.Header().Get("Access-Control-Allow-Origin"))
+	assert.Equal(t, "Origin", rec.Header().Get("Vary"))
 }
 
 func TestWithCors_Unauthorized(t *testing.T) {
@@ -245,14 +207,14 @@ func TestWithCors_Unauthorized(t *testing.T) {
 
 	rec := doCorsRequest(t, s, http.MethodGet, "/test", "http://evil.com")
 	assert.Equal(t, http.StatusForbidden, rec.Code)
-	assert.Empty(t, rec.Header().Get(corsHeaderAllowOrigin))
+	assert.Empty(t, rec.Header().Get("Access-Control-Allow-Origin"))
 }
 
 func TestWithCors_OptionsPreflight(t *testing.T) {
 	// OPTIONS 预检（授权来源）→ 204 + CORS 头，handler 不执行
 	handlerCalled := false
 	s := newTestServer()
-	s.Use(WithCors(corsAllowAllOrigins))
+	s.Use(WithCors("*"))
 	s.AddRoute(Route{Method: "GET", Path: "/test", Handler: func(w http.ResponseWriter, r *http.Request) {
 		handlerCalled = true
 	}})
@@ -260,9 +222,9 @@ func TestWithCors_OptionsPreflight(t *testing.T) {
 	rec := doCorsRequest(t, s, http.MethodOptions, "/test", "http://example.com")
 	assert.Equal(t, http.StatusNoContent, rec.Code)
 	assert.False(t, handlerCalled, "OPTIONS 预检不应执行 handler")
-	assert.Equal(t, corsAllowAllOrigins, rec.Header().Get(corsHeaderAllowOrigin))
-	assert.Equal(t, corsDefaultAllowMethods, rec.Header().Get(corsHeaderAllowMethods))
-	assert.Equal(t, corsDefaultAllowHeaders, rec.Header().Get(corsHeaderAllowHeaders))
+	assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
+	assert.Equal(t, "GET, POST, PUT, DELETE, OPTIONS, PATCH", rec.Header().Get("Access-Control-Allow-Methods"))
+	assert.Equal(t, "Content-Type, Authorization, X-Requested-With, Accept, Origin", rec.Header().Get("Access-Control-Allow-Headers"))
 }
 
 func TestWithCors_OptionsUnauthorized(t *testing.T) {
@@ -284,12 +246,12 @@ func TestWithCors_MultipleOrigins(t *testing.T) {
 	// a.com 允许
 	rec := doCorsRequest(t, s, http.MethodGet, "/test", "http://a.com")
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "http://a.com", rec.Header().Get(corsHeaderAllowOrigin))
+	assert.Equal(t, "http://a.com", rec.Header().Get("Access-Control-Allow-Origin"))
 
 	// b.com 允许
 	rec = doCorsRequest(t, s, http.MethodGet, "/test", "http://b.com")
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "http://b.com", rec.Header().Get(corsHeaderAllowOrigin))
+	assert.Equal(t, "http://b.com", rec.Header().Get("Access-Control-Allow-Origin"))
 
 	// c.com 不允许
 	rec = doCorsRequest(t, s, http.MethodGet, "/test", "http://c.com")
@@ -299,30 +261,30 @@ func TestWithCors_MultipleOrigins(t *testing.T) {
 func TestWithCors_AllHeadersSet(t *testing.T) {
 	// 验证授权请求时所有 CORS 响应头都被正确设置
 	s := newTestServer()
-	s.Use(WithCors(corsAllowAllOrigins))
+	s.Use(WithCors("*"))
 	s.AddRoute(Route{Method: "GET", Path: "/test", Handler: func(w http.ResponseWriter, r *http.Request) { OkJSON(w, "ok") }})
 
 	rec := doCorsRequest(t, s, http.MethodGet, "/test", "http://example.com")
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, corsAllowAllOrigins, rec.Header().Get(corsHeaderAllowOrigin))
-	assert.Equal(t, corsDefaultAllowMethods, rec.Header().Get(corsHeaderAllowMethods))
-	assert.Equal(t, corsDefaultAllowHeaders, rec.Header().Get(corsHeaderAllowHeaders))
-	assert.Equal(t, corsDefaultExposeHeaders, rec.Header().Get(corsHeaderExposeHeaders))
-	assert.Equal(t, corsDefaultAllowCredentials, rec.Header().Get(corsHeaderAllowCredentials))
-	assert.Equal(t, corsDefaultMaxAge, rec.Header().Get(corsHeaderMaxAge))
+	assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
+	assert.Equal(t, "GET, POST, PUT, DELETE, OPTIONS, PATCH", rec.Header().Get("Access-Control-Allow-Methods"))
+	assert.Equal(t, "Content-Type, Authorization, X-Requested-With, Accept, Origin", rec.Header().Get("Access-Control-Allow-Headers"))
+	assert.Equal(t, "Content-Length, Content-Type", rec.Header().Get("Access-Control-Expose-Headers"))
+	assert.Equal(t, "true", rec.Header().Get("Access-Control-Allow-Credentials"))
+	assert.Equal(t, "86400", rec.Header().Get("Access-Control-Max-Age"))
 }
 
 func TestWithCors_AllowAllOverridesList(t *testing.T) {
 	// 列表中包含 "*" 时，其余来源被忽略，allowAll 生效
 	s := newTestServer()
-	s.Use(WithCors("http://a.com", corsAllowAllOrigins, "http://b.com"))
+	s.Use(WithCors("http://a.com", "*", "http://b.com"))
 	s.AddRoute(Route{Method: "GET", Path: "/test", Handler: func(w http.ResponseWriter, r *http.Request) { OkJSON(w, "ok") }})
 
 	rec := doCorsRequest(t, s, http.MethodGet, "/test", "http://anyone.com")
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, corsAllowAllOrigins, rec.Header().Get(corsHeaderAllowOrigin))
+	assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
 	// allowAll 时不设 Vary
-	assert.Empty(t, rec.Header().Get(corsHeaderVary))
+	assert.Empty(t, rec.Header().Get("Vary"))
 }
 
 // --- WithRequestID 测试 ---

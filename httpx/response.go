@@ -160,9 +160,9 @@ func wrapResponse(ctx context.Context, v any) Response[any] {
 // wrapXMLResponse 将 v 包装为带 XML 声明的响应结构。
 func wrapXMLResponse(ctx context.Context, v any) xmlResponse[any] {
 	return xmlResponse[any]{
-		Version:   xmlVersion,
-		Encoding:  xmlEncoding,
-		Response:  wrapResponse(ctx, v),
+		Version:  xmlVersion,
+		Encoding: xmlEncoding,
+		Response: wrapResponse(ctx, v),
 	}
 }
 

@@ -1,4 +1,4 @@
-# trace
+# trace — 链路追踪
 
 基于 [OpenTelemetry](https://opentelemetry.io) 的链路追踪包，提供简洁的 API 用于在服务间传递和记录链路上下文。
 
@@ -71,6 +71,7 @@ trace.StartAgent(trace.Config{
     OtlpHeaders:    map[string]string{"key": "value"},
     OtlpHttpPath:   "/v1/traces",
     OtlpHttpSecure: false,
+    OtlpGrpcSecure: false,
     Disabled:       false,
 })
 ```
@@ -86,6 +87,7 @@ trace.StartAgent(trace.Config{
 | `OtlpHeaders` | `map[string]string` | `nil` | OTLP 传输自定义请求头 |
 | `OtlpHttpPath` | `string` | `""` | OTLP HTTP 路径 |
 | `OtlpHttpSecure` | `bool` | `false` | OTLP HTTP 是否使用 HTTPS |
+| `OtlpGrpcSecure` | `bool` | `false` | OTLP gRPC 是否使用 TLS（连接 TLS collector） |
 | `Disabled` | `bool` | `false` | 是否禁用链路追踪 |
 
 ### 导出器类型
@@ -268,3 +270,4 @@ func callHTTP(ctx context.Context) {
     fmt.Println("trace-id header:", req.Header.Get("Traceparent"))
 }
 ```
+

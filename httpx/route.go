@@ -1,55 +1,10 @@
 package httpx
 
 import (
-	"io/fs"
 	"net/http"
 	"net/http/pprof"
 	"strings"
 )
-
-// --- 静态文件路由 ---
-
-// StaticFile 创建一个提供单个静态文件的 Route。
-// 自动设置正确的 Content-Type，并支持 Range 请求（断点续传）。
-//
-//	server.AddRoute(httpx.StaticFile("/favicon.ico", "./static/favicon.ico"))
-//
-// pattern 为 URL 路径（需以 "/" 开头），filePath 为本地文件路径。
-func StaticFile(pattern, filePath string) Route {
-	return Route{
-		Method: http.MethodGet,
-		Path:   pattern,
-		Handler: func(w http.ResponseWriter, r *http.Request) {
-			http.ServeFile(w, r, filePath)
-		},
-	}
-}
-
-// StaticFS 创建一个提供文件系统静态资源的 Route。
-// fsys 可以是 os.DirFS、embed.FS 等任意 fs.FS 实现。
-//
-//	server.AddRoute(httpx.StaticFS("/static/", os.DirFS("./public")))
-//	// 访问 /static/app.js 将返回 ./public/app.js
-//
-// pattern 需以 "/" 结尾，才会匹配该前缀下的所有子路径。
-// 也可与 WithPrefix 组合使用，会自动适配加前缀后的 URL。
-func StaticFS(pattern string, fsys fs.FS) Route {
-	fileServer := http.FileServer(http.FS(fsys))
-	return Route{
-		Method: http.MethodGet,
-		Path:   pattern,
-		Handler: func(w http.ResponseWriter, r *http.Request) {
-			base := r.Pattern
-			if i := strings.IndexByte(base, ' '); i != -1 {
-				base = base[i+1:]
-			}
-			if base == "" {
-				base = pattern
-			}
-			http.StripPrefix(base, fileServer).ServeHTTP(w, r)
-		},
-	}
-}
 
 // --- pprof 性能分析路由 ---
 

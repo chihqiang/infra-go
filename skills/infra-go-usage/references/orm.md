@@ -84,6 +84,7 @@ db, err := orm.New(orm.Config{
 | `Username` | `string` | `root` | 数据库用户名 |
 | `Password` | `string` | `""` | 数据库密码 |
 | `Database` | `string` | `""` | 数据库名称（SQLite 为文件路径） |
+| `SSLMode` | `string` | `disable` | PostgreSQL SSL 模式：`disable`、`allow`、`prefer`、`require`、`verify-ca`、`verify-full`，生产环境建议 `require` |
 | `MaxIdleConns` | `int` | `10` | 最大空闲连接数 |
 | `MaxOpenConns` | `int` | `100` | 最大打开连接数 |
 | `ConnMaxLifetime` | `Duration` | `30m` | 连接最大存活时间 |

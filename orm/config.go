@@ -58,6 +58,11 @@ type Config struct {
 	// Database 数据库名称（SQLite 为文件路径），默认 ""。
 	Database string `json:",optional"`
 
+	// SSLMode PostgreSQL SSL 模式，默认 "disable"。
+	// 可选值：disable、allow、prefer、require、verify-ca、verify-full。
+	// 生产环境建议设为 "require" 及以上以启用加密连接。
+	SSLMode string `json:",default=disable"`
+
 	// MaxIdleConns 最大空闲连接数，默认 10。
 	MaxIdleConns int `json:",default=10"`
 	// MaxOpenConns 最大打开连接数，默认 100。
@@ -76,8 +81,6 @@ type Config struct {
 	// SkipDefaultTransaction 是否跳过默认事务，默认 true。
 	// 开启后普通写入操作不会自动包装在事务中，可提升约 30% 性能。
 	SkipDefaultTransaction bool `json:",default=true"`
-	// AutoPrefix 是否自动添加表名前缀，默认 false。
-	AutoPrefix bool `json:",optional"`
 	// TablePrefix 表名前缀，默认空。
 	TablePrefix string `json:",optional"`
 	// SingularTable 是否使用单数表名，默认 false。
@@ -113,6 +116,9 @@ func fillDefault(cfg Config) Config {
 	c.Password = cfg.Password
 	// Database：始终使用用户值
 	c.Database = cfg.Database
+	if cfg.SSLMode != "" {
+		c.SSLMode = cfg.SSLMode
+	}
 	if cfg.MaxIdleConns != 0 {
 		c.MaxIdleConns = cfg.MaxIdleConns
 	}
@@ -136,9 +142,6 @@ func fillDefault(cfg Config) Config {
 	}
 	if cfg.SkipDefaultTransaction {
 		c.SkipDefaultTransaction = cfg.SkipDefaultTransaction
-	}
-	if cfg.AutoPrefix {
-		c.AutoPrefix = cfg.AutoPrefix
 	}
 	if cfg.TablePrefix != "" {
 		c.TablePrefix = cfg.TablePrefix

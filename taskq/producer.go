@@ -10,16 +10,18 @@ import (
 
 // Producer 生产者，封装 asynq.Client，负责投递任务到队列。
 type Producer struct {
-	client *asynq.Client
-	cfg    Config
+	client      *asynq.Client
+	cfg         Config
+	defaultOpts []asynq.Option // 构造时缓存的默认选项，避免每次投递重复构建
 }
 
 // NewProducer 创建生产者。
 func NewProducer(cfg Config) *Producer {
 	c := fillDefault(cfg)
 	return &Producer{
-		client: asynq.NewClient(c.redisOpt()),
-		cfg:    c,
+		client:      asynq.NewClient(c.redisOpt()),
+		cfg:         c,
+		defaultOpts: c.defaultOpts(),
 	}
 }
 
@@ -29,7 +31,7 @@ func (p *Producer) Close() error { return p.client.Close() }
 // Enqueue 投递任务到队列立即执行。
 // opts 可覆盖默认选项（队列、重试、超时等）。
 func (p *Producer) Enqueue(ctx context.Context, task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error) {
-	opts = append(p.cfg.defaultOpts(), opts...)
+	opts = append(p.defaultOpts, opts...)
 	info, err := p.client.EnqueueContext(ctx, task, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("taskq: enqueue %q: %w", task.Type(), err)

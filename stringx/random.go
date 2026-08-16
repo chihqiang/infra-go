@@ -2,7 +2,7 @@ package stringx
 
 import (
 	crand "crypto/rand"
-	"fmt"
+	"encoding/hex"
 	"math/rand"
 	"sync"
 	"time"
@@ -12,10 +12,10 @@ import (
 type RandType int
 
 const (
-	RandTypeAll     RandType = iota // 全部：大小写 + 数字
-	RandTypeUpper                   // 仅大写字母
-	RandTypeLower                   // 仅小写字母
-	RandTypeDigit                   // 仅数字
+	RandTypeAll   RandType = iota // 全部：大小写 + 数字
+	RandTypeUpper                 // 仅大写字母
+	RandTypeLower                 // 仅小写字母
+	RandTypeDigit                 // 仅数字
 )
 
 const (
@@ -28,6 +28,9 @@ const (
 	defaultRandLen   = 8
 	letterIdxMask    = 1<<letterIdxBits - 1 // All 1-bits, as many as letterIdxBits
 	letterIdxMax     = 63 / letterIdxBits   // # of letter indices fitting in 63 bits
+	digitIdxBits     = 4                    // 4 bits to represent a digit index (0-9)
+	digitIdxMask     = 1<<digitIdxBits - 1  // 拒绝 >= 10 的值
+	digitIdxMax      = 63 / digitIdxBits    // # of digit indices fitting in 63 bits
 )
 
 var src = newLockedSource(time.Now().UnixNano())
@@ -68,11 +71,15 @@ func RandId() string {
 		return Randn(idLen, RandTypeAll)
 	}
 
-	return fmt.Sprintf("%x%x%x%x", b[0:2], b[2:4], b[4:6], b[6:8])
+	return hex.EncodeToString(b)
 }
 
 // Randn returns a random string with length n and specified type.
 func Randn(n int, randType RandType) string {
+	// 负数或零长度直接返回空串，避免 make([]byte, n) panic。
+	if n <= 0 {
+		return ""
+	}
 	var chars string
 	switch randType {
 	case RandTypeUpper:
@@ -86,6 +93,24 @@ func Randn(n int, randType RandType) string {
 	}
 
 	b := make([]byte, n)
+
+	// 数字集合仅 10 个字符，用 4 位索引即可表示（拒绝 >= 10），
+	// 相比通用的 6 位方案浪费更少的随机位。
+	if randType == RandTypeDigit {
+		for i, cache, remain := n-1, src.Int63(), digitIdxMax; i >= 0; {
+			if remain == 0 {
+				cache, remain = src.Int63(), digitIdxMax
+			}
+			if idx := int(cache & digitIdxMask); idx < len(chars) {
+				b[i] = chars[idx]
+				i--
+			}
+			cache >>= digitIdxBits
+			remain--
+		}
+		return string(b)
+	}
+
 	// A src.Int63() generates 63 random bits, enough for letterIdxMax characters!
 	for i, cache, remain := n-1, src.Int63(), letterIdxMax; i >= 0; {
 		if remain == 0 {

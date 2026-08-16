@@ -205,21 +205,6 @@ func setMatchedPrimitiveValue(kind reflect.Kind, value reflect.Value, v any) err
 	return nil
 }
 
-// setValueFromString 将字符串值设置到目标 reflect.Value 上。
-func setValueFromString(kind reflect.Kind, value reflect.Value, str string) error {
-	if !value.CanSet() {
-		return errValueNotSettable
-	}
-
-	value = ensureValue(value)
-	v, err := convertTypeFromString(kind, str)
-	if err != nil {
-		return err
-	}
-
-	return setMatchedPrimitiveValue(kind, value, v)
-}
-
 // setSameKindValue 设置同类型的值，必要时进行类型转换。
 func setSameKindValue(targetType reflect.Type, target reflect.Value, value any) {
 	if reflect.ValueOf(value).Type().AssignableTo(targetType) {

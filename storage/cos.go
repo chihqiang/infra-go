@@ -65,6 +65,9 @@ func resolveCOSURL(cfg *COSConfig) string {
 
 // Write 将内容写入 COS 指定路径。
 func (s *cosStorage) Write(ctx context.Context, path string, content []byte) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("storage: write COS object %q: %w", path, err)
+	}
 	_, err := s.client.Object.Put(ctx, path, bytes.NewReader(content), nil)
 	if err != nil {
 		return fmt.Errorf("storage: failed to write COS object %q: %w", path, err)
@@ -74,6 +77,9 @@ func (s *cosStorage) Write(ctx context.Context, path string, content []byte) err
 
 // Delete 删除 COS 指定路径的对象，返回删除的对象数量。
 func (s *cosStorage) Delete(ctx context.Context, path string) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, fmt.Errorf("storage: delete COS object %q: %w", path, err)
+	}
 	resp, err := s.client.Object.Delete(ctx, path)
 	if err != nil {
 		return 0, fmt.Errorf("storage: failed to delete COS object %q: %w", path, err)

@@ -3,6 +3,7 @@ package cast
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -24,6 +25,11 @@ func (e *ErrCastFailed) Error() string {
 
 func castErr(from, to string) error {
 	return &ErrCastFailed{From: from, To: to}
+}
+
+// isNonFinite 判断浮点数是否为 NaN 或正负无穷。
+func isNonFinite(f float64) bool {
+	return math.IsNaN(f) || math.IsInf(f, 0)
 }
 
 // --- 基本类型转换 ---
@@ -97,6 +103,10 @@ func ToIntE(v any) (int, error) {
 	case int64:
 		return int(val), nil
 	case uint:
+		// 防止大于 int 最大值时静默溢出为负值
+		if uint64(val) > uint64(math.MaxInt) {
+			return 0, castErr("uint", "int")
+		}
 		return int(val), nil
 	case uint8:
 		return int(val), nil
@@ -105,10 +115,19 @@ func ToIntE(v any) (int, error) {
 	case uint32:
 		return int(val), nil
 	case uint64:
+		if val > uint64(math.MaxInt) {
+			return 0, castErr("uint64", "int")
+		}
 		return int(val), nil
 	case float32:
+		if isNonFinite(float64(val)) {
+			return 0, castErr("float32", "int")
+		}
 		return int(val), nil
 	case float64:
+		if isNonFinite(val) {
+			return 0, castErr("float64", "int")
+		}
 		return int(val), nil
 	case bool:
 		if val {
@@ -148,6 +167,10 @@ func ToInt64E(v any) (int64, error) {
 	case int64:
 		return val, nil
 	case uint:
+		// 防止大于 int64 最大值时静默溢出为负值
+		if uint64(val) > math.MaxInt64 {
+			return 0, castErr("uint", "int64")
+		}
 		return int64(val), nil
 	case uint8:
 		return int64(val), nil
@@ -156,10 +179,19 @@ func ToInt64E(v any) (int64, error) {
 	case uint32:
 		return int64(val), nil
 	case uint64:
+		if val > math.MaxInt64 {
+			return 0, castErr("uint64", "int64")
+		}
 		return int64(val), nil
 	case float32:
+		if isNonFinite(float64(val)) {
+			return 0, castErr("float32", "int64")
+		}
 		return int64(val), nil
 	case float64:
+		if isNonFinite(val) {
+			return 0, castErr("float64", "int64")
+		}
 		return int64(val), nil
 	case bool:
 		if val {
@@ -233,11 +265,17 @@ func ToUint64E(v any) (uint64, error) {
 	case uint64:
 		return val, nil
 	case float32:
+		if isNonFinite(float64(val)) {
+			return 0, castErr("float32(negative)", "uint64")
+		}
 		if val < 0 {
 			return 0, castErr("float32(negative)", "uint64")
 		}
 		return uint64(val), nil
 	case float64:
+		if isNonFinite(val) {
+			return 0, castErr("float64(negative)", "uint64")
+		}
 		if val < 0 {
 			return 0, castErr("float64(negative)", "uint64")
 		}

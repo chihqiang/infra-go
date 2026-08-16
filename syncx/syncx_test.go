@@ -124,6 +124,60 @@ func TestSingleFlight_Forget(t *testing.T) {
 	assert.Equal(t, int32(2), atomic.LoadInt32(&count))
 }
 
+func TestSingleFlight_Panic(t *testing.T) {
+	sf := NewSingleFlight[int]()
+
+	// panic 应向调用方传播
+	func() {
+		defer func() {
+			r := recover()
+			assert.Equal(t, "boom", r, "expected panic to propagate to caller")
+		}()
+		sf.Do("key", func() (int, error) {
+			panic("boom")
+		})
+	}()
+
+	// panic 后 key 应已清理，可正常再次执行
+	val, err := sf.Do("key", func() (int, error) { return 42, nil })
+	assert.NoError(t, err)
+	assert.Equal(t, 42, val)
+}
+
+func TestSingleFlight_PanicDoesNotBlockWaiters(t *testing.T) {
+	sf := NewSingleFlight[int]()
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+
+	// 第一个调用者 panic
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer func() { _ = recover() }()
+		sf.Do("key", func() (int, error) {
+			close(start)
+			time.Sleep(50 * time.Millisecond)
+			panic("boom")
+		})
+	}()
+
+	<-start
+
+	// 等待者应返回而非永久阻塞
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = sf.Do("key", func() (int, error) { return 7, nil })
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("waiter blocked forever after fn panicked")
+	}
+	wg.Wait()
+}
+
 // --- ConcurrentMap 测试 ---
 
 func TestConcurrentMap_Basic(t *testing.T) {
@@ -315,6 +369,41 @@ func TestOnceValue_Concurrent(t *testing.T) {
 	wg.Wait()
 
 	assert.Equal(t, int32(1), atomic.LoadInt32(&count))
+}
+
+func TestOnceValue_Panic(t *testing.T) {
+	ov := NewOnceValue(func() int {
+		panic("load failed")
+	})
+
+	// panic 应传播给调用方，而不是静默返回零值
+	for i := 0; i < 2; i++ {
+		func() {
+			defer func() {
+				r := recover()
+				assert.Equal(t, "load failed", r)
+			}()
+			_ = ov.Get()
+			t.Fatal("expected panic from Get")
+		}()
+	}
+}
+
+func TestOnceError_Panic(t *testing.T) {
+	oe := NewOnceError(func() (string, error) {
+		panic("init failed")
+	})
+
+	for i := 0; i < 2; i++ {
+		func() {
+			defer func() {
+				r := recover()
+				assert.Equal(t, "init failed", r)
+			}()
+			_, _ = oe.Get()
+			t.Fatal("expected panic from Get")
+		}()
+	}
 }
 
 // --- OnceError 测试 ---

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/chihqiang/infra-go/logger"
 )
 
 // --- 默认常量 ---
@@ -17,6 +19,8 @@ const (
 	defaultRenewTimeout = 5 * time.Second
 	// defaultTokenLen 锁 token 的随机字节数。
 	defaultTokenLen = 16
+	// defaultRetryInterval 阻塞获取锁的默认重试间隔。
+	defaultRetryInterval = 50 * time.Millisecond
 )
 
 // Lock 分布式锁。
@@ -117,8 +121,15 @@ func (la *LockAcquirer) TryLock(ctx context.Context) (*Lock, error) {
 }
 
 // Lock 阻塞式获取锁，会不断重试直到成功或 context 取消。
-// retryInterval 为重试间隔。
+// retryInterval 为重试间隔，小于等于 0 时使用默认值。
 func (la *LockAcquirer) Lock(ctx context.Context, retryInterval time.Duration) (*Lock, error) {
+	if retryInterval <= 0 {
+		retryInterval = defaultRetryInterval
+	}
+	// 使用 Ticker 复用单个计时器，避免循环内反复创建 Timer。
+	ticker := time.NewTicker(retryInterval)
+	defer ticker.Stop()
+
 	for {
 		lock, err := la.TryLock(ctx)
 		if err == nil {
@@ -131,7 +142,7 @@ func (la *LockAcquirer) Lock(ctx context.Context, retryInterval time.Duration) (
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(retryInterval):
+		case <-ticker.C:
 			// 继续重试
 		}
 	}
@@ -171,6 +182,8 @@ func (l *Lock) Unlock(ctx context.Context) error {
 }
 
 // renewLoop 后台自动续期循环。
+// 续期失败时记录日志并继续尝试：瞬时故障不应直接放弃续期，
+// 否则锁会在 TTL 到期后提前释放，导致临界区失去互斥保护。
 func (l *Lock) renewLoop() {
 	ticker := time.NewTicker(l.ttl / 3)
 	defer ticker.Stop()
@@ -190,10 +203,18 @@ func (l *Lock) renewLoop() {
 			return
 		case <-ticker.C:
 			ctx, cancel := context.WithTimeout(context.Background(), defaultRenewTimeout)
-			_, err := l.client.client.Eval(ctx, renewScript, []string{wrappedKey}, l.token, l.ttl.Milliseconds()).Result()
+			result, err := l.client.client.Eval(ctx, renewScript, []string{wrappedKey}, l.token, l.ttl.Milliseconds()).Result()
 			cancel()
-			if err != nil {
-				// 续期失败，可能是 Redis 故障或锁已丢失
+
+			switch {
+			case err != nil:
+				// Redis 瞬时故障：记录日志并继续尝试续期。
+				// 若 Redis 长时间不可用，锁会按 TTL 过期自动释放，保证互斥不失效。
+				logger.Error("redisx: failed to renew lock, will retry",
+					logger.String("key", l.key),
+					logger.Err(err))
+			case result == int64(0):
+				// Lua 脚本返回 0 表示 token 不匹配，锁已被其他客户端持有，停止续期。
 				return
 			}
 		}

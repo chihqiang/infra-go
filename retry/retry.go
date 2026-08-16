@@ -195,11 +195,13 @@ func doRetry(ctx context.Context, fn func(ctx context.Context) error, c Config) 
 			c.OnRetry(attempt+1, err)
 		}
 
-		// 等待延迟
+		// 等待延迟（复用单个 Timer，避免每次创建）
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return fmt.Errorf("retry: context cancelled during delay: %w", ctx.Err())
-		case <-time.After(delay):
+		case <-timer.C:
 		}
 	}
 
@@ -214,8 +216,12 @@ func computeDelay(c Config, attempt int, previousDelay time.Duration) time.Durat
 		return capDelay(d, c.MaxDelay, c.Jitter)
 	}
 
-	// 默认指数退避：delay * 2^(attempt-1)
-	d := time.Duration(float64(c.Delay) * math.Pow(2, float64(attempt-1)))
+	// 默认指数退避：delay * 2^(attempt-1)，用位运算替代浮点指数计算。
+	d := c.Delay << uint(attempt-1)
+	// 位移溢出（attempt 过大）时直接取最大值，避免产生异常值。
+	if d < c.Delay {
+		d = c.MaxDelay
+	}
 	return capDelay(d, c.MaxDelay, c.Jitter)
 }
 

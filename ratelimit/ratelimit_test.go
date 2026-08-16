@@ -42,7 +42,9 @@ func TestTokenBucket_Refill(t *testing.T) {
 }
 
 func TestTokenBucket_Concurrent(t *testing.T) {
-	tb := NewTokenBucket(10000, 100)
+	// rate 为 0 时不补充令牌，结果与执行时序无关，避免 -race 下 goroutine
+	// 变慢导致高 rate 补充令牌使测试偶发失败（flaky）。
+	tb := NewTokenBucket(0, 100)
 
 	var allowed, rejected int64
 	var wg sync.WaitGroup
@@ -67,9 +69,9 @@ func TestTokenBucket_Concurrent(t *testing.T) {
 
 	// 总数 = allowed + rejected = 200
 	assert.Equal(t, int64(200), allowed+rejected)
-	// 允许的不能超过桶容量（可能有少量令牌补充）
-	assert.LessOrEqual(t, allowed, int64(105)) // 允许少量误差
-	assert.Greater(t, allowed, int64(0))
+	// 并发下恰好消费桶容量 100 个令牌，不超发
+	assert.Equal(t, int64(100), allowed)
+	assert.Equal(t, int64(100), rejected)
 }
 
 func TestTokenBucket_AllowContext(t *testing.T) {

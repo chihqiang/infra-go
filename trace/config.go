@@ -37,6 +37,9 @@ type Config struct {
 	OtlpHttpPath string `json:",optional"`
 	// OtlpHttpSecure OTLP HTTP 是否使用 HTTPS，默认 false。
 	OtlpHttpSecure bool `json:",optional"`
+	// OtlpGrpcSecure OTLP gRPC 是否使用 TLS，默认 false。
+	// 为 true 时不注入 WithInsecure，可连接启用了 TLS 的 collector（如 443 端口）。
+	OtlpGrpcSecure bool `json:",optional"`
 	// Disabled 是否禁用链路追踪，默认 false。
 	// 设为 true 时 StartAgent 不会启动任何导出器。
 	Disabled bool `json:",optional"`

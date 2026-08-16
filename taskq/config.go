@@ -9,18 +9,6 @@ import (
 // --- 默认常量 ---
 
 const (
-	// defaultRedisAddr 默认 Redis 地址。
-	defaultRedisAddr = "127.0.0.1:6379"
-	// defaultConcurrency 默认消费者并发数。
-	defaultConcurrency = 10
-	// defaultShutdownTimeout 默认优雅关闭超时。
-	defaultShutdownTimeout = 8 * time.Second
-	// defaultMaxRetry 默认最大重试次数。
-	defaultMaxRetry = 25
-	// defaultTimeout 默认任务超时。
-	defaultTimeout = 30 * time.Minute
-	// defaultQueueName 默认队列名。
-	defaultQueueName = "default"
 	// defaultQueuePriority 默认队列优先级。
 	defaultQueuePriority = 1
 )

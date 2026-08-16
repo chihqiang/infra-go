@@ -57,7 +57,7 @@ type EventHandler struct {
 	onOpenHandler  func(*Conn)
 	onCloseHandler func(*Conn, error)
 	onErrorHandler func(*Conn, error)
-	onRawMessage    func(*Conn, []byte)
+	onRawMessage   func(*Conn, []byte)
 	handlers       map[string]func(*Conn, json.RawMessage)
 }
 

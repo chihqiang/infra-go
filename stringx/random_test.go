@@ -21,10 +21,10 @@ func TestRandId(t *testing.T) {
 
 func TestRandn(t *testing.T) {
 	tests := []struct {
-		name    string
-		n       int
+		name     string
+		n        int
 		randType RandType
-		pattern string
+		pattern  string
 	}{
 		{
 			name:     "All",
@@ -93,5 +93,19 @@ func TestSeed(t *testing.T) {
 	s2 := Randn(10, RandTypeAll)
 	if s1 != s2 {
 		t.Errorf("Seed() with same seed should produce same sequence, got %q and %q", s1, s2)
+	}
+}
+
+func TestRandn_NegativeOrZeroLength(t *testing.T) {
+	// 负数长度不应 panic，返回空串
+	if s := Randn(-1, RandTypeAll); s != "" {
+		t.Errorf("Randn(-1) = %q, want empty string", s)
+	}
+	if s := Randn(-100, RandTypeDigit); s != "" {
+		t.Errorf("Randn(-100, Digit) = %q, want empty string", s)
+	}
+	// 零长度返回空串（已有用例，这里再确认一次）
+	if s := Randn(0, RandTypeUpper); s != "" {
+		t.Errorf("Randn(0) = %q, want empty string", s)
 	}
 }

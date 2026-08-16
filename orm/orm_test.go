@@ -357,16 +357,16 @@ func TestTablePrefix(t *testing.T) {
 	require.NoError(t, db.AutoMigrate(&User{}))
 
 	// 验证表名前缀
- tableName := db.NamingStrategy.TableName("User")
+	tableName := db.NamingStrategy.TableName("User")
 	assert.Equal(t, "t_users", tableName)
 }
 
 func TestSingularTable(t *testing.T) {
 	db, err := New(Config{
-		Driver:         DriverSQLite,
-		Database:       ":memory:",
-		SingularTable:  true,
-		LogLevel:       LogSilent,
+		Driver:        DriverSQLite,
+		Database:      ":memory:",
+		SingularTable: true,
+		LogLevel:      LogSilent,
 	})
 	require.NoError(t, err)
 	defer func() { _ = Close(db) }()

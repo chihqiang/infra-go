@@ -135,7 +135,7 @@ func Close(db *gorm.DB) error {
 func buildDialector(c Config) (gorm.Dialector, error) {
 	// 优先使用 DSN
 	if c.DSN != "" {
-		return dialectorFromDSN(c.Driver, c.DSN), nil
+		return dialectorFromDSN(c.Driver, c.DSN)
 	}
 
 	switch c.Driver {
@@ -151,17 +151,17 @@ func buildDialector(c Config) (gorm.Dialector, error) {
 }
 
 // dialectorFromDSN 根据 DSN 创建对应驱动的 Dialector。
-func dialectorFromDSN(driver Driver, dsn string) gorm.Dialector {
+// 非法 Driver 返回错误，避免静默降级为其他驱动导致难以排查的问题。
+func dialectorFromDSN(driver Driver, dsn string) (gorm.Dialector, error) {
 	switch driver {
 	case DriverMySQL:
-		return mysql.Open(dsn)
+		return mysql.Open(dsn), nil
 	case DriverPostgres:
-		return postgres.Open(dsn)
+		return postgres.Open(dsn), nil
 	case DriverSQLite:
-		return sqlite.Open(dsn)
+		return sqlite.Open(dsn), nil
 	default:
-		// 不应该到达这里，buildDialector 已做校验
-		return sqlite.Open(dsn)
+		return nil, fmt.Errorf("unsupported database driver: %s, supported: mysql, postgres, sqlite", driver)
 	}
 }
 
@@ -174,9 +174,14 @@ func buildMySQLDSN(c Config) string {
 
 // buildPostgresDSN 构建 PostgreSQL 连接字符串。
 // 格式: host=127.0.0.1 user=postgres password=secret dbname=mydb port=5432 sslmode=disable TimeZone=Asia/Shanghai
+// SSLMode 为空时回退到 "disable"，保证未经过 fillDefault 直接构造的 Config 也能得到合法 DSN。
 func buildPostgresDSN(c Config) string {
-	return fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=disable TimeZone=Asia/Shanghai",
-		c.Host, c.Username, c.Password, c.Database, c.Port)
+	sslMode := c.SSLMode
+	if sslMode == "" {
+		sslMode = "disable"
+	}
+	return fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=%s TimeZone=Asia/Shanghai",
+		c.Host, c.Username, c.Password, c.Database, c.Port, sslMode)
 }
 
 // buildSQLiteDSN 构建 SQLite 连接字符串。

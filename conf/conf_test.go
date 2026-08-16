@@ -402,7 +402,7 @@ func TestLoadFromYAMLBytes(t *testing.T) {
 func TestLoad_PointerField(t *testing.T) {
 	type PtrConfig struct {
 		Host *string `json:"host,default=localhost"`
-		Port int      `json:"port"`
+		Port int     `json:"port"`
 	}
 
 	text := `{"port": 8080}`

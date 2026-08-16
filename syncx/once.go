@@ -4,6 +4,7 @@ import "sync"
 
 // OnceValue 泛型版本的 sync.OnceValue。
 // 保证函数只执行一次，后续调用返回缓存的结果。
+// 若 load 函数 panic，panic 会传播给调用方，且不会缓存失败结果。
 //
 // 用法：
 //
@@ -12,9 +13,10 @@ import "sync"
 //	})
 //	cfg := config.Get() // 只加载一次，后续直接返回缓存
 type OnceValue[T any] struct {
-	once  sync.Once
-	value T
-	load  func() T
+	once     sync.Once
+	value    T
+	panicVal any // 记录 load panic 的值，用于后续调用重新 panic
+	load     func() T
 }
 
 // NewOnceValue 创建一个只执行一次的值加载器。
@@ -23,15 +25,25 @@ func NewOnceValue[T any](load func() T) *OnceValue[T] {
 }
 
 // Get 返回值，首次调用会执行 load 函数，后续调用直接返回缓存值。
+// 若 load panic，panic 会传播给调用方（与官方 sync.OnceValue 一致）。
 func (o *OnceValue[T]) Get() T {
 	o.once.Do(func() {
+		defer func() {
+			if r := recover(); r != nil {
+				o.panicVal = r
+			}
+		}()
 		o.value = o.load()
 	})
+	if o.panicVal != nil {
+		panic(o.panicVal)
+	}
 	return o.value
 }
 
 // OnceError 泛型版本的只执行一次的 error 加载器。
 // 用于懒加载并缓存可能失败的操作。
+// 若 load 函数 panic，panic 会传播给调用方，且不会缓存失败结果。
 //
 // 用法：
 //
@@ -40,10 +52,11 @@ func (o *OnceValue[T]) Get() T {
 //	})
 //	db, err := conn.Get()
 type OnceError[T any] struct {
-	once  sync.Once
-	value T
-	err   error
-	load  func() (T, error)
+	once     sync.Once
+	value    T
+	err      error
+	panicVal any // 记录 load panic 的值，用于后续调用重新 panic
+	load     func() (T, error)
 }
 
 // NewOnceError 创建一个只执行一次的值加载器（带 error）。
@@ -52,9 +65,18 @@ func NewOnceError[T any](load func() (T, error)) *OnceError[T] {
 }
 
 // Get 返回值和错误，首次调用会执行 load 函数，后续调用直接返回缓存结果。
+// 若 load panic，panic 会传播给调用方（与官方 sync.OnceValue 一致）。
 func (o *OnceError[T]) Get() (T, error) {
 	o.once.Do(func() {
+		defer func() {
+			if r := recover(); r != nil {
+				o.panicVal = r
+			}
+		}()
 		o.value, o.err = o.load()
 	})
+	if o.panicVal != nil {
+		panic(o.panicVal)
+	}
 	return o.value, o.err
 }

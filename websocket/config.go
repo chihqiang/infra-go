@@ -9,20 +9,8 @@ import (
 // --- 默认常量 ---
 
 const (
-	// defaultPingInterval 默认心跳检测间隔。
-	defaultPingInterval = 25 * time.Second
-	// defaultPingTimeout 默认心跳超时时间。
-	defaultPingTimeout = 60 * time.Second
-	// defaultBufferSize 默认读写缓冲区大小（字节）。
-	defaultBufferSize = 4096
-	// defaultMaxMessageSize 默认单条消息最大大小（字节）。
-	defaultMaxMessageSize = 4096
-	// defaultRoomType 默认房间存储类型。
-	defaultRoomType = "memory"
 	// roomTypeRedis Redis 房间类型（用于 switch 判断）。
 	roomTypeRedis = "redis"
-	// defaultRedisAddr 默认 Redis 地址。
-	defaultRedisAddr = "127.0.0.1:6379"
 )
 
 // Config WebSocket 服务配置。

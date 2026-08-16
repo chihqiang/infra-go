@@ -7,8 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -894,79 +892,6 @@ func newTestListener() (*testListener, error) {
 	addr := ln.Addr().(*net.TCPAddr)
 	ln.Close()
 	return &testListener{addr: &testAddr{network: "tcp", port: addr.Port}}, nil
-}
-
-// --- 静态文件测试 ---
-
-func TestStaticFile(t *testing.T) {
-	dir := t.TempDir()
-	file := filepath.Join(dir, "hello.txt")
-	require.NoError(t, os.WriteFile(file, []byte("hello world"), 0o644))
-
-	s := newTestServer()
-	s.AddRoute(StaticFile("/hello.txt", file))
-
-	rec := doRequest(t, s, http.MethodGet, "/hello.txt", nil)
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "hello world", rec.Body.String())
-	assert.Contains(t, rec.Header().Get("Content-Type"), "text/plain")
-}
-
-func TestStaticFile_NotFound(t *testing.T) {
-	s := newTestServer()
-	s.AddRoute(StaticFile("/missing.txt", filepath.Join(t.TempDir(), "nope.txt")))
-
-	rec := doRequest(t, s, http.MethodGet, "/missing.txt", nil)
-	assert.Equal(t, http.StatusNotFound, rec.Code)
-}
-
-func TestStaticFile_MethodNotAllowed(t *testing.T) {
-	dir := t.TempDir()
-	file := filepath.Join(dir, "hello.txt")
-	require.NoError(t, os.WriteFile(file, []byte("hello world"), 0o644))
-
-	s := newTestServer()
-	s.AddRoute(StaticFile("/hello.txt", file))
-
-	rec := doRequest(t, s, http.MethodPost, "/hello.txt", nil)
-	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
-}
-
-func TestStaticFS(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.js"), []byte("var x = 1;"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html></html>"), 0o644))
-
-	s := newTestServer()
-	s.AddRoute(StaticFS("/static/", os.DirFS(dir)))
-
-	rec := doRequest(t, s, http.MethodGet, "/static/app.js", nil)
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "var x = 1;", rec.Body.String())
-	assert.Contains(t, rec.Header().Get("Content-Type"), "text/javascript")
-}
-
-func TestStaticFS_NotFound(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.js"), []byte("var x = 1;"), 0o644))
-
-	s := newTestServer()
-	s.AddRoute(StaticFS("/static/", os.DirFS(dir)))
-
-	rec := doRequest(t, s, http.MethodGet, "/static/missing.js", nil)
-	assert.Equal(t, http.StatusNotFound, rec.Code)
-}
-
-func TestStaticFS_WithPrefix(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.js"), []byte("var x = 1;"), 0o644))
-
-	s := newTestServer()
-	s.AddRoute(StaticFS("/static/", os.DirFS(dir)), WithPrefix("/api"))
-
-	rec := doRequest(t, s, http.MethodGet, "/api/static/app.js", nil)
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "var x = 1;", rec.Body.String())
 }
 
 // --- 自定义错误响应测试 ---

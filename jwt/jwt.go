@@ -184,8 +184,8 @@ func (j *JWT) ParseToken(tokenString string) (Claims, error) {
 	claims := Claims{}
 
 	token, err := stdjwt.ParseWithClaims(tokenString, claims, func(token *stdjwt.Token) (any, error) {
-		// 验证签名算法
-		if _, ok := token.Method.(*stdjwt.SigningMethodHMAC); !ok {
+		// 严格校验签名算法与配置一致，防止 alg 混淆攻击。
+		if token.Method != j.method {
 			return nil, fmt.Errorf("%w: unexpected signing method: %v", ErrInvalidToken, token.Header["alg"])
 		}
 		return []byte(j.config.Secret), nil
@@ -260,22 +260,25 @@ func copyClaims(src Claims) Claims {
 	return dst
 }
 
+// standardClaimKeys 标准 JWT 声明与 token_type 的 key 集合。
+// 定义为包级变量，避免每次调用 extractBusinessClaims 时重复构建。
+var standardClaimKeys = map[string]bool{
+	ClaimKeyIssuer:         true,
+	ClaimKeyAudience:       true,
+	ClaimKeySubject:        true,
+	ClaimKeyExpirationTime: true,
+	ClaimKeyIssuedAt:       true,
+	ClaimKeyNotBefore:      true,
+	ClaimKeyTokenType:      true,
+	ClaimKeyJWTID:          true,
+}
+
 // extractBusinessClaims 从 claims 中提取业务字段，
 // 移除标准声明和 token_type。
 func extractBusinessClaims(claims Claims) Claims {
 	result := make(Claims)
-	standardKeys := map[string]bool{
-		ClaimKeyIssuer:         true,
-		ClaimKeyAudience:       true,
-		ClaimKeySubject:        true,
-		ClaimKeyExpirationTime: true,
-		ClaimKeyIssuedAt:       true,
-		ClaimKeyNotBefore:      true,
-		ClaimKeyTokenType:      true,
-		ClaimKeyJWTID:          true,
-	}
 	for k, v := range claims {
-		if !standardKeys[k] {
+		if !standardClaimKeys[k] {
 			result[k] = v
 		}
 	}

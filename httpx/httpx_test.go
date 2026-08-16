@@ -673,7 +673,7 @@ func TestJSON_BindBody(t *testing.T) {
 	body := []byte(`{"name":"Alice","age":25,"email":"alice@example.com"}`)
 
 	var user userRequest
-	err := JSON.(BindingBody).BindBody(body, &user)
+	err := JSON.BindBody(body, &user)
 	require.NoError(t, err)
 	assert.Equal(t, "Alice", user.Name)
 }

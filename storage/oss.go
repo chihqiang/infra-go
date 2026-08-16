@@ -74,7 +74,11 @@ func resolveOSSURL(cfg *OSSConfig) string {
 }
 
 // Write 将内容写入 OSS 指定路径。
+// OSS SDK 不支持 context 取消，这里在发起调用前检查 ctx 状态实现快速失败。
 func (s *ossStorage) Write(ctx context.Context, path string, content []byte) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("storage: write OSS object %q: %w", path, err)
+	}
 	if err := s.bucket.PutObject(path, bytes.NewReader(content)); err != nil {
 		return fmt.Errorf("storage: failed to write OSS object %q: %w", path, err)
 	}
@@ -83,6 +87,9 @@ func (s *ossStorage) Write(ctx context.Context, path string, content []byte) err
 
 // Delete 删除 OSS 指定路径的对象，返回删除的对象数量。
 func (s *ossStorage) Delete(ctx context.Context, path string) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, fmt.Errorf("storage: delete OSS object %q: %w", path, err)
+	}
 	if err := s.bucket.DeleteObject(path); err != nil {
 		return 0, fmt.Errorf("storage: failed to delete OSS object %q: %w", path, err)
 	}

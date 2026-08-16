@@ -45,7 +45,8 @@ func extractContextFields(ctx context.Context) []Field {
 	extractors := contextExtractors
 	extractorsMu.RUnlock()
 
-	var fields []Field
+	// 预分配容量，避免多次扩容
+	fields := make([]Field, 0, len(extractors)*2)
 	for _, extractor := range extractors {
 		fields = append(fields, extractor(ctx)...)
 	}

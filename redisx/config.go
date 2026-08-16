@@ -6,29 +6,6 @@ import (
 	"github.com/chihqiang/infra-go/mapping"
 )
 
-// --- 默认常量 ---
-
-const (
-	// defaultAddr 默认 Redis 地址。
-	defaultAddr = "127.0.0.1:6379"
-	// defaultPoolSize 默认连接池大小。
-	defaultPoolSize = 10
-	// defaultMinIdleConns 默认最小空闲连接数。
-	defaultMinIdleConns = 2
-	// defaultMaxRetries 默认命令最大重试次数。
-	defaultMaxRetries = 3
-	// defaultDialTimeout 默认连接超时。
-	defaultDialTimeout = 5 * time.Second
-	// defaultReadTimeout 默认读取超时。
-	defaultReadTimeout = 3 * time.Second
-	// defaultWriteTimeout 默认写入超时。
-	defaultWriteTimeout = 3 * time.Second
-	// defaultPoolTimeout 默认连接池获取超时。
-	defaultPoolTimeout = 4 * time.Second
-	// defaultConnMaxIdleTime 默认连接最大空闲时间。
-	defaultConnMaxIdleTime = 5 * time.Minute
-)
-
 // Config Redis 配置。
 // 默认值通过结构体标签 default 定义，遵循 conf 标准。
 // 零值字段在 New 时会自动填充默认值。

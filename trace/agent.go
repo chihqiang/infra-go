@@ -92,8 +92,10 @@ func createExporter(c Config) (sdktrace.SpanExporter, error) {
 	case BatcherOTLPGRPC:
 		// 使用非阻塞模式，避免导出器不可达时拖慢应用启动
 		opts := []otlptracegrpc.Option{
-			otlptracegrpc.WithInsecure(),
 			otlptracegrpc.WithEndpoint(c.Endpoint),
+		}
+		if !c.OtlpGrpcSecure {
+			opts = append(opts, otlptracegrpc.WithInsecure())
 		}
 		if len(c.OtlpHeaders) > 0 {
 			opts = append(opts, otlptracegrpc.WithHeaders(c.OtlpHeaders))

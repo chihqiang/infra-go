@@ -9,75 +9,55 @@ import (
 	"github.com/google/uuid"
 )
 
-// --- CORS 常量 ---
-
-const (
-	// corsAllowAllOrigins 允许所有来源的通配符。
-	corsAllowAllOrigins = "*"
-
-	// CORS 相关 HTTP 头名称。
-	// corsHeaderOrigin Origin 请求/响应头名称，同时用作 Vary 头的值。
-	corsHeaderOrigin = "Origin"
-	// corsHeaderVary Vary 响应头名称。
-	corsHeaderVary = "Vary"
-	// corsHeaderAllowOrigin Access-Control-Allow-Origin 响应头名称。
-	corsHeaderAllowOrigin = "Access-Control-Allow-Origin"
-	// corsHeaderAllowMethods Access-Control-Allow-Methods 响应头名称。
-	corsHeaderAllowMethods = "Access-Control-Allow-Methods"
-	// corsHeaderAllowHeaders Access-Control-Allow-Headers 响应头名称。
-	corsHeaderAllowHeaders = "Access-Control-Allow-Headers"
-	// corsHeaderExposeHeaders Access-Control-Expose-Headers 响应头名称。
-	corsHeaderExposeHeaders = "Access-Control-Expose-Headers"
-	// corsHeaderAllowCredentials Access-Control-Allow-Credentials 响应头名称。
-	corsHeaderAllowCredentials = "Access-Control-Allow-Credentials"
-	// corsHeaderMaxAge Access-Control-Max-Age 响应头名称。
-	corsHeaderMaxAge = "Access-Control-Max-Age"
-
-	// CORS 响应头默认值。
-	// corsDefaultAllowMethods 允许的 HTTP 方法列表。
-	corsDefaultAllowMethods = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-	// corsDefaultAllowHeaders 允许的请求头列表。
-	corsDefaultAllowHeaders = "Content-Type, Authorization, X-Requested-With, Accept, Origin"
-	// corsDefaultExposeHeaders 允许暴露给前端 JavaScript 的响应头列表。
-	corsDefaultExposeHeaders = "Content-Length, Content-Type"
-	// corsDefaultAllowCredentials 是否允许携带凭证（Cookie）。
-	corsDefaultAllowCredentials = "true"
-	// corsDefaultMaxAge 预检请求缓存时间（秒），86400 = 24 小时。
-	corsDefaultMaxAge = "86400"
-
-	// 请求协议 scheme，用于同源判断。
-	// corsSchemeHTTP HTTP 协议 scheme。
-	corsSchemeHTTP = "http"
-	// corsSchemeHTTPS HTTPS 协议 scheme。
-	corsSchemeHTTPS = "https"
-)
-
 // WithCors 返回一个为响应设置 CORS 头的中间件。
 //
 // allowOrigins 为允许的来源列表；传入 "*" 表示允许所有来源。
 // 同源请求（Origin 与 Host 一致）不设置 CORS 头；
 // 未授权来源返回 403；OPTIONS 预检请求返回 204。
 func WithCors(allowOrigins ...string) Middleware {
+	// 常量仅在 WithCors 内部使用，直接内联。
+	const (
+		corsAllowAll        = "*"
+		hdrOrigin           = "Origin"
+		hdrVary             = "Vary"
+		hdrAllowOrigin      = "Access-Control-Allow-Origin"
+		hdrAllowMethods     = "Access-Control-Allow-Methods"
+		hdrAllowHeaders     = "Access-Control-Allow-Headers"
+		hdrExposeHeaders    = "Access-Control-Expose-Headers"
+		hdrAllowCredentials = "Access-Control-Allow-Credentials"
+		hdrMaxAge           = "Access-Control-Max-Age"
+		defaultAllowMethods = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+		defaultAllowHeaders = "Content-Type, Authorization, X-Requested-With, Accept, Origin"
+		defaultExposeHeader = "Content-Length, Content-Type"
+		defaultCredentials  = "true"
+		defaultMaxAge       = "86400"
+		schemeHTTP          = "http"
+		schemeHTTPS         = "https"
+	)
+
 	allowAll := false
+	// 预构建允许来源集合，避免每次请求 O(n) 扫描
+	allowedOrigins := make(map[string]struct{}, len(allowOrigins))
 	for _, o := range allowOrigins {
-		if o == corsAllowAllOrigins {
+		if o == corsAllowAll {
 			allowAll = true
 			break
 		}
+		allowedOrigins[o] = struct{}{}
 	}
 
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			origin := r.Header.Get(corsHeaderOrigin)
+			origin := r.Header.Get(hdrOrigin)
 			if origin == "" {
 				next(w, r)
 				return
 			}
 
 			// 同源请求不需要 CORS 头
-			scheme := corsSchemeHTTP
+			scheme := schemeHTTP
 			if r.TLS != nil {
-				scheme = corsSchemeHTTPS
+				scheme = schemeHTTPS
 			}
 			if origin == scheme+"://"+r.Host {
 				next(w, r)
@@ -85,32 +65,25 @@ func WithCors(allowOrigins ...string) Middleware {
 			}
 
 			// 校验 Origin
-			allowed := allowAll
-			if !allowed {
-				for _, o := range allowOrigins {
-					if o == origin {
-						allowed = true
-						break
-					}
+			if !allowAll {
+				if _, ok := allowedOrigins[origin]; !ok {
+					w.WriteHeader(http.StatusForbidden)
+					return
 				}
-			}
-			if !allowed {
-				w.WriteHeader(http.StatusForbidden)
-				return
 			}
 
 			// 设置 CORS 头
 			if allowAll {
-				w.Header().Set(corsHeaderAllowOrigin, corsAllowAllOrigins)
+				w.Header().Set(hdrAllowOrigin, corsAllowAll)
 			} else {
-				w.Header().Set(corsHeaderAllowOrigin, origin)
-				w.Header().Set(corsHeaderVary, corsHeaderOrigin)
+				w.Header().Set(hdrAllowOrigin, origin)
+				w.Header().Set(hdrVary, hdrOrigin)
 			}
-			w.Header().Set(corsHeaderAllowMethods, corsDefaultAllowMethods)
-			w.Header().Set(corsHeaderAllowHeaders, corsDefaultAllowHeaders)
-			w.Header().Set(corsHeaderExposeHeaders, corsDefaultExposeHeaders)
-			w.Header().Set(corsHeaderAllowCredentials, corsDefaultAllowCredentials)
-			w.Header().Set(corsHeaderMaxAge, corsDefaultMaxAge)
+			w.Header().Set(hdrAllowMethods, defaultAllowMethods)
+			w.Header().Set(hdrAllowHeaders, defaultAllowHeaders)
+			w.Header().Set(hdrExposeHeaders, defaultExposeHeader)
+			w.Header().Set(hdrAllowCredentials, defaultCredentials)
+			w.Header().Set(hdrMaxAge, defaultMaxAge)
 
 			// OPTIONS 预检
 			if r.Method == http.MethodOptions {
@@ -121,37 +94,6 @@ func WithCors(allowOrigins ...string) Middleware {
 			next(w, r)
 		}
 	}
-}
-
-// --- 响应记录器 ---
-
-// statusRecorder 包装 http.ResponseWriter，捕获状态码和响应字节数。
-// 用于日志中间件记录响应信息。默认状态码为 200（handler 未显式调用 WriteHeader 时）。
-type statusRecorder struct {
-	http.ResponseWriter
-	status    int
-	bytes     int
-	wroteHead bool
-}
-
-func newStatusRecorder(w http.ResponseWriter) *statusRecorder {
-	return &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-}
-
-// WriteHeader 记录状态码（仅首次有效），并委托给底层 ResponseWriter。
-func (r *statusRecorder) WriteHeader(code int) {
-	if !r.wroteHead {
-		r.status = code
-		r.wroteHead = true
-	}
-	r.ResponseWriter.WriteHeader(code)
-}
-
-// Write 累计写入字节数，并委托给底层 ResponseWriter。
-func (r *statusRecorder) Write(b []byte) (int, error) {
-	n, err := r.ResponseWriter.Write(b)
-	r.bytes += n
-	return n, err
 }
 
 // --- Recovery 中间件 ---

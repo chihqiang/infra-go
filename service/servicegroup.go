@@ -53,9 +53,9 @@ func NewServiceGroup() *ServiceGroup {
 }
 
 // Add 将 service 添加到组中。
-// 添加到头部，停止时按添加的逆序停止（后添加的先停止）。
+// 追加到尾部（O(1)），启动按添加顺序，停止时按逆序（后添加的先停止）。
 func (sg *ServiceGroup) Add(service Service) {
-	sg.services = append([]Service{service}, sg.services...)
+	sg.services = append(sg.services, service)
 }
 
 // Start 并发启动所有 Service，阻塞直到全部退出。
@@ -100,7 +100,9 @@ func (sg *ServiceGroup) doStart() {
 // Stop 中的 panic 只记录，不中断其他服务的停止。
 func (sg *ServiceGroup) doStop() {
 	var wg sync.WaitGroup
-	for _, svc := range sg.services {
+	// 逆序遍历：后添加的服务先停止
+	for i := len(sg.services) - 1; i >= 0; i-- {
+		svc := sg.services[i]
 		wg.Add(1)
 		go func(s Service) {
 			defer wg.Done()

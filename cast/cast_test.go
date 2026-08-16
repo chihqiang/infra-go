@@ -3,6 +3,7 @@ package cast
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -51,6 +52,38 @@ func TestToIntE_Error(t *testing.T) {
 
 	_, err = ToIntE([]int{1, 2})
 	assert.Error(t, err)
+}
+
+func TestToIntE_NonFiniteFloat(t *testing.T) {
+	// NaN 与 Inf 无法安全转换为整数，应返回错误而非未定义值
+	_, err := ToIntE(math.NaN())
+	assert.Error(t, err)
+	_, err = ToIntE(math.Inf(1))
+	assert.Error(t, err)
+
+	_, err = ToInt64E(math.NaN())
+	assert.Error(t, err)
+	_, err = ToInt64E(math.Inf(-1))
+	assert.Error(t, err)
+
+	_, err = ToUint64E(math.NaN())
+	assert.Error(t, err)
+	_, err = ToUint64E(math.Inf(1))
+	assert.Error(t, err)
+}
+
+func TestToIntE_Overflow(t *testing.T) {
+	// uint64 大于 int 最大值时应返回错误，而非静默溢出为负值
+	_, err := ToIntE(uint64(math.MaxUint64))
+	assert.Error(t, err)
+
+	_, err = ToInt64E(uint64(math.MaxUint64))
+	assert.Error(t, err)
+
+	// 边界内的值正常转换
+	n, err := ToInt64E(uint64(math.MaxInt64))
+	require.NoError(t, err)
+	assert.Equal(t, int64(math.MaxInt64), n)
 }
 
 // --- ToInt64 测试 ---
@@ -114,8 +147,7 @@ func TestToString(t *testing.T) {
 }
 
 func TestToString_Stringer(t *testing.T) {
-	type myStringer struct{}
-	// myStringer 实现 fmt.Stringer
+	// error 类型实现 fmt.Stringer，应转为错误消息
 	assert.Equal(t, "custom", ToString(errors.New("custom")))
 }
 

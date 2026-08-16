@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
 	gws "github.com/gorilla/websocket"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -425,7 +425,7 @@ func TestServer_ConnValues(t *testing.T) {
 
 	var info struct {
 		UserID string `json:"user_id"`
-		Role  string `json:"role"`
+		Role   string `json:"role"`
 	}
 	require.NoError(t, event.Decode(&info))
 	assert.Equal(t, "user-123", info.UserID)
@@ -487,11 +487,11 @@ func TestServer_WithRedisRoom(t *testing.T) {
 // echoHandler 回声处理器，将收到的消息原样返回。
 type echoHandler struct{}
 
-func (h *echoHandler) HandleOpen(conn *Conn)  {}
+func (h *echoHandler) HandleOpen(conn *Conn) {}
 func (h *echoHandler) HandleMessage(conn *Conn, messageType int, data []byte) {
 	_ = conn.WriteMessage(messageType, data)
 }
-func (h *echoHandler) HandleClose(conn *Conn, err error)  {}
+func (h *echoHandler) HandleClose(conn *Conn, err error) {}
 func (h *echoHandler) HandleError(conn *Conn, err error) {}
 
 // 确保 echoHandler 实现了 Handler 接口

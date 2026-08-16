@@ -73,8 +73,8 @@ func (p *redisPubSub) Subscribe(ctx context.Context, channel string) (<-chan []b
 
 // mockPubSub 内存实现的 PubSub，用于集群测试。
 type mockPubSub struct {
-	mu       sync.Mutex
-	subs     map[string][]chan []byte
+	mu   sync.Mutex
+	subs map[string][]chan []byte
 }
 
 func newMockPubSub() *mockPubSub {

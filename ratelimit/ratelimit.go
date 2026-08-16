@@ -113,16 +113,7 @@ func (sw *SlidingWindow) Allow() bool {
 	defer sw.mu.Unlock()
 
 	now := time.Now()
-	windowStart := now.Add(-sw.window)
-
-	// 移除窗口外的请求记录
-	i := 0
-	for ; i < len(sw.requests); i++ {
-		if sw.requests[i].After(windowStart) {
-			break
-		}
-	}
-	sw.requests = sw.requests[i:]
+	sw.pruneExpired(now)
 
 	// 检查是否超出限制
 	if len(sw.requests) >= sw.limit {
@@ -138,12 +129,9 @@ func (sw *SlidingWindow) AllowContext(ctx context.Context) (bool, error) {
 	return sw.Allow(), nil
 }
 
-// Count 返回当前窗口内的请求数（用于调试/监控）。
-func (sw *SlidingWindow) Count() int {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
-
-	now := time.Now()
+// pruneExpired 移除窗口外的请求记录。
+// 调用方需持有锁。
+func (sw *SlidingWindow) pruneExpired(now time.Time) {
 	windowStart := now.Add(-sw.window)
 
 	i := 0
@@ -152,7 +140,18 @@ func (sw *SlidingWindow) Count() int {
 			break
 		}
 	}
-	return len(sw.requests) - i
+	if i > 0 {
+		sw.requests = sw.requests[i:]
+	}
+}
+
+// Count 返回当前窗口内的请求数（用于调试/监控）。
+func (sw *SlidingWindow) Count() int {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+
+	sw.pruneExpired(time.Now())
+	return len(sw.requests)
 }
 
 // --- 并发数限制 ---

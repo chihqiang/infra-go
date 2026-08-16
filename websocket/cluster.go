@@ -11,18 +11,18 @@ import (
 
 // 集群消息类型常量。
 const (
-	clusterChannelPattern = "%scluster"
+	clusterChannelPattern       = "%scluster"
 	clusterMessageTypeBroadcast = "broadcast"
-	clusterMessageTypeRoom     = "room"
+	clusterMessageTypeRoom      = "room"
 )
 
 // clusterMessage 集群内部广播消息。
 // 通过 Redis Pub/Sub 在实例间传递，实现跨实例广播。
 type clusterMessage struct {
-	Type      string `json:"type"`       // broadcast（广播全部）或 room（定向房间）
-	MessageType int   `json:"mt"`        // WebSocket 消息类型（TextMessage 等）
-	Data      []byte `json:"data"`       // 消息内容
-	Rooms     []string `json:"rooms,omitempty"` // 目标房间（仅 Type=room 时有效）
+	Type        string   `json:"type"`            // broadcast（广播全部）或 room（定向房间）
+	MessageType int      `json:"mt"`              // WebSocket 消息类型（TextMessage 等）
+	Data        []byte   `json:"data"`            // 消息内容
+	Rooms       []string `json:"rooms,omitempty"` // 目标房间（仅 Type=room 时有效）
 }
 
 // ClusterHandler 集群广播处理器。
@@ -34,12 +34,12 @@ type clusterMessage struct {
 //  3. 所有实例（包括自身）的 ClusterHandler 收到消息后
 //  4. 根据 type 字段分发到本实例的本地连接
 type ClusterHandler struct {
-	server   *Server
-	nodeID   uint16
-	pubsub   PubSub
-	done     chan struct{}
-	cancel   func() // 取消订阅
-	wg       sync.WaitGroup
+	server *Server
+	nodeID uint16
+	pubsub PubSub
+	done   chan struct{}
+	cancel func() // 取消订阅
+	wg     sync.WaitGroup
 }
 
 // PubSub 定义 Pub/Sub 所需的最小接口。

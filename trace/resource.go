@@ -1,7 +1,6 @@
 package trace
 
 import (
-	"context"
 	"os"
 
 	"github.com/chihqiang/infra-go/mapping"
@@ -38,6 +37,9 @@ func fillDefault(cfg Config) Config {
 	}
 	if cfg.OtlpHttpSecure {
 		c.OtlpHttpSecure = cfg.OtlpHttpSecure
+	}
+	if cfg.OtlpGrpcSecure {
+		c.OtlpGrpcSecure = cfg.OtlpGrpcSecure
 	}
 	if cfg.Disabled {
 		c.Disabled = cfg.Disabled
@@ -82,25 +84,4 @@ func openFileForExporter(path string) (*os.File, error) {
 	}
 	fileCloser = func() { _ = f.Close() }
 	return f, nil
-}
-
-// contextKey 用于在 context 中存储 trace 信息。
-type contextKey int
-
-const (
-	// tracerKey 用于在 context 中存储 tracer 名称。
-	tracerKey contextKey = iota
-)
-
-// withTracerName 在 context 中设置 tracer 名称。
-func withTracerName(ctx context.Context, name string) context.Context {
-	return context.WithValue(ctx, tracerKey, name)
-}
-
-// tracerNameFromContext 从 context 中获取 tracer 名称，默认返回 TraceName。
-func tracerNameFromContext(ctx context.Context) string {
-	if name, ok := ctx.Value(tracerKey).(string); ok && name != "" {
-		return name
-	}
-	return TraceName
 }

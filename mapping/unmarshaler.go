@@ -18,9 +18,9 @@ var emptyMap = map[string]any{}
 // Unmarshaler 是配置反序列化器，负责将 map[string]any 反序列化到结构体，
 // 并处理默认值、环境变量、选项验证、范围验证等扩展功能。
 type Unmarshaler struct {
-	key          string // 结构体标签键名，通常是 "json"
-	fillDefault  bool   // 是否仅填充默认值
-	fromString   bool   // 是否从字符串解析所有值
+	key          string              // 结构体标签键名，通常是 "json"
+	fillDefault  bool                // 是否仅填充默认值
+	fromString   bool                // 是否从字符串解析所有值
 	canonicalKey func(string) string // 键名规范化函数（如转小写）
 }
 

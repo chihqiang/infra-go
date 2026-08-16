@@ -455,5 +455,3 @@ func TestStructValueRequired(t *testing.T) {
 	}
 	assert.False(t, structValueRequired("json", reflect.TypeOf(DefaultStruct{})))
 }
-
-

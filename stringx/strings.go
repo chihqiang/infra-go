@@ -75,8 +75,10 @@ func Chunk(s string, size int) []string {
 	if size <= 0 || len(s) == 0 {
 		return nil
 	}
-	var chunks []string
 	runes := []rune(s)
+	// 预分配容量，避免多次扩容
+	n := (len(runes) + size - 1) / size
+	chunks := make([]string, 0, n)
 	for i := 0; i < len(runes); i += size {
 		end := i + size
 		if end > len(runes) {

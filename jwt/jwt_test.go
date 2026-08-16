@@ -119,7 +119,7 @@ func TestGenerateToken(t *testing.T) {
 	j := newTestJWT(t)
 
 	token, err := j.GenerateToken(Claims{
-		ClaimKeyUserID:  "user-123",
+		ClaimKeyUserID:   "user-123",
 		ClaimKeyUsername: "alice",
 	}, 1*time.Hour)
 	require.NoError(t, err)
@@ -156,7 +156,7 @@ func TestGenerateAccessToken(t *testing.T) {
 	j := newTestJWT(t)
 
 	token, err := j.GenerateAccessToken(Claims{
-		ClaimKeyUserID:  "user-123",
+		ClaimKeyUserID:   "user-123",
 		ClaimKeyUsername: "alice",
 		ClaimKeyRole:     "admin",
 	})
@@ -192,7 +192,7 @@ func TestGenerateTokenPair(t *testing.T) {
 	j := newTestJWT(t)
 
 	pair, err := j.GenerateTokenPair(Claims{
-		ClaimKeyUserID:  "user-123",
+		ClaimKeyUserID:   "user-123",
 		ClaimKeyUsername: "alice",
 		ClaimKeyRole:     "admin",
 	})
@@ -209,7 +209,7 @@ func TestParseToken(t *testing.T) {
 	j := newTestJWT(t)
 
 	token, err := j.GenerateAccessToken(Claims{
-		ClaimKeyUserID:  "user-123",
+		ClaimKeyUserID:   "user-123",
 		ClaimKeyUsername: "alice",
 	})
 	require.NoError(t, err)
@@ -309,7 +309,7 @@ func TestRefreshToken(t *testing.T) {
 	j := newTestJWT(t)
 
 	pair, err := j.GenerateTokenPair(Claims{
-		ClaimKeyUserID:  "user-123",
+		ClaimKeyUserID:   "user-123",
 		ClaimKeyUsername: "alice",
 		ClaimKeyRole:     "admin",
 	})
@@ -358,10 +358,10 @@ func TestMapClaims_CustomFields(t *testing.T) {
 	j := newTestJWT(t)
 
 	token, err := j.GenerateAccessToken(Claims{
-		ClaimKeyUserID:  "user-456",
-		"company":  "acme",
-		ClaimKeyScopes:   []string{"read", "write"},
-		"metadata": map[string]any{"department": "engineering"},
+		ClaimKeyUserID: "user-456",
+		"company":      "acme",
+		ClaimKeyScopes: []string{"read", "write"},
+		"metadata":     map[string]any{"department": "engineering"},
 	})
 	require.NoError(t, err)
 
@@ -411,7 +411,7 @@ func TestAuthMiddleware_Success(t *testing.T) {
 	j := newTestJWT(t)
 
 	token, err := j.GenerateAccessToken(Claims{
-		ClaimKeyUserID:  "user-123",
+		ClaimKeyUserID:   "user-123",
 		ClaimKeyUsername: "alice",
 		ClaimKeyRole:     "admin",
 	})
@@ -556,14 +556,14 @@ func TestCopyClaims(t *testing.T) {
 
 func TestExtractBusinessClaims(t *testing.T) {
 	claims := Claims{
-		ClaimKeyUserID:    "123",
-		ClaimKeyUsername:   "alice",
-		ClaimKeyIssuer:        "test-app",
-		ClaimKeyAudience:        []string{"web"},
-		ClaimKeyExpirationTime:        int64(1234567890),
-		ClaimKeyIssuedAt:        int64(1234567890),
-		ClaimKeyNotBefore:        int64(1234567890),
-		ClaimKeyTokenType: "access",
+		ClaimKeyUserID:         "123",
+		ClaimKeyUsername:       "alice",
+		ClaimKeyIssuer:         "test-app",
+		ClaimKeyAudience:       []string{"web"},
+		ClaimKeyExpirationTime: int64(1234567890),
+		ClaimKeyIssuedAt:       int64(1234567890),
+		ClaimKeyNotBefore:      int64(1234567890),
+		ClaimKeyTokenType:      "access",
 	}
 
 	business := extractBusinessClaims(claims)

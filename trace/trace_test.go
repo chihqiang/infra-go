@@ -25,13 +25,13 @@ func TestFillDefault_AllDefaults(t *testing.T) {
 
 func TestFillDefault_UserOverrides(t *testing.T) {
 	c := fillDefault(Config{
-		Name:      "my-service",
-		Endpoint:  "localhost:4317",
-		Sampler:   0.5,
-		Batcher:   BatcherZipkin,
-		Disabled:  true,
-		OtlpHeaders: map[string]string{"key": "val"},
-		OtlpHttpPath: "/v1/traces",
+		Name:           "my-service",
+		Endpoint:       "localhost:4317",
+		Sampler:        0.5,
+		Batcher:        BatcherZipkin,
+		Disabled:       true,
+		OtlpHeaders:    map[string]string{"key": "val"},
+		OtlpHttpPath:   "/v1/traces",
 		OtlpHttpSecure: true,
 	})
 

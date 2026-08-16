@@ -22,12 +22,12 @@ func newMiniRedis(t *testing.T) (addr string, cleanup func()) {
 
 func testConfig(addr string) Config {
 	return Config{
-		RedisAddr:          addr,
-		Concurrency:        5,
-		Queues:             map[string]int{"default": 1, "critical": 5},
-		ShutdownTimeout:    3 * time.Second,
-		DefaultMaxRetry:    3,
-		DefaultTimeout:     10 * time.Second,
+		RedisAddr:       addr,
+		Concurrency:     5,
+		Queues:          map[string]int{"default": 1, "critical": 5},
+		ShutdownTimeout: 3 * time.Second,
+		DefaultMaxRetry: 3,
+		DefaultTimeout:  10 * time.Second,
 	}
 }
 

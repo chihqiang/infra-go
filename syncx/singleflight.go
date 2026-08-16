@@ -56,13 +56,26 @@ func (sf *SingleFlight[T]) Do(key string, fn func() (T, error)) (T, error) {
 	sf.calls[key] = call
 	sf.mu.Unlock()
 
-	call.val, call.err = fn()
-	call.wg.Done()
+	// 无论 fn 是否 panic，都要完成 wg.Done 并清理调用记录，
+	// 否则等待者会永久阻塞且 map 中该 key 泄漏。
+	var panicVal any
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicVal = r
+			}
+			call.wg.Done()
+		}()
+		call.val, call.err = fn()
+	}()
 
 	sf.mu.Lock()
 	delete(sf.calls, key)
 	sf.mu.Unlock()
 
+	if panicVal != nil {
+		panic(panicVal)
+	}
 	return call.val, call.err
 }
 
@@ -105,13 +118,26 @@ func (sf *SingleFlight[T]) DoCtx(ctx context.Context, key string, fn func(contex
 	sf.calls[key] = call
 	sf.mu.Unlock()
 
-	call.val, call.err = fn(ctx)
-	call.wg.Done()
+	// 无论 fn 是否 panic，都要完成 wg.Done 并清理调用记录，
+	// 否则等待者会永久阻塞且 map 中该 key 泄漏。
+	var panicVal any
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicVal = r
+			}
+			call.wg.Done()
+		}()
+		call.val, call.err = fn(ctx)
+	}()
 
 	sf.mu.Lock()
 	delete(sf.calls, key)
 	sf.mu.Unlock()
 
+	if panicVal != nil {
+		panic(panicVal)
+	}
 	return call.val, call.err
 }
 

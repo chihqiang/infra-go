@@ -6,8 +6,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -210,47 +208,6 @@ func BenchmarkMiddlewareChain(b *testing.B) {
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/users", nil)
-	rec := httptest.NewRecorder()
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		s.Handler().ServeHTTP(rec, req)
-	}
-}
-
-// --- 静态文件基准 ---
-
-func BenchmarkStaticFile(b *testing.B) {
-	dir := b.TempDir()
-	file := filepath.Join(dir, "hello.txt")
-	if err := os.WriteFile(file, []byte("hello world"), 0o644); err != nil {
-		b.Fatal(err)
-	}
-
-	s := newTestServer()
-	s.AddRoute(StaticFile("/hello.txt", file))
-
-	req := httptest.NewRequest(http.MethodGet, "/hello.txt", nil)
-	rec := httptest.NewRecorder()
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		s.Handler().ServeHTTP(rec, req)
-	}
-}
-
-func BenchmarkStaticFS(b *testing.B) {
-	dir := b.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "app.js"), []byte("var x = 1;"), 0o644); err != nil {
-		b.Fatal(err)
-	}
-
-	s := newTestServer()
-	s.AddRoute(StaticFS("/static/", os.DirFS(dir)))
-
-	req := httptest.NewRequest(http.MethodGet, "/static/app.js", nil)
 	rec := httptest.NewRecorder()
 
 	b.ReportAllocs()

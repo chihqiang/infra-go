@@ -33,19 +33,19 @@ func New(cfg Config) (*Client, error) {
 	if c.MasterName != "" && len(c.SentinelAddrs) > 0 {
 		// 哨兵模式
 		client = redis.NewFailoverClient(&redis.FailoverOptions{
-			MasterName:       c.MasterName,
-			SentinelAddrs:    c.SentinelAddrs,
-			Username:         c.Username,
-			Password:         c.Password,
-			DB:               c.DB,
-			PoolSize:         c.PoolSize,
-			MinIdleConns:     c.MinIdleConns,
-			MaxRetries:       c.MaxRetries,
-			DialTimeout:      c.DialTimeout,
-			ReadTimeout:      c.ReadTimeout,
-			WriteTimeout:     c.WriteTimeout,
-			PoolTimeout:      c.PoolTimeout,
-			ConnMaxIdleTime:  c.ConnMaxIdleTime,
+			MasterName:      c.MasterName,
+			SentinelAddrs:   c.SentinelAddrs,
+			Username:        c.Username,
+			Password:        c.Password,
+			DB:              c.DB,
+			PoolSize:        c.PoolSize,
+			MinIdleConns:    c.MinIdleConns,
+			MaxRetries:      c.MaxRetries,
+			DialTimeout:     c.DialTimeout,
+			ReadTimeout:     c.ReadTimeout,
+			WriteTimeout:    c.WriteTimeout,
+			PoolTimeout:     c.PoolTimeout,
+			ConnMaxIdleTime: c.ConnMaxIdleTime,
 		})
 	} else {
 		// 单机模式
@@ -53,15 +53,15 @@ func New(cfg Config) (*Client, error) {
 			Addr:            c.Addr,
 			Username:        c.Username,
 			Password:        c.Password,
-			DB:               c.DB,
-			PoolSize:         c.PoolSize,
-			MinIdleConns:     c.MinIdleConns,
-			MaxRetries:       c.MaxRetries,
-			DialTimeout:      c.DialTimeout,
-			ReadTimeout:      c.ReadTimeout,
-			WriteTimeout:     c.WriteTimeout,
-			PoolTimeout:      c.PoolTimeout,
-			ConnMaxIdleTime:  c.ConnMaxIdleTime,
+			DB:              c.DB,
+			PoolSize:        c.PoolSize,
+			MinIdleConns:    c.MinIdleConns,
+			MaxRetries:      c.MaxRetries,
+			DialTimeout:     c.DialTimeout,
+			ReadTimeout:     c.ReadTimeout,
+			WriteTimeout:    c.WriteTimeout,
+			PoolTimeout:     c.PoolTimeout,
+			ConnMaxIdleTime: c.ConnMaxIdleTime,
 		})
 	}
 

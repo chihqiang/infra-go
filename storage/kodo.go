@@ -72,6 +72,9 @@ func (s *kodoStorage) uploadToken() string {
 
 // Write 将内容写入 KODO 指定路径。
 func (s *kodoStorage) Write(ctx context.Context, path string, content []byte) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("storage: write KODO object %q: %w", path, err)
+	}
 	formUploader := qstorage.NewFormUploader(s.storageConfig)
 	dataLen := int64(len(content))
 	err := formUploader.Put(ctx,
@@ -90,6 +93,9 @@ func (s *kodoStorage) Write(ctx context.Context, path string, content []byte) er
 
 // Delete 删除 KODO 指定路径的对象，返回删除的对象数量。
 func (s *kodoStorage) Delete(ctx context.Context, path string) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, fmt.Errorf("storage: delete KODO object %q: %w", path, err)
+	}
 	bucketManager := qstorage.NewBucketManager(s.mac, s.storageConfig)
 	rets, err := bucketManager.Batch([]string{qstorage.URIDelete(s.bucket, path)})
 	if err != nil {

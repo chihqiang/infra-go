@@ -18,7 +18,6 @@ HTTP 工具包，提供请求参数绑定（参考 gin 的设计）和统一响�
 - **智能包装**：`OkJSON` / `OkXML` 自动识别 error / CodeError / 普通数据
 - **多格式响应**：支持 JSON、XML、HTML 三种响应格式
 - **重定向**：`Redirect` 系列函数，支持 301/302 及自定义状态码
-- **静态文件**：`StaticFile` / `StaticFS` 提供单文件与文件系统静态资源服务
 - **自定义 404 响应**：`SetNotFoundHandler` 自定义未匹配路由的响应内容
 - **Context 变体**：每个响应函数都有对应的 `Ctx` 版本
 - **类型丰富**：支持 int/uint/bool/float/string/time.Time/time.Duration/slice/指针等
@@ -728,36 +727,6 @@ server.AddRoute(httpx.Route{
 })
 ```
 
-### 静态文件
-
-`StaticFile` 和 `StaticFS` 返回 `Route`，可直接注册到 Server（与 `PprofRoutes` 同类的独立函数）：
-
-```go
-// 单个文件（自动设置 Content-Type，支持 Range 断点续传）
-server.AddRoute(httpx.StaticFile("/favicon.ico", "./static/favicon.ico"))
-
-// 目录文件系统（os.DirFS / embed.FS 等任意 fs.FS）
-server.AddRoute(httpx.StaticFS("/static/", os.DirFS("./public")))
-// 访问 /static/app.js 将返回 ./public/app.js
-
-// 与路由组前缀组合使用
-server.AddRoute(httpx.StaticFS("/static/", os.DirFS("./public")), httpx.WithPrefix("/api"))
-// 访问 /api/static/app.js
-```
-
-> 注意：`StaticFS` 的 pattern 需以 `/` 结尾，才会匹配该前缀下的所有子路径。
-
-#### embed.FS 示例
-
-```go
-import "embed"
-
-//go:embed public
-var publicFS embed.FS
-
-server.AddRoute(httpx.StaticFS("/static/", publicFS))
-```
-
 ### 自定义 404 响应
 
 `SetNotFoundHandler` 用于自定义 404 响应，替代默认的 `404 page not found`：
@@ -886,11 +855,13 @@ httpx/
 ├── binding.go           — 绑定器实现：接口定义、MIME 常量、内置绑定器、反射映射、验证器
 ├── response.go          — 公开 API：Response[T], CodeError, OkJSON/OkXML/OkHTML, Write*, Redirect*
 ├── server.go            — 公开 API：Route, Middleware, Server, Group, WithPrefix, Start/Shutdown, SetNotFoundHandler
-├── route.go             — 独立路由函数：PprofRoutes, StaticFile, StaticFS
+├── route.go             — 独立路由函数：PprofRoutes
 ├── middleware.go        — 内置中间件：WithRecovery, WithLogger, WithCors, WithRequestID
+├── recorder.go          — 响应记录器（内部使用）：statusRecorder 捕获状态码/字节数，透传 Flush/Hijack/Push
 ├── ctx.go               — context 工具：ContextWithRequestID / RequestIDFromContext
 ├── httpx_test.go
 ├── middleware_test.go
+├── recorder_test.go
 └── server_test.go
 ```
 
