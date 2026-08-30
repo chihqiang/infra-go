@@ -13,9 +13,11 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/chihqiang/infra-go/logger"
 	mp "github.com/chihqiang/infra-go/mapping"
 )
 
@@ -85,46 +87,12 @@ type ServerConfig struct {
 	ShutdownTimeout time.Duration `json:",default=10s"`
 }
 
-// fillDefaultUnmarshaler 用于填充 ServerConfig 默认值的反序列化器。
-var fillDefaultUnmarshaler = mp.NewDefaultUnmarshaler()
-
 // fillDefault 填充默认值，然后用用户配置中的非零字段覆盖。
+// 使用 mapping.FillAndOverride 统一处理，零值视为"未设置"保留默认值。
+// 要显式设为 0 请用对应的 RunOption，如 WithReadTimeout(0)。
 func fillDefault(cfg ServerConfig) ServerConfig {
 	var c ServerConfig
-	if err := fillDefaultUnmarshaler.Unmarshal(map[string]any{}, &c); err != nil {
-		panic(err)
-	}
-
-	// 用用户配置覆盖（零值视为“未设置”，保留默认值；
-	// 要显式设为 0 请用对应的 RunOption，如 WithReadTimeout(0)）
-	if cfg.Host != "" {
-		c.Host = cfg.Host
-	}
-	if cfg.Port != 0 {
-		c.Port = cfg.Port
-	}
-	if cfg.CertFile != "" {
-		c.CertFile = cfg.CertFile
-	}
-	if cfg.KeyFile != "" {
-		c.KeyFile = cfg.KeyFile
-	}
-	if cfg.ReadTimeout != 0 {
-		c.ReadTimeout = cfg.ReadTimeout
-	}
-	if cfg.WriteTimeout != 0 {
-		c.WriteTimeout = cfg.WriteTimeout
-	}
-	if cfg.IdleTimeout != 0 {
-		c.IdleTimeout = cfg.IdleTimeout
-	}
-	if cfg.MaxHeaderBytes != 0 {
-		c.MaxHeaderBytes = cfg.MaxHeaderBytes
-	}
-	if cfg.ShutdownTimeout != 0 {
-		c.ShutdownTimeout = cfg.ShutdownTimeout
-	}
-
+	mp.MustFillAndOverride(&c, cfg)
 	return c
 }
 
@@ -148,6 +116,7 @@ type Server struct {
 	mux        *http.ServeMux
 	gmw        []Middleware
 	gh         http.Handler // 缓存应用全局中间件后的根 handler，nil 表示需要重建
+	handlerLk  sync.Mutex   // 保护 gh 懒加载与重建（Use / SetNotFoundHandler 并发安全）
 	routes     []Route
 	httpServer *http.Server
 	tlsConfig  *tls.Config
@@ -337,8 +306,10 @@ func (s *Server) AddRoutes(rs []Route, opts ...RouteOption) {
 // 再调用 Use，已注册的路由也会经过新添加的全局中间件。
 // 注意：Start 启动后再调用 Use 不会影响已经运行的 httpServer。
 func (s *Server) Use(mws ...Middleware) {
+	s.handlerLk.Lock()
 	s.gmw = append(s.gmw, mws...)
 	s.gh = nil // 清空缓存，下次 Handler() 重新构建
+	s.handlerLk.Unlock()
 }
 
 // Routes 返回已注册的所有路由（已应用中间件）。
@@ -415,7 +386,10 @@ func (s *Server) Mux() *http.ServeMux {
 
 // Handler 返回服务器的 HTTP Handler，可用于 httptest 等场景。
 // 返回的 handler 已应用全局中间件（Use 添加）。
+// 并发安全：懒加载构建受内部锁保护。
 func (s *Server) Handler() http.Handler {
+	s.handlerLk.Lock()
+	defer s.handlerLk.Unlock()
 	if s.gh == nil {
 		s.buildGlobalHandler()
 	}
@@ -456,8 +430,10 @@ func (s *Server) buildGlobalHandler() {
 //	    httpx.OkJSON(w, httpx.NewCodeError(httpx.CodeNotFound, "resource not found"))
 //	})
 func (s *Server) SetNotFoundHandler(h http.HandlerFunc) {
+	s.handlerLk.Lock()
 	s.notFoundHandler = h
 	s.gh = nil
+	s.handlerLk.Unlock()
 }
 
 // wrapNotFound 包装 mux，将 404 响应拦截并转交给自定义处理器。
@@ -563,7 +539,7 @@ func (g *Group) Group(prefix string, mws ...Middleware) *Group {
 // Start 启动 HTTP 服务器，支持优雅关闭。
 //
 // 服务器在独立 goroutine 中运行，主 goroutine 阻塞等待信号。
-// 收到 SIGINT（Ctrl+C）或 SIGTERM 时执行优雅关闭。
+// 收到 SIGINT（Ctrl+C）、SIGTERM 或 SIGHUP 时执行优雅关闭。
 //
 // 如果配置了 CertFile 和 KeyFile，则启动 HTTPS 服务。
 func (s *Server) Start() error {
@@ -588,7 +564,8 @@ func (s *Server) Start() error {
 	}()
 
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	// 监听 SIGINT、SIGTERM 和 SIGHUP，兼容 Kubernetes 环境信号
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
 	select {
 	case err := <-errCh:
@@ -596,31 +573,56 @@ func (s *Server) Start() error {
 			return nil
 		}
 		return fmt.Errorf("http server error: %w", err)
-	case <-sigCh:
+	case sig := <-sigCh:
+		logger.Info("httpx: received signal, shutting down",
+			logger.String("signal", sig.String()))
 		return s.Shutdown()
 	}
 }
 
 // Shutdown 优雅关闭服务器，等待活跃连接处理完毕。
 // 超时时间由 WithShutdownTimeout 设置（默认 10 秒）。
+// 关闭失败时记录日志但不静默吞掉错误。
 func (s *Server) Shutdown() error {
 	if s.httpServer == nil {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.conf.ShutdownTimeout)
 	defer cancel()
-	return s.httpServer.Shutdown(ctx)
+	err := s.httpServer.Shutdown(ctx)
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Error("httpx: graceful shutdown failed",
+			logger.Err(err),
+			logger.Duration("timeout", s.conf.ShutdownTimeout))
+	}
+	return err
 }
 
 // --- 内部辅助函数 ---
 
 // buildPattern 构建 ServeMux 的路由模式（格式："METHOD /path"）。
+// 自动规范化路径：确保非空路径以 "/" 开头，否则 http.ServeMux
+// 会因非法 pattern（如 "GET users"）而 panic。
 func buildPattern(method, path string) string {
 	method = strings.ToUpper(method)
+	path = normalizePath(path)
 	if method == "" || method == "*" {
 		return path
 	}
 	return method + " " + path
+}
+
+// normalizePath 规范化路由路径：
+//   - 空路径视为根路径 "/"
+//   - 非空路径确保以 "/" 开头（自动补前导斜杠）
+func normalizePath(path string) string {
+	if path == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(path, "/") {
+		return "/" + path
+	}
+	return path
 }
 
 // joinPath 连接前缀和路径，处理多余的斜杠。

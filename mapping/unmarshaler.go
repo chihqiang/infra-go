@@ -56,6 +56,18 @@ func NewDefaultUnmarshaler() *Unmarshaler {
 	return NewUnmarshaler("json", WithDefault())
 }
 
+// defaultUnmarshaler 包级默认反序列化器，用于 FillDefault。
+// Unmarshaler 的方法只读其自身字段、不修改状态，因此可安全并发复用。
+var defaultUnmarshaler = NewDefaultUnmarshaler()
+
+// FillDefault 为给定结构体填充默认值和环境变量。
+// 前提是结构体的所有字段必须为零值。
+// 等价于 NewDefaultUnmarshaler().Unmarshal(map[string]any{}, v)，
+// 是 conf、redisx、orm、jwt、httpx、logger 等模块 fillDefault 模式的统一入口。
+func FillDefault(v any) error {
+	return defaultUnmarshaler.Unmarshal(emptyMap, v)
+}
+
 // NewUnmarshaler 创建一个新的反序列化器。
 func NewUnmarshaler(key string, opts ...UnmarshalOption) *Unmarshaler {
 	u := &Unmarshaler{key: key}

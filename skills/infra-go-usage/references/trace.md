@@ -151,6 +151,33 @@ client.Do(req)
 ctx, spanContext := trace.ExtractHeader(r.Context(), r.Header)
 ```
 
+### HTTP 服务端中间件
+
+`HTTPMiddleware(ignorePaths ...string)` 提供开箱即用的 HTTP 服务端链路追踪中间件（返回标准 `func(http.Handler) http.Handler`，不依赖具体框架）。自动完成：提取上游 span 上下文（W3C traceparent）→ 创建服务端 span（携带 method/path/status 等 HTTP 语义属性）→ 注入 context 供下游模块关联 `trace_id`。
+
+`ignorePaths` 用于指定不追踪的请求路径（如健康检查、探针、监控接口），命中规则的请求直接放行、不创建 span。不传参时行为与旧版一致。
+
+```go
+// 标准 net/http（忽略健康检查与监控路径）
+handler := trace.HTTPMiddleware("/health*", "/metrics/*")(mux)
+http.ListenAndServe(":8080", handler)
+
+// httpx：包装为 Middleware 使用
+server.Use(func(next http.HandlerFunc) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        trace.HTTPMiddleware("/health*", "/metrics/*")(http.HandlerFunc(next)).ServeHTTP(w, r)
+    }
+})
+```
+
+`ignorePaths` 匹配规则：
+
+| 写法 | 匹配示例 | 说明 |
+| ------ | ------ | ------ |
+| `/health` | `/health` | 精确匹配 |
+| `/health*` | `/health`、`/healthz`、`/health/live` | 以 `*` 结尾做前缀匹配（跨目录） |
+| `/metrics/*` | `/metrics/foo` | 通配符匹配，`*` 不跨目录 |
+
 ### 属性
 
 本包封装了 `attribute` 包，无需直接导入 `go.opentelemetry.io/otel/attribute`：

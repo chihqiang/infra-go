@@ -13,7 +13,7 @@
 - **配置驱动**：Config 通过 `default` 结构体标签定义默认值，遵循 conf 标准
 - **统一错误**：提供语义化错误（`ErrInvalidToken`、`ErrExpiredToken` 等），便于上层处理
 - **常量管理**：所有标准声明和常用业务声明的 key 均定义为常量，避免硬编码字符串
-- **HTTP 中间件**：提供 `AuthMiddleware`，验证令牌后将 claims 注入请求 context
+- **HTTP 中间件**：提供 `AuthMiddleware`，验证令牌后将 claims 注入请求 context，验证失败返回统一的 `httpx.Response[T]` JSON 响应
 
 ## 安装
 
@@ -228,10 +228,10 @@ package main
 import (
     "errors"
     "fmt"
-    "log"
     "time"
 
     "github.com/chihqiang/infra-go/jwt"
+    "github.com/chihqiang/infra-go/logger"
 )
 
 func main() {
@@ -252,7 +252,7 @@ func main() {
         jwt.ClaimKeyScopes:   []string{"read", "write"},
     })
     if err != nil {
-        log.Fatal(err)
+        logger.Fatal("failed to generate token pair", logger.Err(err))
     }
     fmt.Println("=== Login ===")
     fmt.Printf("Access Token:  %s...\n", pair.AccessToken[:30])
@@ -262,7 +262,7 @@ func main() {
     fmt.Println("\n=== Verify Access Token ===")
     claims, err := j.ParseAccessToken(pair.AccessToken)
     if err != nil {
-        log.Fatal(err)
+        logger.Fatal("failed to parse access token", logger.Err(err))
     }
     fmt.Printf("UserID:   %v\n", claims[jwt.ClaimKeyUserID])
     fmt.Printf("Username: %v\n", claims[jwt.ClaimKeyUsername])
@@ -274,7 +274,7 @@ func main() {
         if errors.Is(err, jwt.ErrExpiredToken) {
             fmt.Println("refresh token expired, need re-login")
         } else {
-            log.Fatal(err)
+            logger.Fatal("failed to refresh token", logger.Err(err))
         }
     }
     fmt.Printf("New Access Token: %s...\n", newPair.AccessToken[:30])
@@ -290,6 +290,7 @@ var j *jwt.JWT // 全局初始化
 
 // AuthMiddleware 验证令牌后将 claims 注入请求 context。
 // getToken 由调用方提供，从请求中提取 token（如从 Authorization 头）。
+// 验证失败返回 401，响应格式统一为 httpx.Response[T] 结构（与 httpx 其他中间件一致）。
 func AuthMiddleware() func(http.HandlerFunc) http.HandlerFunc {
     return j.AuthMiddleware(func(r *http.Request) string {
         auth := r.Header.Get("Authorization")
@@ -304,6 +305,12 @@ func GetUserHandler(w http.ResponseWriter, r *http.Request) {
     // ...
 }
 ```
+
+> 验证失败时的响应示例：
+> ```json
+> {"code":401,"msg":"token is missing","request_id":"..."}
+> ```
+> 使用 `httpx.WriteHTTPErrorCtx` 写入，与 `httpx` 其他中间件（熔断、降载等）的错误响应格式完全一致。
 
 ### 刷新令牌端点
 

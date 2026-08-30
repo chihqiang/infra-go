@@ -243,8 +243,8 @@ type headerSource map[string][]string
 var _ setter = headerSource(nil)
 
 // TrySet 从 header 数据源设置值，key 转为 Canonical MIME 格式。
-func (hs headerSource) TrySet(value reflect.Value, field reflect.StructField, key string, opt setOptions) (bool, error) {
-	return setByForm(value, field, hs, textproto.CanonicalMIMEHeaderKey(key), opt)
+func (hs headerSource) TrySet(value reflect.Value, fm *fieldMeta, key string, opt setOptions) (bool, error) {
+	return setByForm(value, fm, hs, textproto.CanonicalMIMEHeaderKey(key), opt)
 }
 
 // --- URI 绑定 ---
@@ -311,7 +311,128 @@ func mapFormByTag(ptr any, form map[string][]string, tag string) error {
 // setter 尝试为结构体字段设置值的接口。
 type setter interface {
 	// TrySet 尝试设置值，返回是否已设置及错误。
-	TrySet(value reflect.Value, field reflect.StructField, key string, opt setOptions) (bool, error)
+	TrySet(value reflect.Value, fm *fieldMeta, key string, opt setOptions) (bool, error)
+}
+
+// --- 结构体字段元信息缓存 ---
+
+// 类型预判用到的标准类型。
+var (
+	timeType       = reflect.TypeOf(time.Time{})
+	durationType   = reflect.TypeOf(time.Duration(0))
+	fileHeaderType = reflect.TypeOf(multipart.FileHeader{})
+)
+
+// structMeta 结构体的预解析字段元信息。
+type structMeta struct {
+	fields []fieldMeta
+}
+
+// fieldMeta 预解析的结构体字段元信息。
+// 绑定热路径使用缓存信息，避免每次请求重复的 Tag 解析与类型断言。
+type fieldMeta struct {
+	sf           reflect.StructField // 原始字段信息（供 setter 使用）
+	name         string              // 字段名
+	tagKey       string              // 标签键名（未设置标签时为空，回退用字段名）
+	skip         bool                // 标签为 "-"，忽略
+	hasDefault   bool                // 是否有 default 选项
+	defaultValue string              // default 选项值
+	anonymous    bool                // 是否匿名（内嵌）字段
+	index        int                 // 字段在结构体中的索引
+
+	// 类型预判，替代运行时 value.Interface().(type) 断言
+	isTime       bool
+	isDuration   bool
+	isFileHeader bool
+
+	// time_format / time_utc / time_location 标签缓存
+	timeFormat   string
+	timeUTC      bool
+	timeLocation string
+}
+
+// metaCacheKey 结构体元信息缓存键：类型 + 绑定标签。
+type metaCacheKey struct {
+	typ reflect.Type
+	tag string
+}
+
+// structMetaCache 结构体元信息缓存。
+var structMetaCache sync.Map
+
+// getStructMeta 获取（或解析并缓存）指定标签下的结构体字段元信息。
+func getStructMeta(typ reflect.Type, tag string) *structMeta {
+	key := metaCacheKey{typ: typ, tag: tag}
+	if v, ok := structMetaCache.Load(key); ok {
+		return v.(*structMeta)
+	}
+	meta := parseStructMeta(typ, tag)
+	actual, _ := structMetaCache.LoadOrStore(key, meta)
+	return actual.(*structMeta)
+}
+
+// parseStructMeta 解析结构体字段元信息。
+func parseStructMeta(typ reflect.Type, tag string) *structMeta {
+	meta := &structMeta{}
+	n := typ.NumField()
+	meta.fields = make([]fieldMeta, 0, n)
+	for i := 0; i < n; i++ {
+		sf := typ.Field(i)
+		// 跳过未导出的非匿名字段
+		if sf.PkgPath != "" && !sf.Anonymous {
+			continue
+		}
+
+		fm := fieldMeta{
+			sf:        sf,
+			name:      sf.Name,
+			index:     i,
+			anonymous: sf.Anonymous,
+		}
+
+		tagRaw := sf.Tag.Get(tag)
+		if tagRaw == "-" {
+			fm.skip = true
+			meta.fields = append(meta.fields, fm)
+			continue
+		}
+		tagValue, opts := head(tagRaw, ",")
+		fm.tagKey = tagValue
+
+		// 解析标签选项（default 等）
+		var opt string
+		for len(opts) > 0 {
+			opt, opts = head(opts, ",")
+			if k, v := head(opt, "="); k == "default" {
+				fm.hasDefault = true
+				fm.defaultValue = v
+			}
+		}
+
+		// 类型预判（解引用指针后的基础类型）
+		base := sf.Type
+		for base.Kind() == reflect.Ptr {
+			base = base.Elem()
+		}
+		switch base {
+		case timeType:
+			fm.isTime = true
+		case durationType:
+			fm.isDuration = true
+		case fileHeaderType:
+			fm.isFileHeader = true
+		}
+
+		// 时间标签缓存
+		if fm.isTime {
+			fm.timeFormat = sf.Tag.Get("time_format")
+			fm.timeUTC, _ = strconv.ParseBool(sf.Tag.Get("time_utc"))
+			fm.timeLocation = sf.Tag.Get("time_location")
+		}
+
+		meta.fields = append(meta.fields, fm)
+	}
+	return meta
 }
 
 // formSource 表单数据源。
@@ -320,8 +441,8 @@ type formSource map[string][]string
 var _ setter = formSource(nil)
 
 // TrySet 从表单数据源设置值。
-func (form formSource) TrySet(value reflect.Value, field reflect.StructField, key string, opt setOptions) (bool, error) {
-	return setByForm(value, field, form, key, opt)
+func (form formSource) TrySet(value reflect.Value, fm *fieldMeta, key string, opt setOptions) (bool, error) {
+	return setByForm(value, fm, form, key, opt)
 }
 
 // setOptions 字段设置选项。
@@ -332,16 +453,16 @@ type setOptions struct {
 
 // mappingByPtr 通过反射遍历指针指向的结构体，逐字段设置值。
 func mappingByPtr(ptr any, s setter, tag string) error {
-	_, err := mapping(reflect.ValueOf(ptr), emptyField, s, tag)
+	_, err := mapping(reflect.ValueOf(ptr), nil, s, tag)
 	return err
 }
 
-var emptyField = reflect.StructField{}
-
 // mapping 递归遍历结构体字段进行值映射。
-func mapping(value reflect.Value, field reflect.StructField, s setter, tag string) (bool, error) {
+// 字段元信息（tag、类型预判）从缓存获取，避免每次绑定的重复反射解析。
+// fm 为 nil 时表示根调用（整个目标结构体），直接展开其字段。
+func mapping(value reflect.Value, fm *fieldMeta, s setter, tag string) (bool, error) {
 	// 跳过显式忽略的字段
-	if field.Tag.Get(tag) == "-" {
+	if fm != nil && fm.skip {
 		return false, nil
 	}
 
@@ -355,7 +476,7 @@ func mapping(value reflect.Value, field reflect.StructField, s setter, tag strin
 			isNew = true
 			vPtr = reflect.New(value.Type().Elem())
 		}
-		isSet, err := mapping(vPtr.Elem(), field, s, tag)
+		isSet, err := mapping(vPtr.Elem(), fm, s, tag)
 		if err != nil {
 			return false, err
 		}
@@ -365,9 +486,9 @@ func mapping(value reflect.Value, field reflect.StructField, s setter, tag strin
 		return isSet, nil
 	}
 
-	// 非匿名结构体，尝试直接设置值
-	if vKind != reflect.Struct || !field.Anonymous {
-		ok, err := tryToSetValue(value, field, s, tag)
+	// 非匿名结构体（或根调用），尝试直接设置值
+	if fm == nil || vKind != reflect.Struct || !fm.anonymous {
+		ok, err := tryToSetValue(value, fm, s, tag)
 		if err != nil {
 			return false, err
 		}
@@ -378,14 +499,9 @@ func mapping(value reflect.Value, field reflect.StructField, s setter, tag strin
 
 	// 递归处理结构体字段
 	if vKind == reflect.Struct {
-		tValue := value.Type()
 		var isSet bool
-		for i := 0; i < value.NumField(); i++ {
-			sf := tValue.Field(i)
-			if sf.PkgPath != "" && !sf.Anonymous { // 未导出字段
-				continue
-			}
-			ok, err := mapping(value.Field(i), sf, s, tag)
+		for _, f := range getStructMeta(value.Type(), tag).fields {
+			ok, err := mapping(value.Field(f.index), &f, s, tag)
 			if err != nil {
 				return false, err
 			}
@@ -397,36 +513,28 @@ func mapping(value reflect.Value, field reflect.StructField, s setter, tag strin
 }
 
 // tryToSetValue 尝试从数据源设置单个字段的值。
-func tryToSetValue(value reflect.Value, field reflect.StructField, s setter, tag string) (bool, error) {
-	var tagValue string
-	var setOpt setOptions
-
-	tagValue = field.Tag.Get(tag)
-	tagValue, opts := head(tagValue, ",")
+func tryToSetValue(value reflect.Value, fm *fieldMeta, s setter, tag string) (bool, error) {
+	if fm == nil {
+		return false, nil
+	}
 
 	// 标签为空时使用字段名
+	tagValue := fm.tagKey
 	if tagValue == "" {
-		tagValue = field.Name
+		tagValue = fm.name
 	}
 	if tagValue == "" {
 		return false, nil
 	}
 
-	// 解析标签选项
-	var opt string
-	for len(opts) > 0 {
-		opt, opts = head(opts, ",")
-		if k, v := head(opt, "="); k == "default" {
-			setOpt.isDefaultExists = true
-			setOpt.defaultValue = v
-		}
-	}
-
-	return s.TrySet(value, field, tagValue, setOpt)
+	return s.TrySet(value, fm, tagValue, setOptions{
+		isDefaultExists: fm.hasDefault,
+		defaultValue:    fm.defaultValue,
+	})
 }
 
 // setByForm 从 map[string][]string 数据源设置字段值。
-func setByForm(value reflect.Value, field reflect.StructField, form map[string][]string, tagValue string, opt setOptions) (bool, error) {
+func setByForm(value reflect.Value, fm *fieldMeta, form map[string][]string, tagValue string, opt setOptions) (bool, error) {
 	vs, ok := form[tagValue]
 	if !ok && !opt.isDefaultExists {
 		return false, nil
@@ -443,7 +551,7 @@ func setByForm(value reflect.Value, field reflect.StructField, form map[string][
 			// 单值含逗号时，自动按逗号分割（适用于 query 参数 tags=a,b,c 的场景）
 			vs = strings.Split(vs[0], ",")
 		}
-		return true, setSlice(vs, value, field, opt)
+		return true, setSlice(vs, value, fm, opt)
 	default:
 		var val string
 		if !ok || len(vs) == 0 || (len(vs) > 0 && vs[0] == "") {
@@ -451,14 +559,16 @@ func setByForm(value reflect.Value, field reflect.StructField, form map[string][
 		} else if len(vs) > 0 {
 			val = vs[0]
 		}
-		return true, setWithProperType(val, value, field, opt)
+		return true, setWithProperType(val, value, fm, opt)
 	}
 }
 
 // setWithProperType 根据目标类型设置值。
 // 布尔类型使用 cast.ToBoolE，Duration 类型使用 cast.ToDurationE，
 // 整数和浮点类型保留 strconv 以支持位宽溢出检查。
-func setWithProperType(val string, value reflect.Value, field reflect.StructField, opt setOptions) error {
+// 类型预判（isTime/isDuration/isFileHeader）来自缓存的 fieldMeta，
+// 避免运行时 value.Interface().(type) 断言。
+func setWithProperType(val string, value reflect.Value, fm *fieldMeta, opt setOptions) error {
 	// 字符串类型不去除空格，保留原始数据
 	if value.Kind() != reflect.String {
 		val = strings.TrimSpace(val)
@@ -475,8 +585,7 @@ func setWithProperType(val string, value reflect.Value, field reflect.StructFiel
 		return setIntField(val, 32, value)
 	case reflect.Int64:
 		// time.Duration 底层是 int64
-		switch value.Interface().(type) {
-		case time.Duration:
+		if fm != nil && fm.isDuration {
 			return setTimeDuration(val, value)
 		}
 		return setIntField(val, 64, value)
@@ -499,10 +608,10 @@ func setWithProperType(val string, value reflect.Value, field reflect.StructFiel
 	case reflect.String:
 		value.SetString(val)
 	case reflect.Struct:
-		switch value.Interface().(type) {
-		case time.Time:
-			return setTimeField(val, field, value)
-		case multipart.FileHeader:
+		if fm != nil && fm.isTime {
+			return setTimeField(val, fm, value)
+		}
+		if fm != nil && fm.isFileHeader {
 			return nil
 		}
 		// 其他结构体尝试 JSON 解析
@@ -513,7 +622,7 @@ func setWithProperType(val string, value reflect.Value, field reflect.StructFiel
 		if !value.Elem().IsValid() {
 			value.Set(reflect.New(value.Type().Elem()))
 		}
-		return setWithProperType(val, value.Elem(), field, opt)
+		return setWithProperType(val, value.Elem(), fm, opt)
 	default:
 		return errUnknownType
 	}
@@ -576,8 +685,9 @@ func setFloatField(val string, bitSize int, field reflect.Value) error {
 
 // setTimeField 设置 time.Time 字段。
 // 支持通过 `time_format` 标签指定格式，默认 RFC3339。
-func setTimeField(val string, structField reflect.StructField, value reflect.Value) error {
-	timeFormat := structField.Tag.Get("time_format")
+// 时间相关标签信息已缓存在 fieldMeta 中。
+func setTimeField(val string, fm *fieldMeta, value reflect.Value) error {
+	timeFormat := fm.timeFormat
 	if timeFormat == "" {
 		timeFormat = time.RFC3339
 	}
@@ -610,10 +720,10 @@ func setTimeField(val string, structField reflect.StructField, value reflect.Val
 	}
 
 	l := time.Local
-	if isUTC, _ := strconv.ParseBool(structField.Tag.Get("time_utc")); isUTC {
+	if fm.timeUTC {
 		l = time.UTC
 	}
-	if locTag := structField.Tag.Get("time_location"); locTag != "" {
+	if locTag := fm.timeLocation; locTag != "" {
 		loc, err := time.LoadLocation(locTag)
 		if err != nil {
 			return err
@@ -645,10 +755,10 @@ func setTimeDuration(val string, value reflect.Value) error {
 }
 
 // setSlice 设置切片字段。
-func setSlice(vals []string, value reflect.Value, field reflect.StructField, opt setOptions) error {
+func setSlice(vals []string, value reflect.Value, fm *fieldMeta, opt setOptions) error {
 	slice := reflect.MakeSlice(value.Type(), len(vals), len(vals))
 	for i, s := range vals {
-		if err := setWithProperType(s, slice.Index(i), field, opt); err != nil {
+		if err := setWithProperType(s, slice.Index(i), fm, opt); err != nil {
 			return err
 		}
 	}

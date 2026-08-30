@@ -7,7 +7,7 @@
 - **连接池管理**：可配置连接池大小、超时时间等
 - **哨兵模式**：支持 Redis Sentinel 高可用
 - **键名前缀**：所有操作自动添加前缀，方便多服务共享 Redis
-- **分布式锁**：基于 SET NX EX + Lua 脚本实现，支持自动续期
+- **分布式锁**：基于 SET NX EX + Lua 脚本实现，支持自动续期，传入的 context 取消时自动停止续期 goroutine，防止泄漏
 - **完整 API**：覆盖 String、Hash、List、Set 等常用操作
 - **配置驱动**：Config 通过 `default` 结构体标签定义默认值，遵循 conf 标准
 - **统一错误**：提供语义化错误（`ErrNil`、`ErrLockNotAcquired` 等）
@@ -130,6 +130,8 @@ keys, cursor, err := client.Scan(ctx, 0, "user:*", 100)
 
 ```go
 // 尝试获取锁（非阻塞）
+// 传入的 ctx 用于控制自动续期 goroutine 的生命周期：
+// 当 ctx 取消时，续期 goroutine 会自动停止，防止泄漏
 lock, err := client.Locker("resource:1", 10*time.Second).TryLock(ctx)
 if err != nil {
     // 锁已被持有
@@ -143,6 +145,7 @@ defer lock.Unlock(ctx)
 
 // 自动续期（防止业务执行时间超过锁过期时间）
 // 需要单独使用 LockerWithTTL 和 WithAutoRenew
+// 续期 goroutine 监听 ctx.Done()，即使调用方忘记 Unlock 也不会泄漏
 ```
 
 ### 便捷方法

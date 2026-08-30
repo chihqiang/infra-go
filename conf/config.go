@@ -21,15 +21,10 @@ var loaders = map[string]func([]byte) (map[string]any, error){
 	".yml":  loadFromYAMLBytes,
 }
 
-// fillDefaultUnmarshaler 用于 FillDefault 的反序列化器。
-var fillDefaultUnmarshaler = mapping.NewUnmarshaler(jsonTagKey, mapping.WithDefault())
-
-const jsonTagKey = "json"
-
 // FillDefault 为给定结构体填充默认值和环境变量。
 // 前提是结构体的所有字段必须为零值。
 func FillDefault(v any) error {
-	return fillDefaultUnmarshaler.Unmarshal(map[string]any{}, v)
+	return mapping.FillDefault(v)
 }
 
 // Load 从文件加载配置到 v 中，支持 .json, .yaml, .yml 格式。
@@ -60,10 +55,7 @@ func Load(file string, v any, opts ...Option) error {
 		return fmt.Errorf("failed to parse %s config: %w", ext, err)
 	}
 
-	// 将 key 转小写以支持大小写不敏感匹配
-	m = lowercaseKeys(m)
-
-	if err := mapping.UnmarshalJsonMap(m, v, mapping.WithCanonicalKeyFunc(strings.ToLower)); err != nil {
+	if err := unmarshalMap(m, v); err != nil {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
@@ -83,8 +75,7 @@ func LoadFromJSONBytes(content []byte, v any) error {
 	if err != nil {
 		return err
 	}
-	m = lowercaseKeys(m)
-	if err := mapping.UnmarshalJsonMap(m, v, mapping.WithCanonicalKeyFunc(strings.ToLower)); err != nil {
+	if err := unmarshalMap(m, v); err != nil {
 		return err
 	}
 	return validate(v)
@@ -96,11 +87,18 @@ func LoadFromYAMLBytes(content []byte, v any) error {
 	if err != nil {
 		return err
 	}
-	m = lowercaseKeys(m)
-	if err := mapping.UnmarshalJsonMap(m, v, mapping.WithCanonicalKeyFunc(strings.ToLower)); err != nil {
+	if err := unmarshalMap(m, v); err != nil {
 		return err
 	}
 	return validate(v)
+}
+
+// unmarshalMap 将解析后的配置 map 反序列化到 v。
+// 内部负责 key 小写化（map 侧）与大小写不敏感匹配（字段侧），
+// 供 Load / LoadFromJSONBytes / LoadFromYAMLBytes 复用。
+func unmarshalMap(m map[string]any, v any) error {
+	m = lowercaseKeys(m)
+	return mapping.UnmarshalJsonMap(m, v, mapping.WithCanonicalKeyFunc(strings.ToLower))
 }
 
 // lowercaseKeys 递归地将 map 中所有 key 转为小写，支持大小写不敏感匹配。

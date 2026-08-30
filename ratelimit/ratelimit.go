@@ -131,6 +131,7 @@ func (sw *SlidingWindow) AllowContext(ctx context.Context) (bool, error) {
 
 // pruneExpired 移除窗口外的请求记录。
 // 调用方需持有锁。
+// 使用 copy 原地移动元素，复用底层数组避免频繁分配。
 func (sw *SlidingWindow) pruneExpired(now time.Time) {
 	windowStart := now.Add(-sw.window)
 
@@ -141,7 +142,9 @@ func (sw *SlidingWindow) pruneExpired(now time.Time) {
 		}
 	}
 	if i > 0 {
-		sw.requests = sw.requests[i:]
+		// 原地 copy 前移，复用底层数组容量
+		copy(sw.requests, sw.requests[i:])
+		sw.requests = sw.requests[:len(sw.requests)-i]
 	}
 }
 

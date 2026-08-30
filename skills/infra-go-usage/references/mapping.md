@@ -14,6 +14,7 @@
 - **字符串模式**：`string` 标签，强制从字符串解析值
 - **大小写不敏感**：`WithCanonicalKeyFunc` 选项，支持配置 key 大小写不敏感匹配
 - **仅填充默认值**：`WithDefault()` 选项，用于零值结构体填充默认配置
+- **填充并覆盖**：`FillAndOverride` / `MustFillAndOverride`，先填充默认值再用用户配置的非零字段覆盖，消除各模块重复的 `fillDefault` 代码
 - **类型丰富**：支持基本类型、`time.Duration`、切片、map、指针、嵌套结构体、匿名嵌入结构体
 
 ## 安装
@@ -263,6 +264,46 @@ err := u.Unmarshal(map[string]any{}, &cfg)
 // cfg.Level = "info", cfg.Output = "stdout"
 ```
 
+### FillAndOverride / MustFillAndOverride
+
+先用标签默认值填充 `defaults`，再用 `overrides` 中的非零字段覆盖。
+这是各模块 `fillDefault` 的统一替代方案，消除重复的逐字段覆盖代码。
+
+```go
+func FillAndOverride(defaults any, overrides any) error
+func MustFillAndOverride(defaults any, overrides any) // 出错 panic
+```
+
+**覆盖规则**：
+
+| 类型 | 覆盖条件 | 说明 |
+| ------ | ------ | ------ |
+| 指针类型 | 非 nil 即覆盖 | 支持 `*int=0`、`*string=""` 等显式零值 |
+| 布尔类型 | `true` 覆盖 | `false` 视为未设置；需用 `*bool` 显式设 false |
+| string | 非空覆盖 | 空字符串视为未设置；`optional` 且无 `default` 的 string 始终覆盖 |
+| slice/map | 非 nil 且非空覆盖 | 空切片/map 视为未设置 |
+| 嵌套结构体 | 递归覆盖子字段 | 保留默认值，只覆盖非零子字段 |
+| 其他类型 | 非零值覆盖 | — |
+
+> **`optional` 标签的特殊语义**：标为 `optional` 且无 `default` 的 string 类型字段（如 `Password`、`DSN`、`KeyPrefix`）会被视为"始终使用用户值"，即空字符串也会覆盖。这与各模块原有的手写 `fillDefault` 行为一致。
+
+```go
+type Config struct {
+    Host     string        `json:",default=127.0.0.1"`
+    Port     int           `json:",default=8080"`
+    Password string        `json:",optional"`  // 空字符串也是有效值
+    Timeout  time.Duration `json:",default=5s"`
+}
+
+var c Config
+mapping.MustFillAndOverride(&c, Config{
+    Host:     "0.0.0.0",   // 覆盖默认值
+    Port:     9090,         // 覆盖默认值
+    Password: "",            // 覆盖（optional 无 default，空字符串也生效）
+    // Timeout 未设置，保留默认值 5s
+})
+```
+
 ### 大小写不敏感匹配
 
 ```go
@@ -281,6 +322,7 @@ err := mapping.UnmarshalJsonMap(m, &cfg, mapping.WithCanonicalKeyFunc(strings.To
 ```text
 mapping/
 ├── unmarshaler.go       — 核心反序列化器、Unmarshal、UnmarshalJsonMap、UnmarshalKey
+├── override.go          — FillAndOverride / MustFillAndOverride（填充默认值 + 非零字段覆盖）
 ├── fieldoptions.go      — 结构体标签解析（default/env/optional/options/range/string/inherit）
 ├── utils.go             — 反射工具函数（Deref/SetValue/类型转换/范围验证等）
 ├── unmarshaler_test.go  — 单元测试
@@ -292,8 +334,9 @@ mapping/
 `mapping` 是一个底层工具包，被以下包共用：
 
 - **conf**：配置文件解析（JSON/YAML → map → 结构体）
-- **logger**：填充日志默认配置
-- **orm**：填充数据库默认配置
-- **redisx**：填充 Redis 默认配置
+- **logger**：填充日志默认配置（`MustFillAndOverride`）
+- **orm**：填充数据库默认配置（`MustFillAndOverride`）
+- **redisx**：填充 Redis 默认配置（`MustFillAndOverride`）
+- **httpx**：填充 HTTP 服务器默认配置（`MustFillAndOverride`）
+- **jwt**：填充 JWT 默认配置（`MustFillAndOverride`）
 - **trace**：填充链路追踪默认配置
-- **jwt**：填充 JWT 默认配置

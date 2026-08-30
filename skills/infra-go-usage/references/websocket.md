@@ -29,9 +29,9 @@ package main
 
 import (
     "encoding/json"
-    "log"
     "net/http"
 
+    "github.com/chihqiang/infra-go/logger"
     "github.com/chihqiang/infra-go/websocket"
 )
 
@@ -41,7 +41,7 @@ func main() {
 
     // 连接建立
     handler.OnOpen(func(conn *websocket.Conn) {
-        log.Printf("连接建立: %d", conn.ID())
+        logger.Infof("连接建立: %d", conn.ID())
         conn.Set("joinedAt", time.Now())
     })
 
@@ -69,7 +69,7 @@ func main() {
 
     // 连接关闭
     handler.OnClose(func(conn *websocket.Conn, err error) {
-        log.Printf("连接关闭: %d", conn.ID())
+        logger.Infof("连接关闭: %d", conn.ID())
     })
 
     // 创建服务器
@@ -77,7 +77,7 @@ func main() {
     defer srv.Close()
 
     http.Handle("/ws", srv)
-    log.Fatal(http.ListenAndServe(":8080", nil))
+    logger.Fatal("server failed", logger.Err(http.ListenAndServe(":8080", nil)))
 }
 ```
 
@@ -135,7 +135,7 @@ func main() {
 type myHandler struct{}
 
 func (h *myHandler) HandleOpen(conn *websocket.Conn) {
-    log.Printf("连接建立: %d", conn.ID())
+    logger.Infof("连接建立: %d", conn.ID())
 }
 
 func (h *myHandler) HandleMessage(conn *websocket.Conn, messageType int, data []byte) {
@@ -144,11 +144,11 @@ func (h *myHandler) HandleMessage(conn *websocket.Conn, messageType int, data []
 }
 
 func (h *myHandler) HandleClose(conn *websocket.Conn, err error) {
-    log.Printf("连接关闭: %d", conn.ID())
+    logger.Infof("连接关闭: %d", conn.ID())
 }
 
 func (h *myHandler) HandleError(conn *websocket.Conn, err error) {
-    log.Printf("连接错误: %d, %v", conn.ID(), err)
+    logger.Error("连接错误", logger.Int("conn_id", conn.ID()), logger.Err(err))
 }
 
 func main() {
@@ -254,16 +254,16 @@ h := websocket.NewEventHandler()
 
 // 链式注册回调
 h.OnOpen(func(conn *websocket.Conn) {
-    log.Printf("连接建立: %d", conn.ID())
+    logger.Infof("连接建立: %d", conn.ID())
 }).OnClose(func(conn *websocket.Conn, err error) {
-    log.Printf("连接关闭: %d", conn.ID())
+    logger.Infof("连接关闭: %d", conn.ID())
 }).OnError(func(conn *websocket.Conn, err error) {
-    log.Printf("错误: %v", err)
+    logger.Error("websocket error", logger.Err(err))
 })
 
 // 原始消息回调（在事件分发之前调用，对每条消息生效）
 h.OnMessage(func(conn *websocket.Conn, data []byte) {
-    log.Printf("收到原始消息: %s", string(data))
+    logger.Infof("收到原始消息: %s", string(data))
 })
 
 // 注册事件处理器
@@ -451,9 +451,9 @@ package main
 
 import (
     "encoding/json"
-    "log"
     "net/http"
 
+    "github.com/chihqiang/infra-go/logger"
     "github.com/chihqiang/infra-go/websocket"
 )
 
@@ -493,7 +493,7 @@ func main() {
     defer srv.Close()
 
     http.Handle("/ws", srv)
-    log.Fatal(http.ListenAndServe(":8080", nil))
+    logger.Fatal("server failed", logger.Err(http.ListenAndServe(":8080", nil)))
 }
 ```
 

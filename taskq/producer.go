@@ -31,7 +31,8 @@ func (p *Producer) Close() error { return p.client.Close() }
 // Enqueue 投递任务到队列立即执行。
 // opts 可覆盖默认选项（队列、重试、超时等）。
 func (p *Producer) Enqueue(ctx context.Context, task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error) {
-	opts = append(p.defaultOpts, opts...)
+	// 先拷贝一份，避免 append 复用 defaultOpts 的底层数组导致跨调用数据串扰。
+	opts = append(append([]asynq.Option{}, p.defaultOpts...), opts...)
 	info, err := p.client.EnqueueContext(ctx, task, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("taskq: enqueue %q: %w", task.Type(), err)

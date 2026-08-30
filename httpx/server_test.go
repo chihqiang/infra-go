@@ -613,12 +613,34 @@ func TestBuildPattern(t *testing.T) {
 		{"POST", "/users/create", "POST /users/create"},
 		{"", "/health", "/health"},
 		{"*", "/health", "/health"},
+		// 未带前导斜杠的路径应自动补全
+		{"GET", "users", "GET /users"},
+		{"POST", "users/create", "POST /users/create"},
+		{"", "health", "/health"},
+		// 空路径视为根路径
+		{"GET", "", "GET /"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
 			assert.Equal(t, tt.want, buildPattern(tt.method, tt.path))
 		})
 	}
+}
+
+func TestAddRoute_WithoutLeadingSlash(t *testing.T) {
+	// 路由 Path 未带前导斜杠时，应自动补全而非 panic
+	s := newTestServer()
+	s.AddRoute(Route{Method: "GET", Path: "users", Handler: func(w http.ResponseWriter, r *http.Request) {
+		OkJSON(w, "ok")
+	}})
+	s.AddRoute(Route{Method: "POST", Path: "users", Handler: func(w http.ResponseWriter, r *http.Request) {
+		OkJSON(w, "ok")
+	}})
+
+	rec := doRequest(t, s, http.MethodGet, "/users", nil)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	rec = doRequest(t, s, http.MethodPost, "/users", nil)
+	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
 func TestJoinPath(t *testing.T) {

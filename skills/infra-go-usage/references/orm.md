@@ -85,6 +85,7 @@ db, err := orm.New(orm.Config{
 | `Password` | `string` | `""` | 数据库密码 |
 | `Database` | `string` | `""` | 数据库名称（SQLite 为文件路径） |
 | `SSLMode` | `string` | `disable` | PostgreSQL SSL 模式：`disable`、`allow`、`prefer`、`require`、`verify-ca`、`verify-full`，生产环境建议 `require` |
+| `TimeZone` | `string` | `Asia/Shanghai` | 数据库会话时区，影响连接到 PostgreSQL 时的时间戳解释。常见值：`UTC`、`Asia/Shanghai`、`America/New_York` 等 |
 | `MaxIdleConns` | `int` | `10` | 最大空闲连接数 |
 | `MaxOpenConns` | `int` | `100` | 最大打开连接数 |
 | `ConnMaxLifetime` | `Duration` | `30m` | 连接最大存活时间 |
@@ -173,12 +174,12 @@ db, err := orm.NewPostgres(orm.Config{
     Username: "postgres",
     Password: "secret",
     Database: "myapp",
+    TimeZone: "UTC",  // 可选，默认 Asia/Shanghai
 })
 
 // 方式二：DSN
-db, err := orm.NewPostgres(orm.Config{
-    DSN: "host=127.0.0.1 user=postgres password=secret dbname=mydb port=5432 sslmode=disable",
-})
+// DSN 中已包含 TimeZone 时优先使用 DSN 中的值
+// 分字段配置时 TimeZone 字段自动写入 DSN
 ```
 
 ### SQLite

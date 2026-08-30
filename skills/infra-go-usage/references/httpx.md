@@ -7,7 +7,7 @@ HTTP 工具包，提供请求参数绑定（参考 gin 的设计）和统一响�
 - **路由服务器**：基于 `http.ServeMux`，原生支持方法匹配、路径参数、通配路径
 - **中间件链**：全局中间件 + 组中间件，执行顺序清晰可控
 - **路由分组**：`WithPrefix` + `WithMiddleware` 或链式 `Group`，支持嵌套
-- **优雅关闭**：SIGINT/SIGTERM 信号触发，可配置超时
+- **优雅关闭**：SIGINT/SIGTERM/SIGHUP 信号触发，可配置超时，关闭失败记录日志
 - **配置驱动**：`ServerConfig` 使用 `json` 标签声明默认值，兼容 `conf` 包从文件加载
 - **参数绑定**：支持 JSON、XML、Query、Form、Header、URI 六种绑定方式
 - **自动选择**：根据 Method 和 Content-Type 自动选择绑定器
@@ -75,7 +75,7 @@ func main() {
         },
     })
 
-    server.Start() // 阻塞，支持优雅关闭（SIGINT/SIGTERM）
+    server.Start() // 阻塞，支持优雅关闭（SIGINT/SIGTERM/SIGHUP）
 }
 ```
 
@@ -319,6 +319,23 @@ httpx.WriteJSON(w, http.StatusCreated, data)
 
 // HTTP 错误响应（设置 HTTP 状态码）
 httpx.WriteHTTPError(w, http.StatusNotFound, "not found")
+
+// 分离 HTTP 状态码与业务码（适用于需要细粒度业务错误码的场景）
+// HTTP 400，业务码 10001
+httpx.WriteHTTPErrorWithCode(w, http.StatusBadRequest, 10001, "username already exists")
+```
+
+#### WriteHTTPErrorWithCode / WriteHTTPErrorWithCodeCtx
+
+在 RESTful API 中，HTTP 状态码反映传输层状态（如 400 Bad Request），而业务码反映业务语义（如 10001 表示"用户名已存在"）。`WriteHTTPErrorWithCode` 允许二者独立设置：
+
+```go
+// HTTP 400，业务码 10001
+httpx.WriteHTTPErrorWithCode(w, http.StatusBadRequest, 10001, "username already exists")
+// 输出: {"code":10001,"msg":"username already exists"}
+
+// 带 context 的版本（自动携带 request_id）
+httpx.WriteHTTPErrorWithCodeCtx(ctx, w, http.StatusBadRequest, 10001, "username already exists")
 ```
 
 ### XML 响应
@@ -489,7 +506,7 @@ func main() {
         },
     })
 
-    server.Start() // 阻塞，支持优雅关闭（SIGINT/SIGTERM）
+    server.Start() // 阻塞，支持优雅关闭（SIGINT/SIGTERM/SIGHUP）
 }
 ```
 
@@ -658,6 +675,102 @@ server.Use(httpx.WithCors("*"))
 server.Use(httpx.WithCors("https://example.com", "https://app.example.com"))
 ```
 
+##### WithBreaker
+
+熔断保护，防止下游故障级联拖垮服务（基于 `breaker` 模块的 Google SRE 算法）：
+
+```go
+server.Use(httpx.WithBreaker())
+```
+
+熔断打开时请求立即返回 503，不再等待慢速下游；请求成功（<500）计入成功，失败（>=500）计入失败，驱动熔断状态自动流转。
+
+##### WithRouteBreaker
+
+按路由隔离的熔断保护，每个路由（`METHOD:path`）拥有独立的熔断器，统计互不影响，避免单个路由的失败拉低其他路由的通过率：
+
+```go
+server.Use(httpx.WithRouteBreaker())
+```
+
+熔断器通过 `breaker.GetBreaker` 按名称缓存，同名路由共享同一实例。适用于不同路由下游依赖差异较大的场景。
+
+##### WithTimeout
+
+请求超时控制，每个请求最多执行指定时长，超时返回 503；WebSocket / SSE 长连接不受限制：
+
+```go
+server.Use(httpx.WithTimeout(5 * time.Second))
+```
+
+`duration <= 0` 时中间件不生效。客户端主动断开返回非标准状态码 499（nginx 约定）。
+
+##### WithMaxBytes
+
+限制请求体大小，超过限制返回 413；对分块传输请求在读取时限制：
+
+```go
+server.Use(httpx.WithMaxBytes(1 << 20)) // 限制 1MB
+```
+
+`n <= 0` 表示不限制。
+
+##### WithGunzip
+
+自动解压 gzip 请求体（`Content-Encoding: gzip`），解压失败返回 400：
+
+```go
+server.Use(httpx.WithGunzip())
+```
+
+##### WithMaxConns
+
+限制同时处理的请求数，防止连接耗尽；超限返回 503：
+
+```go
+server.Use(httpx.WithMaxConns(1000))
+```
+
+`n <= 0` 表示不限制。
+
+##### WithCryption
+
+AES-GCM 请求/响应加密中间件：请求体为 base64 编码的 AES-GCM 密文（`nonce || ciphertext`），解密后交给 handler；handler 的响应会被加密后返回：
+
+```go
+// 密钥必须为 16/24/32 字节（AES-128/192/256）
+server.Use(httpx.WithCryption([]byte("0123456789abcdef")))
+```
+
+AES-GCM 是认证加密（AEAD），同时保证机密性与完整性（防篡改），nonce 每次随机生成。
+
+> **大响应保护**：响应超过 1MB 时自动回退为明文输出（不加密），并记录告警日志，避免大响应导致内存暴涨。
+
+##### WithContentSecurity
+
+内容安全校验中间件（防篡改 + 防重放）。客户端需在 `X-Content-Security` 头携带签名 `time=<unix秒>; signature=<base64 HMAC-SHA256>`，签名内容为 `timestamp\nmethod\npath\nquery\nbodySha256Hex`：
+
+```go
+server.Use(httpx.WithContentSecurity([]byte("shared-secret"), 5*time.Minute))
+```
+
+- 签名无效 → 401
+- 时间戳超出容差（防重放）→ 403
+- 校验通过 → 放行
+
+##### 链路追踪
+
+OpenTelemetry 链路追踪中间件由 `trace` 包提供（`trace.HTTPMiddleware()`，返回标准 `func(http.Handler) http.Handler`），从请求头提取上游 span 上下文（W3C traceparent），为每个请求创建服务端 span，并注入 context 供下游 `logger` / `orm` / `redisx` 等模块自动关联 `trace_id`：
+
+```go
+// 包装为 httpx.Middleware 使用
+server.Use(func(next http.HandlerFunc) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        trace.HTTPMiddleware()(http.HandlerFunc(next)).ServeHTTP(w, r)
+    }
+})
+```
+
 ### 路由组（Group）
 
 链式创建路由组，支持嵌套：
@@ -815,7 +928,8 @@ RunOption 优先级高于配置文件，用于代码中动态覆盖：
 ### 启动与关闭
 
 ```go
-// 启动（阻塞，收到 SIGINT/SIGTERM 自动优雅关闭）
+// 启动（阻塞，收到 SIGINT/SIGTERM/SIGHUP 自动优雅关闭）
+// 收到信号时记录日志，Shutdown 失败时记录错误日志
 if err := server.Start(); err != nil {
     log.Fatal(err)
 }
@@ -856,16 +970,16 @@ httpx/
 ├── response.go          — 公开 API：Response[T], CodeError, OkJSON/OkXML/OkHTML, Write*, Redirect*
 ├── server.go            — 公开 API：Route, Middleware, Server, Group, WithPrefix, Start/Shutdown, SetNotFoundHandler
 ├── route.go             — 独立路由函数：PprofRoutes
-├── middleware.go        — 内置中间件：WithRecovery, WithLogger, WithCors, WithRequestID
-├── recorder.go          — 响应记录器（内部使用）：statusRecorder 捕获状态码/字节数，透传 Flush/Hijack/Push
+├── middleware.go        — 内置中间件：WithRecovery, WithLogger, WithCors, WithRequestID, WithBreaker, WithTimeout, WithMaxBytes, WithGunzip, WithMaxConns, WithCryption, WithContentSecurity
+├── responsewriter.go    — 自定义 ResponseWriter（内部使用）：statusRecorder 捕获状态码/字节数、timeoutWriter 超时缓冲丢弃、cryptionResponseWriter 响应加密缓冲，均透传 Flush/Hijack/Push
 ├── ctx.go               — context 工具：ContextWithRequestID / RequestIDFromContext
 ├── httpx_test.go
-├── middleware_test.go
-├── recorder_test.go
+├── middleware_test.go   — 全部中间件测试（含加密/内容安全）
+├── responsewriter_test.go
 └── server_test.go
 ```
 
-> 绑定逻辑全部合并在 `binding.go` 单文件中，不再使用子包。布尔和 Duration 类型转换使用 `cast` 包，整数和浮点类型保留 `strconv` 以支持位宽溢出检查。
+> 绑定逻辑全部合并在 `binding.go` 单文件中，不再使用子包。布尔和 Duration 类型转换使用 `cast` 包，整数和浮点类型保留 `strconv` 以支持位宽溢出检查。AES-GCM 加密与 HMAC 签名/校验由 `hash` 包提供（见 [hash](./hash.md)）。
 
 ## 自定义验证器
 

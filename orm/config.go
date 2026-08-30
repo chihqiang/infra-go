@@ -63,6 +63,11 @@ type Config struct {
 	// 生产环境建议设为 "require" 及以上以启用加密连接。
 	SSLMode string `json:",default=disable"`
 
+	// TimeZone 数据库会话时区，默认 "Asia/Shanghai"。
+	// 影响连接到 PostgreSQL 时的时间戳解释。
+	// 常见值：UTC、Asia/Shanghai、America/New_York 等。
+	TimeZone string `json:",default=Asia/Shanghai"`
+
 	// MaxIdleConns 最大空闲连接数，默认 10。
 	MaxIdleConns int `json:",default=10"`
 	// MaxOpenConns 最大打开连接数，默认 100。
@@ -87,69 +92,13 @@ type Config struct {
 	SingularTable bool `json:",optional"`
 }
 
-// fillDefaultUnmarshaler 用于填充默认值的反序列化器。
-var fillDefaultUnmarshaler = mapping.NewDefaultUnmarshaler()
-
 // fillDefault 填充默认值，然后用用户配置中的非零字段覆盖。
+// 使用 mapping.FillAndOverride 统一处理。
+// DSN、Password、Database 字段为空字符串时也视为有效值（始终覆盖），
+// 这通过标签 optional 且无 default 实现（shouldOverride 中 string optional 无 default 始终覆盖）。
 func fillDefault(cfg Config) Config {
 	var c Config
-	if err := fillDefaultUnmarshaler.Unmarshal(map[string]any{}, &c); err != nil {
-		panic(err)
-	}
-
-	// 用用户配置中的非零字段覆盖默认值
-	if cfg.Driver != "" {
-		c.Driver = cfg.Driver
-	}
-	// DSN：始终使用用户值（空字符串也是有效值）
-	c.DSN = cfg.DSN
-	if cfg.Host != "" {
-		c.Host = cfg.Host
-	}
-	if cfg.Port != 0 {
-		c.Port = cfg.Port
-	}
-	if cfg.Username != "" {
-		c.Username = cfg.Username
-	}
-	// Password：始终使用用户值
-	c.Password = cfg.Password
-	// Database：始终使用用户值
-	c.Database = cfg.Database
-	if cfg.SSLMode != "" {
-		c.SSLMode = cfg.SSLMode
-	}
-	if cfg.MaxIdleConns != 0 {
-		c.MaxIdleConns = cfg.MaxIdleConns
-	}
-	if cfg.MaxOpenConns != 0 {
-		c.MaxOpenConns = cfg.MaxOpenConns
-	}
-	if cfg.ConnMaxLifetime != 0 {
-		c.ConnMaxLifetime = cfg.ConnMaxLifetime
-	}
-	if cfg.ConnMaxIdleTime != 0 {
-		c.ConnMaxIdleTime = cfg.ConnMaxIdleTime
-	}
-	if cfg.LogLevel != 0 {
-		c.LogLevel = cfg.LogLevel
-	}
-	if cfg.SlowThreshold != 0 {
-		c.SlowThreshold = cfg.SlowThreshold
-	}
-	if cfg.Colorful {
-		c.Colorful = cfg.Colorful
-	}
-	if cfg.SkipDefaultTransaction {
-		c.SkipDefaultTransaction = cfg.SkipDefaultTransaction
-	}
-	if cfg.TablePrefix != "" {
-		c.TablePrefix = cfg.TablePrefix
-	}
-	if cfg.SingularTable {
-		c.SingularTable = cfg.SingularTable
-	}
-
+	mapping.MustFillAndOverride(&c, cfg)
 	return c
 }
 

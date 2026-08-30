@@ -15,9 +15,9 @@ package main
 
 import (
     "context"
-    "log"
     "time"
 
+    "github.com/chihqiang/infra-go/logger"
     "github.com/chihqiang/infra-go/taskq"
     "github.com/hibiken/asynq"
 )
@@ -46,9 +46,9 @@ func main() {
         Body: "Hello!",
     })
     if err != nil {
-        log.Fatal(err)
+        logger.Fatal("failed to enqueue task", logger.Err(err))
     }
-    log.Printf("task enqueued: %s", info.ID)
+    logger.Info("task enqueued", logger.String("id", info.ID))
 
     // --- 消费者：处理任务 ---
     consumer := taskq.NewConsumer(cfg, nil)
@@ -57,13 +57,13 @@ func main() {
         if err := taskq.UnmarshalPayload(task, &p); err != nil {
             return err
         }
-        log.Printf("sending email to %s: %s", p.To, p.Body)
+        logger.Infof("sending email to %s: %s", p.To, p.Body)
         return nil
     })
 
     // 启动并阻塞，收到信号后优雅关闭
     if err := consumer.Run(); err != nil {
-        log.Fatal(err)
+        logger.Fatal("consumer run failed", logger.Err(err))
     }
 }
 ```
@@ -117,9 +117,9 @@ producer.Enqueue(ctx, task, asynq.Queue("critical"))
 consumer := taskq.NewConsumer(cfg, nil)
 consumer.Use(func(next asynq.Handler) asynq.Handler {
     return asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
-        log.Printf("start: %s", task.Type())
+        logger.Infof("start: %s", task.Type())
         err := next.ProcessTask(ctx, task)
-        log.Printf("done: %s, err: %v", task.Type(), err)
+        logger.Infof("done: %s, err: %v", task.Type(), err)
         return err
     })
 })

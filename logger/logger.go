@@ -90,9 +90,6 @@ type Config struct {
 	Rotation RotationConfig
 }
 
-// fillDefaultUnmarshaler 用于填充默认值的反序列化器。
-var fillDefaultUnmarshaler = mapping.NewDefaultUnmarshaler()
-
 // Logger 日志记录器，实现 LoggerInterface。
 type Logger struct {
 	zap     *zap.Logger
@@ -283,50 +280,13 @@ func (l *Logger) Close() error {
 
 // --- 内部函数 ---
 
+// fillDefault 填充默认值，然后用用户配置中的非零字段覆盖。
+// 使用 mapping.FillAndOverride 统一处理。
+// AppName 为空字符串时也视为有效值（始终覆盖），
+// 这通过标签 optional 且无 default 实现。
 func fillDefault(cfg Config) Config {
 	var c Config
-	if err := fillDefaultUnmarshaler.Unmarshal(map[string]any{}, &c); err != nil {
-		panic(fmt.Errorf("logger: failed to fill default config: %w", err))
-	}
-
-	if cfg.Level != 0 {
-		c.Level = cfg.Level
-	}
-	if cfg.Encoding != "" {
-		c.Encoding = cfg.Encoding
-	}
-	if len(cfg.Output) > 0 {
-		c.Output = cfg.Output
-	}
-	if cfg.ErrorOutput != "" {
-		c.ErrorOutput = cfg.ErrorOutput
-	}
-	if cfg.TimeLayout != "" {
-		c.TimeLayout = cfg.TimeLayout
-	}
-	c.AppName = cfg.AppName
-	if cfg.Caller {
-		c.Caller = cfg.Caller
-	}
-	if cfg.Stacktrace {
-		c.Stacktrace = cfg.Stacktrace
-	}
-	if cfg.Rotation.MaxSize > 0 {
-		c.Rotation.MaxSize = cfg.Rotation.MaxSize
-	}
-	if cfg.Rotation.MaxBackups > 0 {
-		c.Rotation.MaxBackups = cfg.Rotation.MaxBackups
-	}
-	if cfg.Rotation.MaxAge > 0 {
-		c.Rotation.MaxAge = cfg.Rotation.MaxAge
-	}
-	if cfg.Rotation.Compress {
-		c.Rotation.Compress = cfg.Rotation.Compress
-	}
-	if cfg.Rotation.LocalTime {
-		c.Rotation.LocalTime = cfg.Rotation.LocalTime
-	}
-
+	mapping.MustFillAndOverride(&c, cfg)
 	return c
 }
 

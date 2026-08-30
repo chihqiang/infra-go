@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"log"
 	"net/http"
+
+	"github.com/chihqiang/infra-go/logger"
 )
 
 // --- 业务码常量 ---
@@ -172,7 +173,7 @@ func wrapXMLResponse(ctx context.Context, v any) xmlResponse[any] {
 // 这是一个低级函数，不会对 v 做任何包装，直接序列化写入。
 func WriteJSON(w http.ResponseWriter, status int, v any) {
 	if err := writeJSON(w, status, v); err != nil {
-		log.Printf("write json response failed: %v", err)
+		logger.Error("write json response failed", logger.Err(err))
 	}
 }
 
@@ -208,7 +209,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) error {
 // WriteXML 以 XML 格式写入 HTTP 响应。
 func WriteXML(w http.ResponseWriter, status int, v any) {
 	if err := writeXML(w, status, v); err != nil {
-		log.Printf("write xml response failed: %v", err)
+		logger.Error("write xml response failed", logger.Err(err))
 	}
 }
 
@@ -256,7 +257,7 @@ func writeXML(w http.ResponseWriter, status int, v any) error {
 // WriteHTML 以 HTML 格式写入 HTTP 响应。
 func WriteHTML(w http.ResponseWriter, status int, v string) {
 	if err := writeHTML(w, status, v); err != nil {
-		log.Printf("write html response failed: %v", err)
+		logger.Error("write html response failed", logger.Err(err))
 	}
 }
 
@@ -297,18 +298,40 @@ func writeHTML(w http.ResponseWriter, status int, v string) error {
 
 // WriteHTTPError 写入 HTTP 错误响应。
 // 同时设置 HTTP 状态码和业务码为 status，用于 HTTP 层面的错误（如 400、404 等）。
+// 等价于 WriteHTTPErrorWithCode(w, status, status, msg)。
 func WriteHTTPError(w http.ResponseWriter, status int, msg string) {
-	WriteJSON(w, status, Response[any]{
-		Code: status,
-		Msg:  msg,
-	})
+	WriteHTTPErrorWithCode(w, status, status, msg)
 }
 
 // WriteHTTPErrorCtx 同 WriteHTTPError，带有 context。
 // 若 context 中含有 request_id，会将其一并写入响应。
+// 等价于 WriteHTTPErrorWithCodeCtx(ctx, w, status, status, msg)。
 func WriteHTTPErrorCtx(ctx context.Context, w http.ResponseWriter, status int, msg string) {
+	WriteHTTPErrorWithCodeCtx(ctx, w, status, status, msg)
+}
+
+// WriteHTTPErrorWithCode 写入 HTTP 错误响应，支持分离 HTTP 状态码与业务码。
+//
+// 在 RESTful API 中，HTTP 状态码反映传输层状态（如 400 Bad Request），
+// 而业务码反映业务语义（如 10001 表示"用户名已存在"）。
+// 此函数允许二者独立设置，适用于需要细粒度业务错误码的场景。
+//
+// 用法：
+//
+//	// HTTP 400，业务码 10001
+//	httpx.WriteHTTPErrorWithCode(w, http.StatusBadRequest, 10001, "username already exists")
+func WriteHTTPErrorWithCode(w http.ResponseWriter, status int, code int, msg string) {
 	WriteJSON(w, status, Response[any]{
-		Code:      status,
+		Code: code,
+		Msg:  msg,
+	})
+}
+
+// WriteHTTPErrorWithCodeCtx 同 WriteHTTPErrorWithCode，带有 context。
+// 若 context 中含有 request_id，会将其一并写入响应。
+func WriteHTTPErrorWithCodeCtx(ctx context.Context, w http.ResponseWriter, status int, code int, msg string) {
+	WriteJSON(w, status, Response[any]{
+		Code:      code,
 		Msg:       msg,
 		RequestID: RequestIDFromContext(ctx),
 	})

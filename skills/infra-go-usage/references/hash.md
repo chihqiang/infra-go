@@ -7,6 +7,8 @@
 - **基础哈希**：MD5、SHA1、SHA224、SHA256、SHA384、SHA512、SHA512/224、SHA512/256
 - **SHA3 系列**：SHA3-256、SHA3-512
 - **HMAC**：HMAC-SHA1、HMAC-SHA256、HMAC-SHA512、HMAC-SHA3-256、HMAC-SHA3-512
+- **AES-GCM 加密**：认证加密（AEAD），同时保证机密性与完整性
+- **HMAC 签名/校验**：`HMACSign` / `HMACVerify`，base64 编码，常量时间比较
 - **密码哈希**：Bcrypt（带成本参数，支持验证、格式检测）
 - **文件哈希**：大文件流式计算 MD5、SHA1、SHA256、SHA512
 - **安全比较**：恒定时间比较，防止时序攻击
@@ -109,6 +111,33 @@ sig := hash.HMACSHA256([]byte("secret-key"), []byte("hello world"))
 sig := hash.HMACHex(sha256.New, []byte("key"), []byte("data"))
 ```
 
+### AES-GCM 加密
+
+AES-GCM 是认证加密（AEAD），同时保证机密性与完整性（防篡改），nonce 每次随机生成。返回 base64 编码的 `nonce || ciphertext`：
+
+```go
+// 密钥必须为 16/24/32 字节（AES-128/192/256）
+key := []byte("0123456789abcdef")
+
+// 加密：返回 base64 编码密文
+encrypted, err := hash.AESGCMEncrypt(key, []byte("hello"))
+
+// 解密：密钥错误或数据被篡改时返回错误
+decrypted, err := hash.AESGCMDecrypt(key, encrypted)
+```
+
+### HMAC 签名/校验
+
+`HMACSign` / `HMACVerify` 用于请求签名与防篡改校验（如 `httpx.WithContentSecurity`）。签名返回 base64 编码，校验使用常量时间比较（`hmac.Equal`），防止时序攻击：
+
+```go
+// 签名：返回 base64 编码的 HMAC-SHA256
+sig := hash.HMACSign(key, "timestamp\nmethod\npath")
+
+// 校验：返回是否匹配
+ok := hash.HMACVerify(key, "timestamp\nmethod\npath", sig)
+```
+
 ### Bcrypt 密码哈希
 
 Bcrypt 是专为密码设计的哈希算法，自带盐值，抗彩虹表攻击：
@@ -168,10 +197,10 @@ package main
 
 import (
     "fmt"
-    "log"
     "os"
 
     "github.com/chihqiang/infra-go/hash"
+    "github.com/chihqiang/infra-go/logger"
 )
 
 func main() {
@@ -192,7 +221,7 @@ func main() {
     password := "mySecretPassword"
     hashed, err := hash.BcryptHashDefault(password)
     if err != nil {
-        log.Fatal(err)
+        logger.Fatal("failed to hash password", logger.Err(err))
     }
     fmt.Println("Hashed:", hashed)
     fmt.Println("Match: ", hash.BcryptMatch(hashed, password))
@@ -204,7 +233,7 @@ func main() {
 
     fileMD5, err := hash.FileMD5(tmpFile)
     if err != nil {
-        log.Fatal(err)
+        logger.Fatal("failed to compute file MD5", logger.Err(err))
     }
     fmt.Println("File MD5:", fileMD5)
     fmt.Println("Match:   ", hash.EqualHex(fileMD5, hash.MD5String("hello world")))

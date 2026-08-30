@@ -1,6 +1,6 @@
 ---
 name: infra-go-usage
-description: '使用 infra-go Go 基础设施库在业务项目中搭建服务。覆盖 conf（配置加载）、logger（结构化日志）、orm（MySQL/PostgreSQL/SQLite）、redisx（Redis 与分布式锁）、httpx（HTTP 服务、参数绑定、统一 Response[T] 响应、中间件）、jwt（认证中间件）、ratelimit（内存/Redis 限流）、retry（重试）、taskq（异步任务队列）、storage（OSS/COS/KODO 对象存储）、websocket（实时通信）、trace（链路追踪）、hash（密码/摘要）、cast（类型转换）、stringx（字符串）、syncx（并发原语）、service（ServiceGroup 服务编排）。Use when: 用 Go 写业务服务需要选型/初始化/组装 infra-go 模块，需要把 conf+logger+orm+redisx+httpx+jwt 组合起来，或需要统一响应、中间件、优雅关闭等基础设施。'
+description: '使用 infra-go Go 基础设施库在业务项目中搭建服务。覆盖 conf（配置加载）、logger（结构化日志）、orm（MySQL/PostgreSQL/SQLite）、redisx（Redis 与分布式锁）、cache（统一缓存：内存/Redis）、httpx（HTTP 服务、参数绑定、统一 Response[T] 响应、中间件：熔断/超时/限流/加密/降载）、jwt（认证中间件）、ratelimit（内存/Redis 限流）、breaker（熔断器）、retry（重试）、taskq（异步任务队列）、storage（OSS/COS/KODO 对象存储）、websocket（实时通信）、trace（链路追踪）、hash（密码/摘要/加密/HMAC 签名）、cast（类型转换）、stringx（字符串）、syncx（并发原语）、service（ServiceGroup 服务编排）。Use when: 用 Go 写业务服务需要选型/初始化/组装 infra-go 模块，需要把 conf+logger+orm+redisx+httpx+jwt 组合起来，或需要统一响应、中间件、优雅关闭等基础设施。'
 ---
 
 # infra-go 使用指南
@@ -22,15 +22,19 @@ description: '使用 infra-go Go 基础设施库在业务项目中搭建服务�
 | 结构化 / 轮转日志 | `logger` | 包级 `logger.Info` 或 `logger.New` |
 | 数据库 CRUD（MySQL/Postgres/SQLite） | `orm` | `orm.MustNew` |
 | Redis 缓存 / 分布式锁 | `redisx` | `redisx.MustNew` |
+| 进程内内存缓存（热点数据） | `cache` | `cache.NewMemCache` |
+| 分布式缓存（跨实例共享） | `cache` | `cache.NewRedisCache` |
 | HTTP 服务 / 参数绑定 / 统一响应 | `httpx` | `httpx.NewServer` |
 | 接口鉴权 | `jwt` | `jwt.MustNew` + `AuthMiddleware` |
 | 接口限流 | `ratelimit` | `ratelimit.NewTokenBucket` |
+| 下游保护（熔断快速失败） | `breaker` | `breaker.NewBreaker` 或 `breaker.Do`；按路由隔离用 `httpx.WithRouteBreaker` |
 | 失败重试 | `retry` | `retry.Do` |
 | 异步任务队列 | `taskq` | `taskq.NewProducer` / `NewConsumer` |
 | 对象存储 | `storage` | `storage.New` |
 | WebSocket 实时通信 | `websocket` | `websocket.MustNew` |
 | 链路追踪 | `trace` | `trace.StartAgent` |
 | 密码 / 摘要哈希 | `hash` | `hash.BcryptHashDefault` |
+| 敏感数据加密 / 请求签名 | `hash` | `hash.AESGCMEncrypt` / `hash.HMACSign` |
 | 类型安全转换 | `cast` | `cast.To[T]` |
 | 字符串工具 | `stringx` | `stringx.RandId` |
 | 并发原语 | `syncx` | `syncx.NewSingleFlight` |
@@ -153,7 +157,7 @@ server.Use(j.AuthMiddleware(func(r *http.Request) string {
 }))
 ```
 
-4. 启动（阻塞，支持 SIGINT/SIGTERM 优雅关闭）：
+4. 启动（阻塞，支持 SIGINT/SIGTERM/SIGHUP 优雅关闭）：
 
 ```go
 server.Start()
@@ -173,7 +177,7 @@ sg.Start() // 阻塞，全部退出后返回；Stop 保证只执行一次
 ### Step 7 — 按约定处理错误、上下文与统一响应
 
 - 错误信息用英文，注释用中文（项目统一风格）
-- HTTP 层统一 `httpx.OkJSON(w, data)` / `httpx.OkJSONCtx(ctx, w, data)` / `httpx.WriteHTTPError(w, status, msg)`
+- HTTP 层统一 `httpx.OkJSON(w, data)` / `httpx.OkJSONCtx(ctx, w, data)` / `httpx.WriteHTTPError(w, status, msg)` / `httpx.WriteHTTPErrorWithCode(w, status, code, msg)`
 - 需要关联 traceID / requestID 时用 `Ctx` 系列响应与 `logger.XxxCtx(ctx, ...)`
 - 跨模块统一用 `context.Context` 传递（orm / redisx / retry / taskq 均支持 ctx 超时与取消）
 - 语义化错误用 `errors.Is` 判断：`redisx.ErrNil`、`jwt.ErrExpiredToken`、`retry.ErrMaxRetries` 等
@@ -197,8 +201,8 @@ sg.Start() // 阻塞，全部退出后返回；Stop 保证只执行一次
 | 类别 | 模块文档 |
 |------|------|
 | 配置与日志 | [conf](./references/conf.md) · [logger](./references/logger.md) |
-| 数据层 | [orm](./references/orm.md) · [redisx](./references/redisx.md) |
-| HTTP 与接口 | [httpx](./references/httpx.md) · [jwt](./references/jwt.md) · [ratelimit](./references/ratelimit.md) · [retry](./references/retry.md) · [websocket](./references/websocket.md) |
+| 数据层 | [orm](./references/orm.md) · [redisx](./references/redisx.md) · [cache](./references/cache.md) |
+| HTTP 与接口 | [httpx](./references/httpx.md) · [jwt](./references/jwt.md) · [ratelimit](./references/ratelimit.md) · [breaker](./references/breaker.md) · [retry](./references/retry.md) · [websocket](./references/websocket.md) |
 | 异步与存储 | [taskq](./references/taskq.md) · [storage](./references/storage.md) |
 | 观测与安全 | [trace](./references/trace.md) · [hash](./references/hash.md) |
 | 通用工具 | [cast](./references/cast.md) · [stringx](./references/stringx.md) · [syncx](./references/syncx.md) |

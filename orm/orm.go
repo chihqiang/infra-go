@@ -174,14 +174,19 @@ func buildMySQLDSN(c Config) string {
 
 // buildPostgresDSN 构建 PostgreSQL 连接字符串。
 // 格式: host=127.0.0.1 user=postgres password=secret dbname=mydb port=5432 sslmode=disable TimeZone=Asia/Shanghai
-// SSLMode 为空时回退到 "disable"，保证未经过 fillDefault 直接构造的 Config 也能得到合法 DSN。
+// SSLMode 为空时回退到 "disable"，TimeZone 为空时回退到 "Asia/Shanghai"，
+// 保证未经过 fillDefault 直接构造的 Config 也能得到合法 DSN。
 func buildPostgresDSN(c Config) string {
 	sslMode := c.SSLMode
 	if sslMode == "" {
 		sslMode = "disable"
 	}
-	return fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=%s TimeZone=Asia/Shanghai",
-		c.Host, c.Username, c.Password, c.Database, c.Port, sslMode)
+	timeZone := c.TimeZone
+	if timeZone == "" {
+		timeZone = "Asia/Shanghai"
+	}
+	return fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=%s TimeZone=%s",
+		c.Host, c.Username, c.Password, c.Database, c.Port, sslMode, timeZone)
 }
 
 // buildSQLiteDSN 构建 SQLite 连接字符串。

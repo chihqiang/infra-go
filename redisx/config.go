@@ -44,58 +44,12 @@ type Config struct {
 	KeyPrefix string `json:",optional"`
 }
 
-// fillDefaultUnmarshaler 用于填充默认值的反序列化器。
-var fillDefaultUnmarshaler = mapping.NewDefaultUnmarshaler()
-
 // fillDefault 填充默认值，然后用用户配置中的非零字段覆盖。
+// 使用 mapping.FillAndOverride 统一处理。
+// Username、Password、KeyPrefix 为空字符串时也视为有效值（始终覆盖），
+// 这通过标签 optional 且无 default 实现。
 func fillDefault(cfg Config) Config {
 	var c Config
-	if err := fillDefaultUnmarshaler.Unmarshal(map[string]any{}, &c); err != nil {
-		panic(err)
-	}
-
-	if cfg.Addr != "" {
-		c.Addr = cfg.Addr
-	}
-	// Username：空字符串是有效值
-	c.Username = cfg.Username
-	// Password：空字符串是有效值
-	c.Password = cfg.Password
-	if cfg.DB != 0 {
-		c.DB = cfg.DB
-	}
-	if cfg.MasterName != "" {
-		c.MasterName = cfg.MasterName
-	}
-	if len(cfg.SentinelAddrs) > 0 {
-		c.SentinelAddrs = cfg.SentinelAddrs
-	}
-	if cfg.PoolSize != 0 {
-		c.PoolSize = cfg.PoolSize
-	}
-	if cfg.MinIdleConns != 0 {
-		c.MinIdleConns = cfg.MinIdleConns
-	}
-	if cfg.MaxRetries != 0 {
-		c.MaxRetries = cfg.MaxRetries
-	}
-	if cfg.DialTimeout != 0 {
-		c.DialTimeout = cfg.DialTimeout
-	}
-	if cfg.ReadTimeout != 0 {
-		c.ReadTimeout = cfg.ReadTimeout
-	}
-	if cfg.WriteTimeout != 0 {
-		c.WriteTimeout = cfg.WriteTimeout
-	}
-	if cfg.PoolTimeout != 0 {
-		c.PoolTimeout = cfg.PoolTimeout
-	}
-	if cfg.ConnMaxIdleTime != 0 {
-		c.ConnMaxIdleTime = cfg.ConnMaxIdleTime
-	}
-	// KeyPrefix：空字符串是有效值
-	c.KeyPrefix = cfg.KeyPrefix
-
+	mapping.MustFillAndOverride(&c, cfg)
 	return c
 }

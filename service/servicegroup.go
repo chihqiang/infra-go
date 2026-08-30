@@ -60,7 +60,9 @@ func (sg *ServiceGroup) Add(service Service) {
 
 // Start 并发启动所有 Service，阻塞直到全部退出。
 // 如果某个 Service 在 Start 中 panic，会自动触发 Stop 停止其他服务，
-// 并通过 logger 记录错误日志，不会重新 panic。
+// 并通过 logger 记录错误日志（含服务索引与类型名），不会重新 panic。
+// 注意时序：某服务 panic 时会立即触发 Stop，此时其他服务可能尚未完成启动，
+// 依赖各 Service 的 Stop 幂等性来安全地解除阻塞。
 // 调用此方法后不应再有任何后续逻辑代码。
 func (sg *ServiceGroup) Start() {
 	sg.doStart()
@@ -77,21 +79,22 @@ func (sg *ServiceGroup) doStart() {
 	var wg sync.WaitGroup
 	var panicOnce sync.Once
 
-	for _, svc := range sg.services {
+	for i, svc := range sg.services {
 		wg.Add(1)
-		go func(s Service) {
+		go func(idx int, s Service) {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
 					panicOnce.Do(func() {
-						logger.Errorf("service: panic during start: %v", r)
+						logger.Errorf("service: panic during start, index: %d, type: %T, reason: %v",
+							idx, s, r)
 						// 同步触发停止，确保其他服务的 Start 阻塞被解除
 						sg.stopOnce()
 					})
 				}
 			}()
 			s.Start()
-		}(svc)
+		}(i, svc)
 	}
 	wg.Wait()
 }
@@ -104,15 +107,16 @@ func (sg *ServiceGroup) doStop() {
 	for i := len(sg.services) - 1; i >= 0; i-- {
 		svc := sg.services[i]
 		wg.Add(1)
-		go func(s Service) {
+		go func(idx int, s Service) {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
-					logger.Errorf("service: panic during stop: %v", r)
+					logger.Errorf("service: panic during stop, index: %d, type: %T, reason: %v",
+						idx, s, r)
 				}
 			}()
 			s.Stop()
-		}(svc)
+		}(i, svc)
 	}
 	wg.Wait()
 }

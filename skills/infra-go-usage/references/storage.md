@@ -25,8 +25,8 @@ package main
 
 import (
     "context"
-    "log"
 
+    "github.com/chihqiang/infra-go/logger"
     "github.com/chihqiang/infra-go/storage"
 )
 
@@ -42,29 +42,29 @@ func main() {
         },
     })
     if err != nil {
-        log.Fatal(err)
+        logger.Fatal("failed to create storage", logger.Err(err))
     }
 
     // 写入文件
     ctx := context.Background()
     err = s.Write(ctx, "test/hello.txt", []byte("hello world"))
     if err != nil {
-        log.Fatal(err)
+        logger.Fatal("failed to write file", logger.Err(err))
     }
 
     // 获取文件访问 URL
     u, err := s.URL(ctx, "test/hello.txt")
     if err != nil {
-        log.Fatal(err)
+        logger.Fatal("failed to get file URL", logger.Err(err))
     }
-    log.Printf("file URL: %s", u)
+    logger.Infof("file URL: %s", u)
 
     // 删除文件
     count, err := s.Delete(ctx, "test/hello.txt")
     if err != nil {
-        log.Fatal(err)
+        logger.Fatal("failed to delete file", logger.Err(err))
     }
-    log.Printf("deleted %d object(s)", count)
+    logger.Infof("deleted %d object(s)", count)
 }
 ```
 
@@ -213,7 +213,11 @@ s := storage.MustNew(storage.Config{
     Driver: storage.DriverOSS,
     OSS:    &storage.OSSConfig{...},
 })
-defer log.FatalIfFunc(s.Close, "close storage failed")
+defer func() {
+    if err := s.Close(); err != nil {
+        logger.Fatal("close storage failed", logger.Err(err))
+    }
+}()
 ```
 
 ## 多存储实例 Storages

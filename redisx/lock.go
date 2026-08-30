@@ -25,6 +25,8 @@ const (
 
 // Lock 分布式锁。
 // 基于 Redis 的 SET NX EX 实现，支持自动续期和安全释放。
+// ctx 字段存储获取锁时的 context，用于控制续期 goroutine 的生命周期，
+// 防止调用方忘记 Unlock 时 goroutine 泄漏。
 type Lock struct {
 	client    *Client
 	key       string
@@ -33,6 +35,7 @@ type Lock struct {
 	done      chan struct{}
 	doneOnce  sync.Once // 保护 done 只 close 一次
 	autoRenew bool
+	ctx       context.Context // 续期 goroutine 的生命周期控制
 }
 
 // LockOption 锁选项。
@@ -80,6 +83,8 @@ func (c *Client) Locker(key string, ttl time.Duration, opts ...LockOption) *Lock
 }
 
 // TryLock 尝试获取锁，如果锁已被持有则立即返回错误。
+// 传入的 ctx 用于控制自动续期 goroutine 的生命周期：
+// 当 ctx 取消时，续期 goroutine 会自动停止，防止泄漏。
 func (la *LockAcquirer) TryLock(ctx context.Context) (*Lock, error) {
 	// 应用选项
 	lc := &lockConfig{ttl: la.ttl}
@@ -110,6 +115,7 @@ func (la *LockAcquirer) TryLock(ctx context.Context) (*Lock, error) {
 		ttl:       lc.ttl,
 		done:      make(chan struct{}),
 		autoRenew: lc.autoRenew,
+		ctx:       ctx,
 	}
 
 	// 启动自动续期
@@ -184,6 +190,7 @@ func (l *Lock) Unlock(ctx context.Context) error {
 // renewLoop 后台自动续期循环。
 // 续期失败时记录日志并继续尝试：瞬时故障不应直接放弃续期，
 // 否则锁会在 TTL 到期后提前释放，导致临界区失去互斥保护。
+// 当 ctx 取消时（如调用方忘记 Unlock），续期 goroutine 也会自动退出，防止泄漏。
 func (l *Lock) renewLoop() {
 	ticker := time.NewTicker(l.ttl / 3)
 	defer ticker.Stop()
@@ -200,6 +207,9 @@ func (l *Lock) renewLoop() {
 	for {
 		select {
 		case <-l.done:
+			return
+		case <-l.ctx.Done():
+			// context 取消（调用方忘记 Unlock 或请求超时），停止续期
 			return
 		case <-ticker.C:
 			ctx, cancel := context.WithTimeout(context.Background(), defaultRenewTimeout)

@@ -23,36 +23,11 @@ var (
 	ErrUnsupportedAlgorithm = errors.New("jwt: unsupported algorithm")
 )
 
-// fillDefaultUnmarshaler 用于填充默认值的反序列化器。
-var fillDefaultUnmarshaler = mapping.NewDefaultUnmarshaler()
-
 // fillDefault 填充默认值，然后用用户配置中的非零字段覆盖。
+// 使用 mapping.FillAndOverride 统一处理。
 func fillDefault(cfg Config) Config {
 	var c Config
-	if err := fillDefaultUnmarshaler.Unmarshal(map[string]any{}, &c); err != nil {
-		panic(err)
-	}
-
-	// 用用户配置覆盖
-	if cfg.Secret != "" {
-		c.Secret = cfg.Secret
-	}
-	if cfg.Issuer != "" {
-		c.Issuer = cfg.Issuer
-	}
-	if len(cfg.Audience) > 0 {
-		c.Audience = cfg.Audience
-	}
-	if cfg.AccessTokenExpire > 0 {
-		c.AccessTokenExpire = cfg.AccessTokenExpire
-	}
-	if cfg.RefreshTokenExpire > 0 {
-		c.RefreshTokenExpire = cfg.RefreshTokenExpire
-	}
-	if cfg.Algorithm != "" {
-		c.Algorithm = cfg.Algorithm
-	}
-
+	mapping.MustFillAndOverride(&c, cfg)
 	return c
 }
 

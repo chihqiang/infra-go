@@ -140,6 +140,16 @@ func (c *Client) Set(ctx context.Context, key string, value any, expiration time
 	return nil
 }
 
+// SetNX 仅当键不存在时设置值，带过期时间，返回是否设置成功。
+// 常用于分布式锁、防缓存穿透的占位符写入等场景。
+func (c *Client) SetNX(ctx context.Context, key string, value any, expiration time.Duration) (bool, error) {
+	ok, err := c.client.SetNX(ctx, c.wrapKey(key), value, expiration).Result()
+	if err != nil {
+		return false, wrapErr(err)
+	}
+	return ok, nil
+}
+
 // Del 删除一个或多个键。
 func (c *Client) Del(ctx context.Context, keys ...string) (int64, error) {
 	if len(keys) == 0 {

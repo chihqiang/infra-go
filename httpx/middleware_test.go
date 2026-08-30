@@ -1,13 +1,24 @@
 package httpx
 
 import (
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/chihqiang/infra-go/hash"
 	"github.com/chihqiang/infra-go/logger"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // setupSilentLogger 把全局 logger 输出重定向到临时文件，避免测试日志污染 stdout/stderr。
@@ -335,4 +346,388 @@ func TestWithRequestID_OverridesResponseHeaderOnRebuild(t *testing.T) {
 	rec := doRequest(t, s, http.MethodGet, "/test", nil)
 	assert.Empty(t, rec.Header().Get(HeaderRequestID))
 	assert.NotContains(t, rec.Body.String(), "request_id")
+}
+
+// --- WithBreaker 测试 ---
+
+func TestWithBreaker_Allows(t *testing.T) {
+	setupSilentLogger(t)
+	s := newTestServer()
+	s.Use(WithBreaker())
+	s.AddRoute(Route{
+		Method: "GET", Path: "/ok", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSON(w, "ok")
+		},
+	})
+
+	rec := doRequest(t, s, http.MethodGet, "/ok", nil)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestWithBreaker_RejectsOnFailure(t *testing.T) {
+	setupSilentLogger(t)
+	s := newTestServer()
+	s.Use(WithBreaker())
+	s.AddRoute(Route{
+		Method: "GET", Path: "/fail", Handler: func(w http.ResponseWriter, r *http.Request) {
+			WriteHTTPError(w, http.StatusInternalServerError, "boom")
+		},
+	})
+
+	// 大量 5xx 触发熔断后，请求被快速拒绝（503）
+	var rejected bool
+	for i := 0; i < 2000; i++ {
+		rec := doRequest(t, s, http.MethodGet, "/fail", nil)
+		if rec.Code == http.StatusServiceUnavailable {
+			rejected = true
+			break
+		}
+	}
+	assert.True(t, rejected, "熔断器应最终打开并拒绝请求")
+}
+
+// --- WithTimeout 测试 ---
+
+func TestWithTimeout_DisabledWhenNonPositive(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithTimeout(0))
+	s.AddRoute(Route{
+		Method: "GET", Path: "/ok", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSON(w, "ok")
+		},
+	})
+
+	rec := doRequest(t, s, http.MethodGet, "/ok", nil)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestWithTimeout_CompletesWithinDeadline(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithTimeout(time.Second))
+	s.AddRoute(Route{
+		Method: "GET", Path: "/ok", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSON(w, "ok")
+		},
+	})
+
+	rec := doRequest(t, s, http.MethodGet, "/ok", nil)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ok")
+}
+
+func TestWithTimeout_TimesOutSlowHandler(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithTimeout(50 * time.Millisecond))
+	s.AddRoute(Route{
+		Method: "GET", Path: "/slow", Handler: func(w http.ResponseWriter, r *http.Request) {
+			time.Sleep(500 * time.Millisecond)
+			OkJSON(w, "done")
+		},
+	})
+
+	rec := doRequest(t, s, http.MethodGet, "/slow", nil)
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+}
+
+// --- WithMaxBytes 测试 ---
+
+func TestWithMaxBytes_AllowsWithinLimit(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithMaxBytes(1024))
+	s.AddRoute(Route{
+		Method: "POST", Path: "/upload", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSON(w, "ok")
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader("small body"))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestWithMaxBytes_RejectsOversized(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithMaxBytes(10))
+	s.AddRoute(Route{
+		Method: "POST", Path: "/upload", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSON(w, "ok")
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader("this body is way too long"))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+}
+
+func TestWithMaxBytes_DisabledWhenNonPositive(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithMaxBytes(0))
+	s.AddRoute(Route{
+		Method: "POST", Path: "/upload", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSON(w, "ok")
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader("any size"))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// --- WithGunzip 测试 ---
+
+func TestWithGunzip_DecompressesBody(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithGunzip())
+	s.AddRoute(Route{
+		Method: "POST", Path: "/gz", Handler: func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			OkJSON(w, string(body))
+		},
+	})
+
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	_, _ = gw.Write([]byte("hello gzip"))
+	_ = gw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/gz", &buf)
+	req.Header.Set("Content-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "hello gzip")
+}
+
+func TestWithGunzip_IgnoresPlainBody(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithGunzip())
+	s.AddRoute(Route{
+		Method: "POST", Path: "/plain", Handler: func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			OkJSON(w, string(body))
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/plain", strings.NewReader("plain body"))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "plain body")
+}
+
+func TestWithGunzip_RejectsInvalidGzip(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithGunzip())
+	s.AddRoute(Route{
+		Method: "POST", Path: "/gz", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSON(w, "ok")
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/gz", strings.NewReader("not gzip data"))
+	req.Header.Set("Content-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// --- WithMaxConns 测试 ---
+
+func TestWithMaxConns_DisabledWhenNonPositive(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithMaxConns(0))
+	s.AddRoute(Route{
+		Method: "GET", Path: "/ok", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSON(w, "ok")
+		},
+	})
+
+	for i := 0; i < 5; i++ {
+		rec := doRequest(t, s, http.MethodGet, "/ok", nil)
+		assert.Equal(t, http.StatusOK, rec.Code)
+	}
+}
+
+func TestWithMaxConns_AllowsWithinLimit(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithMaxConns(2))
+	s.AddRoute(Route{
+		Method: "GET", Path: "/ok", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSON(w, "ok")
+		},
+	})
+
+	rec := doRequest(t, s, http.MethodGet, "/ok", nil)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestWithMaxConns_RejectsOverLimit(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithMaxConns(1))
+	s.AddRoute(Route{
+		Method: "GET", Path: "/slow", Handler: func(w http.ResponseWriter, r *http.Request) {
+			time.Sleep(100 * time.Millisecond)
+			OkJSON(w, "ok")
+		},
+	})
+
+	// 第一个请求占用唯一信号量
+	var wg sync.WaitGroup
+	wg.Add(2)
+	results := make(chan int, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer wg.Done()
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/slow", nil)
+			s.Handler().ServeHTTP(rec, req)
+			results <- rec.Code
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	// 并发数为 1，至少有一个请求被 503 拒绝
+	var rejected bool
+	for code := range results {
+		if code == http.StatusServiceUnavailable {
+			rejected = true
+		}
+	}
+	assert.True(t, rejected, "并发超限应返回 503")
+}
+
+// --- WithCryption 测试 ---
+
+var testKey = []byte("0123456789abcdef") // 16 字节，AES-128
+
+func TestWithCryption_RoundTrip(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithCryption(testKey))
+	s.AddRoute(Route{
+		Method: "POST", Path: "/echo", Handler: func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			OkJSON(w, string(body))
+		},
+	})
+
+	// 加密请求体
+	encBody, err := hash.AESGCMEncrypt(testKey, []byte("encrypted-payload"))
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/echo", strings.NewReader(encBody))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	// 响应体是加密的，解密后包含原始 payload
+	dec, err := hash.AESGCMDecrypt(testKey, rec.Body.String())
+	require.NoError(t, err)
+	assert.Contains(t, string(dec), "encrypted-payload")
+}
+
+func TestWithCryption_InvalidBody(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithCryption(testKey))
+	s.AddRoute(Route{
+		Method: "POST", Path: "/echo", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSON(w, "ok")
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/echo", strings.NewReader("not-encrypted"))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// --- WithContentSecurity 测试 ---
+
+// buildSignedRequest 构造带合法签名的请求。
+func buildSignedRequest(t *testing.T, key []byte, method, path string, body string, ts int64) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	// 签名内容：timestamp\nmethod\npath\nquery\nbodySha256Hex
+	signContent := fmt.Sprintf("%d\n%s\n%s\n%s\n%s",
+		ts, method, "/"+strings.TrimPrefix(path, "/"), "", bodySHA256Hex(body))
+	signature := hash.HMACSign(key, signContent)
+	req.Header.Set(ContentSecurityHeader,
+		fmt.Sprintf("time=%d; signature=%s", ts, signature))
+	return req
+}
+
+func TestWithContentSecurity_Valid(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithContentSecurity(testKey, 5*time.Minute))
+	s.AddRoute(Route{
+		Method: "POST", Path: "/data", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSON(w, "ok")
+		},
+	})
+
+	req := buildSignedRequest(t, testKey, http.MethodPost, "/data", `{"a":1}`, time.Now().Unix())
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestWithContentSecurity_InvalidSignature(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithContentSecurity(testKey, 5*time.Minute))
+	s.AddRoute(Route{
+		Method: "POST", Path: "/data", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSON(w, "ok")
+		},
+	})
+
+	// 错误密钥签名 → 401
+	req := buildSignedRequest(t, []byte("wrong-key-1234567"), http.MethodPost, "/data", "x", time.Now().Unix())
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestWithContentSecurity_Expired(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithContentSecurity(testKey, 5*time.Minute))
+	s.AddRoute(Route{
+		Method: "POST", Path: "/data", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSON(w, "ok")
+		},
+	})
+
+	// 时间戳在 10 分钟前（超出 5 分钟容差）→ 403 防重放
+	req := buildSignedRequest(t, testKey, http.MethodPost, "/data", "x", time.Now().Add(-10*time.Minute).Unix())
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+func TestWithContentSecurity_MissingHeader(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithContentSecurity(testKey, 5*time.Minute))
+	s.AddRoute(Route{
+		Method: "POST", Path: "/data", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSON(w, "ok")
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/data", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+// --- 辅助 ---
+
+// bodySHA256Hex 计算请求体的 SHA-256 十六进制摘要（用于构造签名）。
+func bodySHA256Hex(body string) string {
+	sum := sha256.Sum256([]byte(body))
+	return hex.EncodeToString(sum[:])
 }
