@@ -306,4 +306,4 @@ s, ok := storages.Get("images")
 | `oss.go` | 阿里云 OSS 存储实现 |
 | `cos.go` | 腾讯云 COS 存储实现 |
 | `kodo.go` | 七牛云 KODO 存储实现 |
-| `new.go` | 工厂方法 `New`/`MustNew`，根据配置选择存储实现 |
+| `factory.go` | 工厂方法 `New`/`MustNew`，根据配置选择存储实现 |
