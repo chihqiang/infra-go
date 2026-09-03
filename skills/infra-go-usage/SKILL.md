@@ -37,6 +37,9 @@ description: '使用 infra-go Go 基础设施库在业务项目中搭建服务�
 | 敏感数据加密 / 请求签名 | `hash` | `hash.AESGCMEncrypt` / `hash.HMACSign` |
 | 类型安全转换 | `cast` | `cast.To[T]` |
 | 字符串工具 | `stringx` | `stringx.RandId` |
+| 路径模式匹配（跳过日志 / 忽略追踪等） | `match` | `match.NewPathMatcher` |
+| 响应状态码 / 字节数记录（包装 ResponseWriter） | `respw` | `respw.NewRecorderWriter` |
+| 响应超时丢弃 / 加密缓冲（包装 ResponseWriter） | `respw` | `respw.NewTimeoutWriter` · `respw.NewCryptionWriter` |
 | 并发原语 | `syncx` | `syncx.NewSingleFlight` |
 | 并发启停多个服务 | `service` | `service.NewServiceGroup` |
 
@@ -205,7 +208,7 @@ sg.Start() // 阻塞，全部退出后返回；Stop 保证只执行一次
 | HTTP 与接口 | [httpx](./references/httpx.md) · [jwt](./references/jwt.md) · [ratelimit](./references/ratelimit.md) · [breaker](./references/breaker.md) · [retry](./references/retry.md) · [websocket](./references/websocket.md) |
 | 异步与存储 | [taskq](./references/taskq.md) · [storage](./references/storage.md) |
 | 观测与安全 | [trace](./references/trace.md) · [hash](./references/hash.md) |
-| 通用工具 | [cast](./references/cast.md) · [stringx](./references/stringx.md) · [syncx](./references/syncx.md) |
+| 通用工具 | [cast](./references/cast.md) · [stringx](./references/stringx.md) · [syncx](./references/syncx.md) · [match](./references/match.md) · [respw](./references/respw.md) |
 | 服务编排 | [service](./references/service.md) · [mapping](./references/mapping.md) |
 | 工程结构 | [project-structure](./references/project-structure.md) |
 

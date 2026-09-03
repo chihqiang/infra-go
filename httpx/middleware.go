@@ -18,6 +18,8 @@ import (
 	"github.com/chihqiang/infra-go/breaker"
 	"github.com/chihqiang/infra-go/hash"
 	"github.com/chihqiang/infra-go/logger"
+	"github.com/chihqiang/infra-go/match"
+	"github.com/chihqiang/infra-go/respw"
 	"github.com/google/uuid"
 )
 
@@ -165,20 +167,35 @@ func WithRequestID() Middleware {
 // 记录每个请求的方法、路径、状态码、响应字节数和耗时。
 // 配合 trace 包使用时，logger 的 Ctx 提取器会自动带上 trace_id/span_id。
 //
-//	server.Use(httpx.WithLogger())
-func WithLogger() Middleware {
+// skipPaths 为不记录日志的路径列表，常用于健康检查、心跳等高频探活接口。
+// 支持两种匹配方式：
+//
+//   - 精确匹配：如 "/healthz"，仅命中该路径；
+//
+//   - 前缀通配：以 "*" 结尾，如 "/internal/*"，命中以该前缀开头的所有路径。
+//
+//     server.Use(httpx.WithLogger())                       // 记录所有请求
+//     server.Use(httpx.WithLogger("/healthz", "/metrics")) // 精确跳过
+//     server.Use(httpx.WithLogger("/internal/*"))          // 前缀通配跳过
+func WithLogger(skipPaths ...string) Middleware {
+	matcher := match.NewPathMatcher(skipPaths)
+
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
-			rec := newStatusRecorder(w)
+			rec := respw.NewRecorderWriter(w)
 			next(rec, r)
+			// 命中忽略规则的路径不写访问日志（业务照常处理）
+			if matcher.Match(r.URL.Path) {
+				return
+			}
 			logger.InfoCtx(r.Context(), "http request",
 				logger.String("method", r.Method),
 				logger.String("path", r.URL.Path),
 				logger.String("query", r.URL.RawQuery),
 				logger.String("remote", r.RemoteAddr),
-				logger.Int("status", rec.status),
-				logger.Int("bytes", rec.bytes),
+				logger.Int("status", rec.Status()),
+				logger.Int("bytes", rec.Bytes()),
 				logger.Duration("latency", time.Since(start)),
 			)
 		}
@@ -212,12 +229,12 @@ func WithBreaker() Middleware {
 				return
 			}
 
-			rec := newStatusRecorder(w)
+			rec := respw.NewRecorderWriter(w)
 			next(rec, r)
-			if rec.status < http.StatusInternalServerError {
+			if rec.Status() < http.StatusInternalServerError {
 				promise.Accept()
 			} else {
-				promise.Reject(fmt.Sprintf("%d %s", rec.status, http.StatusText(rec.status)))
+				promise.Reject(fmt.Sprintf("%d %s", rec.Status(), http.StatusText(rec.Status())))
 			}
 		}
 	}
@@ -251,12 +268,12 @@ func WithRouteBreaker() Middleware {
 				return
 			}
 
-			rec := newStatusRecorder(w)
+			rec := respw.NewRecorderWriter(w)
 			next(rec, r)
-			if rec.status < http.StatusInternalServerError {
+			if rec.Status() < http.StatusInternalServerError {
 				promise.Accept()
 			} else {
-				promise.Reject(fmt.Sprintf("%d %s", rec.status, http.StatusText(rec.status)))
+				promise.Reject(fmt.Sprintf("%d %s", rec.Status(), http.StatusText(rec.Status())))
 			}
 		}
 	}
@@ -293,11 +310,7 @@ func WithTimeout(duration time.Duration) Middleware {
 			r = r.WithContext(ctx)
 
 			done := make(chan struct{})
-			tw := &timeoutWriter{
-				w:    w,
-				h:    make(http.Header),
-				code: http.StatusOK,
-			}
+			tw := respw.NewTimeoutWriter(w)
 			panicChan := make(chan any, 1)
 			go func() {
 				defer func() {
@@ -313,31 +326,19 @@ func WithTimeout(duration time.Duration) Middleware {
 			case p := <-panicChan:
 				panic(p)
 			case <-done:
-				tw.mu.Lock()
-				defer tw.mu.Unlock()
-				dst := w.Header()
-				for k, vv := range tw.h {
-					dst[k] = vv
-				}
-				if tw.code != http.StatusOK {
-					w.WriteHeader(tw.code)
-				}
-				_, _ = w.Write(tw.wbuf.Bytes())
+				// 正常完成：将缓冲的 header/status/body 写到底层 ResponseWriter
+				tw.Done()
 			case <-ctx.Done():
-				tw.mu.Lock()
-				defer tw.mu.Unlock()
 				if errors.Is(ctx.Err(), context.Canceled) {
 					w.WriteHeader(statusClientClosedRequest)
 				} else {
 					WriteHTTPErrorCtx(r.Context(), w, http.StatusServiceUnavailable, "request timeout")
 				}
-				tw.timedOut = true
+				tw.Timeout()
 			}
 		}
 	}
 }
-
-// timeoutWriter 已移至 responsewriter.go。
 
 // --- 请求体大小限制中间件 ---
 
@@ -446,10 +447,24 @@ const maxEncryptedResponseBytes = 1 << 20 // 1 MB
 //
 // 密钥 key 长度必须为 16/24/32 字节（对应 AES-128/192/256）。
 //
-//	server.Use(httpx.WithCryption([]byte("0123456789abcdef")))
-func WithCryption(key []byte) Middleware {
+// skipPaths 为不进行请求/响应加解密的路径列表，命中路径以明文透传
+// （常用于回调、静态资源等无法加密的场景）。匹配方式与 WithLogger 一致：
+// 精确匹配（如 "/callback"）或以 "*" 结尾的前缀通配（如 "/public/*"）。
+//
+//	server.Use(httpx.WithCryption([]byte("0123456789abcdef")))               // 全部加解密
+//	server.Use(httpx.WithCryption([]byte("0123456789abcdef"), "/callback"))  // 精确跳过
+//	server.Use(httpx.WithCryption([]byte("0123456789abcdef"), "/public/*"))  // 前缀通配跳过
+func WithCryption(key []byte, skipPaths ...string) Middleware {
+	matcher := match.NewPathMatcher(skipPaths)
+
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
+			// 命中跳过规则的路径不做请求/响应加解密，明文透传（业务照常处理）
+			if matcher.Match(r.URL.Path) {
+				next(w, r)
+				return
+			}
+
 			// 解密请求体
 			if r.ContentLength > 0 {
 				body, err := io.ReadAll(r.Body)
@@ -471,27 +486,24 @@ func WithCryption(key []byte) Middleware {
 			}
 
 			// 加密响应
-			cw := &cryptionResponseWriter{
-				ResponseWriter: w,
-				maxBufBytes:    maxEncryptedResponseBytes,
-			}
+			cw := respw.NewCryptionWriter(w, maxEncryptedResponseBytes)
 			next(cw, r)
 
 			// 缓冲超限：回退为明文输出，不加密
-			if cw.overflowed {
+			if cw.Overflowed() {
 				logger.WarnCtx(r.Context(), "encrypted response exceeds max buffer, falling back to plaintext",
 					logger.String("path", r.URL.Path),
 					logger.Int("max_bytes", maxEncryptedResponseBytes),
 				)
-				if cw.code != 0 {
-					w.WriteHeader(cw.code)
+				if cw.StatusCode() != 0 {
+					w.WriteHeader(cw.StatusCode())
 				}
-				_, _ = w.Write(cw.buf.Bytes())
+				_, _ = w.Write(cw.Buffered())
 				return
 			}
 
 			// 写入加密后的响应
-			encrypted, err := hash.AESGCMEncrypt(key, cw.buf.Bytes())
+			encrypted, err := hash.AESGCMEncrypt(key, cw.Buffered())
 			if err != nil {
 				logger.ErrorCtx(r.Context(), "encrypt response failed", logger.Err(err))
 				return
@@ -500,8 +512,6 @@ func WithCryption(key []byte) Middleware {
 		}
 	}
 }
-
-// cryptionResponseWriter 已移至 responsewriter.go。
 
 // --- 内容安全校验中间件 ---
 

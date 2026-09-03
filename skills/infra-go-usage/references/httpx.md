@@ -649,7 +649,24 @@ panic 时会通过 `logger` 包记录错误日志（含 method、path、remote�
 server.Use(httpx.WithLogger())
 ```
 
-输出示例：
+`WithLogger(skipPaths ...string)` 支持传入不记录日志的路径列表，常用于健康检查、心跳等高频探活接口。路径匹配由 `match` 包统一提供（`match.NewPathMatcher`），支持三种形式：
+
+- 精确匹配：如 `/healthz`、`/metrics`
+- 前缀通配：以 `*` 结尾（可跨目录），如 `/internal/*` 命中 `/internal/a/b`
+- glob 通配：`*` 不跨目录，如 `/api/*/x`
+
+```go
+// 记录所有请求
+server.Use(httpx.WithLogger())
+
+// 精确跳过：/healthz、/metrics 不记录访问日志
+server.Use(httpx.WithLogger("/healthz", "/metrics"))
+
+// 前缀通配：/internal/ 下的所有路径（含子路径）不记录
+server.Use(httpx.WithLogger("/internal/*"))
+```
+
+被跳过的路径业务照常处理，仅不写访问日志。输出示例：
 
 ```json
 {"level":"INFO","msg":"http request","method":"GET","path":"/api/users","status":200,"bytes":42,"latency":"1.2ms"}
@@ -743,6 +760,19 @@ server.Use(httpx.WithCryption([]byte("0123456789abcdef")))
 ```
 
 AES-GCM 是认证加密（AEAD），同时保证机密性与完整性（防篡改），nonce 每次随机生成。
+
+`WithCryption(key, skipPaths ...string)` 支持传入不进行请求/响应加解密的路径列表，命中路径以明文透传（常用于回调、静态资源等无法加密的场景），匹配方式与 `WithLogger` 一致（精确匹配、以 `*` 结尾的前缀通配、glob 通配，基于 `match` 包）：
+
+```go
+// 全部接口加解密
+server.Use(httpx.WithCryption([]byte("0123456789abcdef")))
+
+// 精确跳过：/callback 明文透传
+server.Use(httpx.WithCryption([]byte("0123456789abcdef"), "/callback"))
+
+// 前缀通配：/public/ 下的路径明文透传
+server.Use(httpx.WithCryption([]byte("0123456789abcdef"), "/public/*"))
+```
 
 > **大响应保护**：响应超过 1MB 时自动回退为明文输出（不加密），并记录告警日志，避免大响应导致内存暴涨。
 
@@ -971,15 +1001,15 @@ httpx/
 ├── server.go            — 公开 API：Route, Middleware, Server, Group, WithPrefix, Start/Shutdown, SetNotFoundHandler
 ├── route.go             — 独立路由函数：PprofRoutes
 ├── middleware.go        — 内置中间件：WithRecovery, WithLogger, WithCors, WithRequestID, WithBreaker, WithTimeout, WithMaxBytes, WithGunzip, WithMaxConns, WithCryption, WithContentSecurity
-├── responsewriter.go    — 自定义 ResponseWriter（内部使用）：statusRecorder 捕获状态码/字节数、timeoutWriter 超时缓冲丢弃、cryptionResponseWriter 响应加密缓冲，均透传 Flush/Hijack/Push
 ├── ctx.go               — context 工具：ContextWithRequestID / RequestIDFromContext
 ├── httpx_test.go
 ├── middleware_test.go   — 全部中间件测试（含加密/内容安全）
-├── responsewriter_test.go
 └── server_test.go
 ```
 
 > 绑定逻辑全部合并在 `binding.go` 单文件中，不再使用子包。布尔和 Duration 类型转换使用 `cast` 包，整数和浮点类型保留 `strconv` 以支持位宽溢出检查。AES-GCM 加密与 HMAC 签名/校验由 `hash` 包提供（见 [hash](./hash.md)）。
+>
+> 自定义 ResponseWriter 已统一抽离到 `respw` 包（一类一文件）：`RecorderWriter` 捕获状态码/字节数、`TimeoutWriter` 超时缓冲丢弃、`CryptionWriter` 响应加密缓冲，均透传 Flush/Hijack/Push（见 [respw](./respw.md)）。
 
 ## 自定义验证器
 

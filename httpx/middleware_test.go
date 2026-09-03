@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -142,6 +143,110 @@ func TestWithLogger_CombinedWithRecovery(t *testing.T) {
 	rec := doRequest(t, s, http.MethodGet, "/panic", nil)
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.Contains(t, rec.Body.String(), "internal server error")
+}
+
+// newFileLogger 将全局 logger 重定向到临时文件并返回其句柄与路径，
+// 便于在测试中断言日志是否真的被写入。
+func newFileLogger(t *testing.T) (logger.ILogger, string) {
+	t.Helper()
+	logPath := filepath.Join(t.TempDir(), "test.log")
+	l := logger.New(logger.Config{
+		Output: []string{logPath},
+		Caller: false,
+	})
+	old := logger.GetGlobal()
+	logger.SetGlobal(l)
+	t.Cleanup(func() {
+		logger.SetGlobal(old)
+		_ = l.Sync()
+	})
+	return l, logPath
+}
+
+// readLogLines 读取日志文件内容并返回非空行。
+// 文件不存在（未产生任何日志）时返回空切片。
+func readLogLines(t *testing.T, logPath string) []string {
+	t.Helper()
+	data, err := os.ReadFile(logPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	require.NoError(t, err)
+	var lines []string
+	for _, l := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(l) != "" {
+			lines = append(lines, l)
+		}
+	}
+	return lines
+}
+
+func TestWithLogger_SkipExactPaths(t *testing.T) {
+	l, logPath := newFileLogger(t)
+	s := newTestServer()
+	s.Use(WithLogger("/skip", "/skip2"))
+	s.AddRoute(Route{
+		Method: "GET", Path: "/ok", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSON(w, "ok")
+		}},
+	)
+	s.AddRoute(Route{
+		Method: "GET", Path: "/skip", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSON(w, "skip")
+		}},
+	)
+	s.AddRoute(Route{
+		Method: "GET", Path: "/skip2", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSON(w, "skip2")
+		}},
+	)
+
+	// 被跳过的路径：业务照常处理但不写访问日志
+	for _, p := range []string{"/skip", "/skip2"} {
+		rec := doRequest(t, s, http.MethodGet, p, nil)
+		assert.Equal(t, http.StatusOK, rec.Code)
+	}
+	_ = l.Sync()
+	assert.Empty(t, readLogLines(t, logPath))
+
+	// 未跳过的路径仍正常记录
+	rec := doRequest(t, s, http.MethodGet, "/ok", nil)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	_ = l.Sync()
+	lines := readLogLines(t, logPath)
+	require.Len(t, lines, 1)
+	assert.Contains(t, lines[0], "http request")
+	assert.Contains(t, lines[0], "/ok")
+}
+
+func TestWithLogger_SkipPrefixWildcard(t *testing.T) {
+	l, logPath := newFileLogger(t)
+	s := newTestServer()
+	s.Use(WithLogger("/internal/*"))
+	internal := func(w http.ResponseWriter, r *http.Request) { OkJSON(w, "internal") }
+	s.AddRoute(Route{Method: "GET", Path: "/internal/health", Handler: internal})
+	s.AddRoute(Route{Method: "GET", Path: "/internal/a/b", Handler: internal})
+	s.AddRoute(Route{
+		Method: "GET", Path: "/api/users", Handler: func(w http.ResponseWriter, r *http.Request) {
+			OkJSON(w, "users")
+		}},
+	)
+
+	// 命中通配前缀的路径：不写访问日志
+	for _, p := range []string{"/internal/health", "/internal/a/b"} {
+		rec := doRequest(t, s, http.MethodGet, p, nil)
+		assert.Equal(t, http.StatusOK, rec.Code)
+	}
+	_ = l.Sync()
+	assert.Empty(t, readLogLines(t, logPath))
+
+	// 未命中通配的路径正常记录
+	rec := doRequest(t, s, http.MethodGet, "/api/users", nil)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	_ = l.Sync()
+	lines := readLogLines(t, logPath)
+	require.Len(t, lines, 1)
+	assert.Contains(t, lines[0], "/api/users")
 }
 
 // --- WithCors 测试 ---
@@ -642,6 +747,54 @@ func TestWithCryption_InvalidBody(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// echoHandler 返回请求体原文，用于验证加解密路径。
+func echoHandler(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	OkJSON(w, string(body))
+}
+
+func TestWithCryption_SkipExactPaths(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithCryption(testKey, "/plain"))
+	s.AddRoute(Route{Method: "POST", Path: "/plain", Handler: echoHandler})
+	s.AddRoute(Route{Method: "POST", Path: "/echo", Handler: echoHandler})
+
+	// 命中跳过规则的路径：明文透传（不解密请求体、不加密响应）
+	rec := doRequest(t, s, http.MethodPost, "/plain", strings.NewReader("raw-body"))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "raw-body")
+
+	// 未被跳过的路径：仍按密文处理（响应体加密）
+	encBody, err := hash.AESGCMEncrypt(testKey, []byte("secret"))
+	require.NoError(t, err)
+	rec2 := doRequest(t, s, http.MethodPost, "/echo", strings.NewReader(encBody))
+	assert.Equal(t, http.StatusOK, rec2.Code)
+	dec, err := hash.AESGCMDecrypt(testKey, rec2.Body.String())
+	require.NoError(t, err)
+	assert.Contains(t, string(dec), "secret")
+}
+
+func TestWithCryption_SkipPrefixWildcard(t *testing.T) {
+	s := newTestServer()
+	s.Use(WithCryption(testKey, "/public/*"))
+	s.AddRoute(Route{Method: "POST", Path: "/public/raw", Handler: echoHandler})
+	s.AddRoute(Route{Method: "POST", Path: "/secure/data", Handler: echoHandler})
+
+	// 命中通配前缀：明文透传
+	rec := doRequest(t, s, http.MethodPost, "/public/raw", strings.NewReader("open-text"))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "open-text")
+
+	// 未命中通配前缀：仍按密文处理
+	encBody, err := hash.AESGCMEncrypt(testKey, []byte("top-secret"))
+	require.NoError(t, err)
+	rec2 := doRequest(t, s, http.MethodPost, "/secure/data", strings.NewReader(encBody))
+	assert.Equal(t, http.StatusOK, rec2.Code)
+	dec, err := hash.AESGCMDecrypt(testKey, rec2.Body.String())
+	require.NoError(t, err)
+	assert.Contains(t, string(dec), "top-secret")
 }
 
 // --- WithContentSecurity 测试 ---
