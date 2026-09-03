@@ -196,6 +196,10 @@ syncx/
 ├── once.go             — OnceValue / OnceError 懒加载
 ├── ordone.go           — OrDone / Merge / FanOut channel 工具
 ├── atomic.go           — 内部 hash 辅助函数
-├── syncx_test.go       — 单元测试
-└── README.md
+├── singleflight_test.go     — SingleFlight 测试（Do/DoCtx/Forget/panic）
+├── concurrent_map_test.go   — ConcurrentMap 测试
+├── semaphore_test.go        — 信号量测试
+├── once_test.go             — OnceValue/OnceError 测试
+├── ordone_test.go           — OrDone/Merge/FanOut 测试
+└── atomic_test.go           — hashKey 测试
 ```

@@ -2,192 +2,13 @@ package mapping
 
 import (
 	"encoding/json"
-	"reflect"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func TestDeref(t *testing.T) {
-	assert.Equal(t, "int", Deref(reflect.TypeOf(int(1))).Kind().String())
-	assert.Equal(t, "string", Deref(reflect.TypeOf((*string)(nil))).Kind().String())
-}
-
-func TestValidatePtr(t *testing.T) {
-	var i int
-	assert.NoError(t, ValidatePtr(reflect.ValueOf(&i)))
-	assert.Error(t, ValidatePtr(reflect.ValueOf(i)))
-	assert.Error(t, ValidatePtr(reflect.ValueOf((*int)(nil))))
-}
-
-func TestParseKeyAndOptions_NoTag(t *testing.T) {
-	type S struct {
-		Name string
-	}
-	field := reflect.TypeOf(S{}).Field(0)
-	key, opts, err := parseKeyAndOptions("json", field)
-	assert.NoError(t, err)
-	assert.Equal(t, "Name", key)
-	assert.Nil(t, opts)
-}
-
-func TestParseKeyAndOptions_SimpleKey(t *testing.T) {
-	type S struct {
-		Name string `json:"name"`
-	}
-	field := reflect.TypeOf(S{}).Field(0)
-	key, opts, err := parseKeyAndOptions("json", field)
-	assert.NoError(t, err)
-	assert.Equal(t, "name", key)
-	assert.Nil(t, opts)
-}
-
-func TestParseKeyAndOptions_Default(t *testing.T) {
-	type S struct {
-		Name string `json:",default=hello"`
-	}
-	field := reflect.TypeOf(S{}).Field(0)
-	key, opts, err := parseKeyAndOptions("json", field)
-	assert.NoError(t, err)
-	assert.Equal(t, "Name", key)
-	assert.NotNil(t, opts)
-	assert.Equal(t, "hello", opts.Default)
-}
-
-func TestParseKeyAndOptions_Optional(t *testing.T) {
-	type S struct {
-		Port int `json:",optional"`
-	}
-	field := reflect.TypeOf(S{}).Field(0)
-	_, opts, err := parseKeyAndOptions("json", field)
-	assert.NoError(t, err)
-	assert.True(t, opts.Optional)
-}
-
-func TestParseKeyAndOptions_Env(t *testing.T) {
-	type S struct {
-		Name string `json:",env=APP_NAME"`
-	}
-	field := reflect.TypeOf(S{}).Field(0)
-	_, opts, err := parseKeyAndOptions("json", field)
-	assert.NoError(t, err)
-	assert.Equal(t, "APP_NAME", opts.EnvVar)
-}
-
-func TestParseKeyAndOptions_Options(t *testing.T) {
-	type S struct {
-		Mode string `json:",options=[file,console]"`
-	}
-	field := reflect.TypeOf(S{}).Field(0)
-	_, opts, err := parseKeyAndOptions("json", field)
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"file", "console"}, opts.Options)
-}
-
-func TestParseKeyAndOptions_Range(t *testing.T) {
-	type S struct {
-		Port int `json:",range=[0:65535]"`
-	}
-	field := reflect.TypeOf(S{}).Field(0)
-	_, opts, err := parseKeyAndOptions("json", field)
-	assert.NoError(t, err)
-	assert.NotNil(t, opts.Range)
-	assert.True(t, opts.Range.leftInclude)
-	assert.True(t, opts.Range.rightInclude)
-	assert.Equal(t, 0.0, opts.Range.left)
-	assert.Equal(t, 65535.0, opts.Range.right)
-}
-
-func TestParseKeyAndOptions_RangeOpen(t *testing.T) {
-	type S struct {
-		Port int `json:",range=[0:1000)"`
-	}
-	field := reflect.TypeOf(S{}).Field(0)
-	_, opts, err := parseKeyAndOptions("json", field)
-	assert.NoError(t, err)
-	assert.True(t, opts.Range.leftInclude)
-	assert.False(t, opts.Range.rightInclude)
-}
-
-func TestParseKeyAndOptions_Combined(t *testing.T) {
-	type S struct {
-		Port int `json:"port,default=8080,range=[1:65535]"`
-	}
-	field := reflect.TypeOf(S{}).Field(0)
-	key, opts, err := parseKeyAndOptions("json", field)
-	assert.NoError(t, err)
-	assert.Equal(t, "port", key)
-	assert.Equal(t, "8080", opts.Default)
-	assert.NotNil(t, opts.Range)
-}
-
-func TestParseNumberRange(t *testing.T) {
-	tests := []struct {
-		input   string
-		wantErr bool
-	}{
-		{"[0:100]", false},
-		{"(0:100]", false},
-		{"[0:100)", false},
-		{"(0:100)", false},
-		{"[:100]", false},
-		{"[0:]", false},
-		{"[100:0]", true},
-		{"[2:2)", true},
-		{"[2:2]", false},
-		{"", true},
-		{"abc", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			_, err := parseNumberRange(tt.input)
-			if tt.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
-}
-
-func TestIsInRange(t *testing.T) {
-	opts := &fieldOptions{Range: &numberRange{left: 0, leftInclude: true, right: 100, rightInclude: false}}
-	assert.True(t, opts.isInRange(0))
-	assert.True(t, opts.isInRange(50))
-	assert.True(t, opts.isInRange(99))
-	assert.False(t, opts.isInRange(100))
-	assert.False(t, opts.isInRange(-1))
-
-	opts2 := &fieldOptions{}
-	assert.True(t, opts2.isInRange(999999))
-
-	opts3 := &fieldOptions{Range: &numberRange{left: 0, leftInclude: false, right: 100, rightInclude: true}}
-	assert.False(t, opts3.isInRange(0))
-	assert.True(t, opts3.isInRange(100))
-}
-
-func TestConvertTypeFromString(t *testing.T) {
-	v, err := convertTypeFromString(reflect.Int, "42")
-	assert.NoError(t, err)
-	assert.Equal(t, int64(42), v)
-
-	v, err = convertTypeFromString(reflect.Bool, "true")
-	assert.NoError(t, err)
-	assert.Equal(t, true, v)
-
-	v, err = convertTypeFromString(reflect.Bool, "1")
-	assert.NoError(t, err)
-	assert.Equal(t, true, v)
-
-	v, err = convertTypeFromString(reflect.Float64, "3.14")
-	assert.NoError(t, err)
-	assert.Equal(t, float64(3.14), v)
-
-	_, err = convertTypeFromString(reflect.Int, "abc")
-	assert.Error(t, err)
-}
+// --- UnmarshalJsonMap / Unmarshal 测试 ---
 
 func TestUnmarshal_Basic(t *testing.T) {
 	type Config struct {
@@ -415,18 +236,6 @@ func TestUnmarshal_NotStruct(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestUnmarshal_WithOptions(t *testing.T) {
-	type Config struct {
-		Host string `json:"host,default=0.0.0.0"`
-	}
-
-	u := NewUnmarshaler("json", WithDefault())
-	var cfg Config
-	err := u.Unmarshal(map[string]any{}, &cfg)
-	assert.NoError(t, err)
-	assert.Equal(t, "0.0.0.0", cfg.Host)
-}
-
 func TestUnmarshal_LargeInt(t *testing.T) {
 	type Config struct {
 		ID int64 `json:"id"`
@@ -439,19 +248,27 @@ func TestUnmarshal_LargeInt(t *testing.T) {
 	assert.Equal(t, int64(1234567890123456789), cfg.ID)
 }
 
-func TestStructValueRequired(t *testing.T) {
-	type RequiredStruct struct {
-		Name string `json:"name"`
+func TestUnmarshal_WithOptions(t *testing.T) {
+	type Config struct {
+		Host string `json:"host,default=0.0.0.0"`
 	}
-	assert.True(t, structValueRequired("json", reflect.TypeOf(RequiredStruct{})))
 
-	type OptionalStruct struct {
-		Name string `json:",optional"`
-	}
-	assert.False(t, structValueRequired("json", reflect.TypeOf(OptionalStruct{})))
+	u := NewUnmarshaler("json", WithDefault())
+	var cfg Config
+	err := u.Unmarshal(map[string]any{}, &cfg)
+	assert.NoError(t, err)
+	assert.Equal(t, "0.0.0.0", cfg.Host)
+}
 
-	type DefaultStruct struct {
-		Name string `json:",default=hello"`
+func TestFillDefault(t *testing.T) {
+	type Config struct {
+		Host string `json:",default=localhost"`
+		Port int    `json:",default=8080"`
 	}
-	assert.False(t, structValueRequired("json", reflect.TypeOf(DefaultStruct{})))
+
+	var cfg Config
+	err := FillDefault(&cfg)
+	assert.NoError(t, err)
+	assert.Equal(t, "localhost", cfg.Host)
+	assert.Equal(t, 8080, cfg.Port)
 }

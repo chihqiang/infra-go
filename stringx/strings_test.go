@@ -85,6 +85,10 @@ func TestCapitalize(t *testing.T) {
 		{"😀abc", "😀abc"},
 		// 首字符是拉丁字母的混合内容
 		{"élan", "Élan"},
+		// 数字开头：ToUpper 对非字母无影响
+		{"123abc", "123abc"},
+		// 无效 UTF-8 编码应原样返回，不破坏字节
+		{"\xff\xfe", "\xff\xfe"},
 	}
 	for _, tt := range tests {
 		if got := Capitalize(tt.input); got != tt.want {
@@ -103,6 +107,15 @@ func TestToSnakeCase(t *testing.T) {
 		{"", ""},
 		{"A", "a"},
 		{"ABC", "abc"},
+		// 末位大写前是单个小写字母 → 加分隔
+		{"userID", "user_id"},
+		// 连续大写后接小写 → 在最后一个大写前分隔
+		{"XMLHttpRequest", "xml_http_request"},
+		{"URLValue", "url_value"},
+		// 已含下划线且无大写 → 保持不变
+		{"user_name", "user_name"},
+		// 数字不参与分隔判断
+		{"apiV2", "api_v2"},
 	}
 	for _, tt := range tests {
 		if got := ToSnakeCase(tt.input); got != tt.want {
@@ -122,6 +135,10 @@ func TestChunk(t *testing.T) {
 		{"abc", 5, []string{"abc"}},
 		{"", 3, nil},
 		{"abc", 0, nil},
+		// 负数 size 返回 nil
+		{"abc", -1, nil},
+		// 多字节按 rune 分割，不产生乱码
+		{"你好世界", 2, []string{"你好", "世界"}},
 	}
 	for _, tt := range tests {
 		if got := Chunk(tt.input, tt.size); !reflect.DeepEqual(got, tt.want) {
@@ -140,6 +157,8 @@ func TestRepeat(t *testing.T) {
 		{"x", 0, ""},
 		{"", 5, ""},
 		{"a", 1, "a"},
+		// 负数 n 返回空串
+		{"ab", -1, ""},
 	}
 	for _, tt := range tests {
 		if got := Repeat(tt.input, tt.n); got != tt.want {
@@ -160,6 +179,15 @@ func TestSubstr(t *testing.T) {
 		{"hello", 1, 1, ""},
 		{"hello", 5, 5, ""},
 		{"hello", 10, 5, ""},
+		// end 负数：从末尾倒数
+		{"hello", 0, -2, "hel"},
+		{"hello", 2, -1, "ll"},
+		// start 负数越界：截断到 0
+		{"hello", -10, 5, "hello"},
+		// end 越界：截断到 length
+		{"hello", 3, 10, "lo"},
+		// 中文按 rune 截取
+		{"你好世界", 1, 3, "好世"},
 	}
 	for _, tt := range tests {
 		if got := Substr(tt.input, tt.start, tt.end); got != tt.want {
@@ -176,6 +204,8 @@ func TestIndexOf(t *testing.T) {
 		{"hello world", "world", 6},
 		{"hello", "xyz", -1},
 		{"hello", "", 0},
+		// 中文子串定位
+		{"你好世界你好", "世界", 6},
 	}
 	for _, tt := range tests {
 		if got := IndexOf(tt.s, tt.substr); got != tt.want {
@@ -192,6 +222,8 @@ func TestCount(t *testing.T) {
 		{"hello", "l", 2},
 		{"hello", "o", 1},
 		{"hello", "xyz", 0},
+		// 空子串语义与 strings.Count 一致：len+1
+		{"hello", "", 6},
 	}
 	for _, tt := range tests {
 		if got := Count(tt.s, tt.substr); got != tt.want {
@@ -210,6 +242,8 @@ func TestJoin(t *testing.T) {
 		{'-', []string{"", "b", ""}, "b"},
 		{',', []string{}, ""},
 		{',', []string{"a"}, "a"},
+		// 全部为空元素 → 空串
+		{',', []string{"", "", ""}, ""},
 	}
 	for _, tt := range tests {
 		if got := Join(tt.sep, tt.elem...); got != tt.want {
@@ -244,6 +278,12 @@ func TestToCamelCase(t *testing.T) {
 		{"Hello", "hello"},
 		{"hello", "hello"},
 		{"", ""},
+		// 仅转首字母，其余保持不变
+		{"ABC", "aBC"},
+		// 单个字符
+		{"H", "h"},
+		// 非字母首字符保持不变
+		{"123Abc", "123Abc"},
 	}
 	for _, tt := range tests {
 		if got := ToCamelCase(tt.input); got != tt.want {

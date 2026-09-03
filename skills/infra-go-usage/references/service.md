@@ -209,6 +209,5 @@ Stop 顺序: C → B → A（但并发执行，不保证精确顺序）
 ```text
 service/
 ├── servicegroup.go      — ServiceGroup、Service 接口、WithStart/WithStarter
-├── servicegroup_test.go — 单元测试
-└── README.md
+└── servicegroup_test.go — ServiceGroup 单元测试
 ```
