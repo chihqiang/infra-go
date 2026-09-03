@@ -16,7 +16,7 @@ HTTP 工具包，提供请求参数绑定（参考 gin 的设计）和统一响�
 - **泛型响应**：`Response[T]` 统一响应结构，data 字段类型安全
 - **请求 ID**：`WithRequestID` 中间件自动生成/透传 `request_id`，`Ctx` 响应函数自动携带到响应中
 - **智能包装**：`OkJSON` / `OkXML` 自动识别 error / CodeError / 普通数据
-- **多格式响应**：支持 JSON、XML、HTML 三种响应格式
+- **多格式响应**：支持 JSON、XML、HTML 与 SSE 流式响应（`SSEWriter` 逐帧推送、自动 Flush）
 - **重定向**：`Redirect` 系列函数，支持 301/302 及自定义状态码
 - **自定义 404 响应**：`SetNotFoundHandler` 自定义未匹配路由的响应内容
 - **Context 变体**：每个响应函数都有对应的 `Ctx` 版本
@@ -379,6 +379,55 @@ httpx.OkHTMLCtx(ctx, w, "<h1>Hello</h1>")
 // 指定状态码
 httpx.WriteHTML(w, http.StatusOK, "<h1>Hello</h1>")
 ```
+
+### SSE 响应（Server-Sent Events）
+
+`SSEWriter` 用于向客户端推送 SSE 流式事件，常用于实时通知、进度推送、AI 流式输出等场景。
+创建后即可连续写入事件帧，每次写入自动 `Flush` 保证事件实时到达；事件方法返回 error（通常是客户端已断开连接）时应停止推送并退出 Handler。
+
+```go
+func streamHandler(w http.ResponseWriter, r *http.Request) {
+    sse := httpx.NewSSEWriter(w) // 自动设置 text/event-stream 等响应头
+    for i := 0; i < 10; i++ {
+        if err := sse.JSONEvent("ping", map[string]int{"n": i}); err != nil {
+            return // 客户端已断开
+        }
+    }
+}
+```
+
+`NewSSEWriter` 自动设置响应头：`Content-Type: text/event-stream`、`Cache-Control: no-cache`、`Connection: keep-alive`，并关闭反向代理缓冲（`X-Accel-Buffering: no`），避免事件被 nginx 等缓冲后延迟推送。
+
+写入方法：
+
+| 方法 | 说明 |
+| ---- | ---- |
+| `NewSSEWriter(w)` | 创建写入器，设置上述 SSE 响应头 |
+| `Event(event, data)` | 写入一条事件帧；`event` 为空表示默认 `message` 事件 |
+| `Data(data)` | 写入默认事件类型（`message`）的数据帧 |
+| `JSONEvent(event, v)` | 将 `v` 序列化为 JSON 后作为事件数据写入（前端 `JSON.parse` 解析） |
+| `Comment(text)` | 写入注释帧（`: ...`），客户端会忽略，常用于心跳保活 |
+| `Retry(ms)` | 告知浏览器断线后的重连间隔（毫秒） |
+| `Flush()` | 手动刷新缓冲到客户端（底层不支持 `http.Flusher` 时为空操作） |
+
+事件帧格式（`Event` / `JSONEvent` 写入）：
+
+```text
+事件帧之间以空行分隔，字段按 SSE 规范编写：
+
+: keep-alive            ← Comment，心跳保活
+
+retry: 3000             ← Retry，断线重连间隔
+
+event: order            ← Event 指定事件类型
+data: {"id":"1"}        ← JSONEvent 写入的 JSON 数据
+
+data: hello world       ← Data / Event 的事件内容
+```
+
+- 多行文本会自动拆成多行 `data:` 字段，符合 SSE 规范
+- 每次写入自动 `Flush`；客户端断开后 `Write` 返回错误，应据此结束推送（如在 goroutine 中发送需监听 `r.Context().Done()`）
+- `WithTimeout` 中间件已对 SSE 长连接豁免；自定义 ResponseWriter 包装（如 `respw.RecorderWriter`）会透传 `http.Flusher`（见 [respw](./respw.md)），可安全叠加使用
 
 ### 重定向
 
@@ -1013,14 +1062,19 @@ httpx/
 ├── bind.go              — 公开 API：Bind*, MustBind*, Validate, ParseJSON*
 ├── binding.go           — 绑定器实现：接口定义、MIME 常量、内置绑定器、反射映射、验证器
 ├── request.go           — 便捷单值读取：泛型 QueryValue/PathValue/HeaderValue（复用 cast.ToE）
-├── response.go          — 公开 API：Response[T], CodeError, OkJSON/OkXML/OkHTML, Write*, Redirect*
+├── response.go          — 公开 API：Response[T], CodeError, OkJSON/OkXML/OkHTML/SSEWriter, Write*, Redirect*
 ├── server.go            — 公开 API：Route, Middleware, Server, Group, WithPrefix, Start/Shutdown, SetNotFoundHandler
 ├── route.go             — 独立路由函数：PprofRoutes
 ├── middleware.go        — 内置中间件：WithRecovery, WithLogger, WithCors, WithRequestID, WithBreaker, WithTimeout, WithMaxBytes, WithGunzip, WithMaxConns, WithCryption, WithContentSecurity
 ├── ctx.go               — context 工具：ContextWithRequestID / RequestIDFromContext
-├── httpx_test.go
-├── middleware_test.go   — 全部中间件测试（含加密/内容安全）
-└── server_test.go
+├── bind_test.go         — 绑定测试（Bind*/MustBind*/ParseJSON）
+├── binding_test.go      — 绑定器选择测试（Default / BindBody）
+├── ctx_test.go          — context 工具测试（request_id）
+├── request_test.go      — 单值读取测试（QueryValue/PathValue/HeaderValue）
+├── response_test.go     — 响应测试（JSON/XML/HTML/SSE/CodeError/重定向）
+├── middleware_test.go   — 中间件测试（含加密/内容安全）
+├── server_test.go       — 服务器测试（路由/中间件链/优雅关闭）
+└── benchmark_test.go    — 基准测试
 ```
 
 > 绑定逻辑全部合并在 `binding.go` 单文件中，不再使用子包。布尔和 Duration 类型转换使用 `cast` 包，整数和浮点类型保留 `strconv` 以支持位宽溢出检查。AES-GCM 加密与 HMAC 签名/校验由 `hash` 包提供（见 [hash](./hash.md)）。

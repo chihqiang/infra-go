@@ -6,6 +6,8 @@ import (
 	"encoding/xml"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/chihqiang/infra-go/logger"
 )
@@ -53,6 +55,8 @@ const (
 	ContentTypeXML = "application/xml; charset=utf-8"
 	// ContentTypeHTML HTML 内容类型。
 	ContentTypeHTML = "text/html; charset=utf-8"
+	// ContentTypeSSE Server-Sent Events 内容类型。
+	ContentTypeSSE = "text/event-stream; charset=utf-8"
 
 	xmlVersion  = "1.0"
 	xmlEncoding = "UTF-8"
@@ -292,6 +296,123 @@ func writeHTML(w http.ResponseWriter, status int, v string) error {
 	}
 
 	return nil
+}
+
+// --- SSE (Server-Sent Events) 响应 ---
+
+// SSEWriter 用于向客户端推送 Server-Sent Events（SSE）流。
+//
+// 创建后即可连续写入事件帧，每次写入会自动 Flush，保证事件实时到达客户端；
+// 当事件方法返回 error（通常是客户端已断开连接）时应停止推送并退出 Handler。
+//
+// 用法：
+//
+//	func StreamHandler(w http.ResponseWriter, r *http.Request) {
+//	    sse := httpx.NewSSEWriter(w)
+//	    for i := 0; i < 10; i++ {
+//	        if err := sse.JSONEvent("ping", fmt.Sprintf("tick %d", i)); err != nil {
+//	            return // 客户端已断开
+//	        }
+//	    }
+//	}
+type SSEWriter struct {
+	w       http.ResponseWriter
+	flusher http.Flusher
+}
+
+// NewSSEWriter 创建 SSE 写入器，自动设置 SSE 所需响应头：
+// Content-Type: text/event-stream、Cache-Control: no-cache、Connection: keep-alive，
+// 并关闭反向代理缓冲（X-Accel-Buffering: no），避免事件被 nginx 等缓冲延迟推送。
+func NewSSEWriter(w http.ResponseWriter) *SSEWriter {
+	h := w.Header()
+	h.Set("Content-Type", ContentTypeSSE)
+	h.Set("Cache-Control", "no-cache")
+	h.Set("Connection", "keep-alive")
+	h.Set("X-Accel-Buffering", "no")
+
+	s := &SSEWriter{w: w}
+	if f, ok := w.(http.Flusher); ok {
+		s.flusher = f
+	}
+	return s
+}
+
+// Event 写入一个指定类型的事件帧。
+// event 为空时表示默认的 message 事件；data 为多行文本时按 SSE 规范拆成多行 data: 字段。
+func (s *SSEWriter) Event(event, data string) error {
+	var b strings.Builder
+	if event != "" {
+		s.writeField(&b, "event", event)
+	}
+	s.writeField(&b, "data", data)
+	b.WriteByte('\n')
+	return s.write(b.String())
+}
+
+// Data 写入一个默认事件类型（message）的数据帧。
+func (s *SSEWriter) Data(data string) error {
+	return s.Event("", data)
+}
+
+// JSONEvent 将 v 序列化为 JSON 后作为事件数据写入。
+// 客户端可使用 JSON.parse 解析收到的 data 字段。
+func (s *SSEWriter) JSONEvent(event string, v any) error {
+	bs, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("marshal sse event data failed, error: %w", err)
+	}
+	return s.Event(event, string(bs))
+}
+
+// Comment 写入一条注释帧（以冒号开头的行），客户端会忽略其内容，常用于心跳保活。
+func (s *SSEWriter) Comment(text string) error {
+	var b strings.Builder
+	for _, line := range strings.Split(text, "\n") {
+		b.WriteByte(':')
+		if line != "" {
+			b.WriteByte(' ')
+			b.WriteString(line)
+		}
+		b.WriteByte('\n')
+	}
+	b.WriteByte('\n')
+	return s.write(b.String())
+}
+
+// Retry 告知浏览器断线后的重连间隔（毫秒）。
+func (s *SSEWriter) Retry(ms int) error {
+	var b strings.Builder
+	b.WriteString("retry: ")
+	b.WriteString(strconv.Itoa(ms))
+	b.WriteString("\n\n")
+	return s.write(b.String())
+}
+
+// writeField 按 SSE 规范把字段的多行值拆成多行 "field: value" 写入。
+func (s *SSEWriter) writeField(b *strings.Builder, field, value string) {
+	for _, line := range strings.Split(value, "\n") {
+		b.WriteString(field)
+		b.WriteString(": ")
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+}
+
+// write 写入数据后立即 Flush，确保事件实时推送到客户端。
+func (s *SSEWriter) write(payload string) error {
+	if _, err := s.w.Write([]byte(payload)); err != nil {
+		return err
+	}
+	s.Flush()
+	return nil
+}
+
+// Flush 将缓冲的数据立即推送给客户端。
+// 若底层 ResponseWriter 未实现 http.Flusher，则为空操作。
+func (s *SSEWriter) Flush() {
+	if s.flusher != nil {
+		s.flusher.Flush()
+	}
 }
 
 // --- 错误响应辅助 ---
