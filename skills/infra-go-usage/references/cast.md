@@ -7,6 +7,7 @@
 - **全面类型支持**：int/uint/float/bool/string/time.Duration/time.Time
 - **多源类型**：原生类型、string、json.Number、fmt.Stringer、[]byte 等
 - **安全转换**：`ToXxxE` 系列返回 error，`ToXxx` 系列返回零值
+- **指针转换**：`ToXxxPtr` 系列（失败返 nil）与泛型 `Ptr`/`Val`（取址/安全解引用）
 - **切片转换**：`ToIntSlice`、`ToStringSlice`，支持逗号分隔字符串
 - **泛型转换**：`To[T]` 一行搞定，类型安全
 - **json.Number 支持**：与 `conf`/`mapping` 包无缝配合
@@ -92,6 +93,31 @@ func main() {
 | 函数 | 说明 |
 | ------ | ------ |
 | `To[T any](v any) T` | 泛型转换，支持所有基本类型和结构体（JSON） |
+
+### 指针转换
+
+| 函数 | 说明 |
+| ------ | ------ |
+| `Ptr[T any](v T) *T` | 对任意值/字面量取址，便于给指针字段赋常量 |
+| `Val[T any](p *T, def ...T) T` | 安全解引用，p 为 nil 时返回默认值或零值 |
+| `ToIntPtr/ToInt64Ptr/ToUintPtr/ToUint64Ptr(v any) *int/*int64/*uint/*uint64` | any → 数字指针，失败返回 nil |
+| `ToFloat32Ptr/ToFloat64Ptr(v any) *float32/*float64` | any → 浮点指针，失败返回 nil |
+| `ToStringPtr(v any) *string` | any → 字符串指针，失败返回 nil |
+| `ToBoolPtr(v any) *bool` | any → 布尔指针，失败返回 nil |
+| `ToDurationPtr/ToTimePtr(v any) *time.Duration/*time.Time` | any → 时间指针，失败返回 nil |
+
+```go
+// 取址 / 解引用
+name := cast.Ptr("default")        // *string
+s := cast.Val(name)                 // "default"
+s2 := cast.Val(nilString, "fb")    // nil 时得到 "fb"
+
+// 转换到指针，失败返回 nil，可直接用于可选指针字段
+limit := cast.ToIntPtr("10")       // *int(10)
+if limit == nil {
+    // 转换失败
+}
+```
 
 ### 带 error 版本
 
