@@ -92,7 +92,16 @@ func main() {
 
 | 函数 | 说明 |
 | ------ | ------ |
-| `To[T any](v any) T` | 泛型转换，支持所有基本类型和结构体（JSON） |
+| `To[T any](v any) T` | 泛型转换，支持所有基本类型和结构体（JSON），失败返回零值 |
+| `ToE[T any](v any) (T, error)` | 泛型转换的 error 版本，失败返回零值与错误，便于回退默认值 |
+
+```go
+// ToE 便于判断转换是否成功
+v, err := cast.ToE[int]("123")
+if err != nil {
+    v = 0 // 回退默认值
+}
+```
 
 ### 指针转换
 

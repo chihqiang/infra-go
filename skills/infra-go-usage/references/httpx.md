@@ -203,6 +203,21 @@ httpx.MustBindForm(w, r, &req)     // Form
 httpx.MustBindURI(w, params, &req) // URI
 ```
 
+### 便捷单值读取 - 泛型 QueryValue/PathValue/HeaderValue
+
+无需定义结构体即可直接按 key 读取单个值，适合少量参数场景。覆盖 URL Query、路径参数、Header 三种来源（请求体表单请走 `BindForm`/`MustBindForm`），底层复用 `cast.ToE` 做类型转换，支持 string、int/uint/float 各宽度、bool、time.Duration、time.Time：
+
+```go
+page := httpx.QueryValue(r, "page", 1)      // int，缺失/非法 → 1
+pageSize := httpx.QueryValue(r, "ps", 20)
+tag := httpx.QueryValue[string](r, "tag")   // string，缺失 → ""
+id := httpx.PathValue(r, "id", int64(0))    // 路径参数 {id}
+token := httpx.HeaderValue(r, "X-Token", "")
+```
+
+- `def` 为可选默认值：key 缺失、值为空或转换失败时返回 `def`；不传则返回类型零值。
+- 因绑定器变量 `Query/Header` 已占用，函数统一以 `Value` 结尾：`QueryValue/PathValue/HeaderValue`。
+
 ## 参数验证
 
 基于 [go-playground/validator/v10](https://github.com/go-playground/validator)，使用 `binding` 标签：
@@ -997,6 +1012,7 @@ for _, r := range routes {
 httpx/
 ├── bind.go              — 公开 API：Bind*, MustBind*, Validate, ParseJSON*
 ├── binding.go           — 绑定器实现：接口定义、MIME 常量、内置绑定器、反射映射、验证器
+├── request.go           — 便捷单值读取：泛型 QueryValue/PathValue/HeaderValue（复用 cast.ToE）
 ├── response.go          — 公开 API：Response[T], CodeError, OkJSON/OkXML/OkHTML, Write*, Redirect*
 ├── server.go            — 公开 API：Route, Middleware, Server, Group, WithPrefix, Start/Shutdown, SetNotFoundHandler
 ├── route.go             — 独立路由函数：PprofRoutes
