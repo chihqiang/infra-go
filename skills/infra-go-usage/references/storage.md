@@ -260,7 +260,7 @@ defer func() {
 
 `Storages` 是 `map[string]Storage` 类型，key 为实例别名，value 为已实例化的 `Storage`，
 支持一个集合管理多个存储桶/多套凭证（如不同业务的头像、附件、视频桶），每个实例可有
-独立的访问地址。先分别实例化，再注入工厂：
+独立的访问地址。先分别实例化，再用类型转换直接构造 `Storages` 集合：
 
 ```go
 images, err := storage.NewOSS(&storage.OSSConfig{
@@ -278,7 +278,7 @@ docs, err := storage.NewOSS(&storage.OSSConfig{
     URL:             "https://docs.example.com",
 })
 
-storages := storage.NewStorages(map[string]Storage{
+storages := storage.Storages(map[string]Storage{
     "images": images,
     "docs":   docs,
 })
@@ -306,4 +306,4 @@ s, ok := storages.Get("images")
 | `oss.go` | 阿里云 OSS 存储实现 |
 | `cos.go` | 腾讯云 COS 存储实现 |
 | `kodo.go` | 七牛云 KODO 存储实现 |
-| `new.go` | 工厂方法 `New`/`MustNew`，根据配置选择存储实现；`NewStorages` 注入实例组织多存储集合 |
+| `new.go` | 工厂方法 `New`/`MustNew`，根据配置选择存储实现 |

@@ -516,7 +516,7 @@ func TestMustNew_PanicOnNilConfig(t *testing.T) {
 
 // --- Storages ---
 
-func TestNewStorages_Success(t *testing.T) {
+func TestStorages_Success(t *testing.T) {
 	images, err := NewOSS(&OSSConfig{
 		Endpoint:        "oss-cn-hangzhou.aliyuncs.com",
 		AccessKeyID:     "test-access-key-id",
@@ -534,7 +534,7 @@ func TestNewStorages_Success(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	storages := NewStorages(map[string]Storage{
+	storages := Storages(map[string]Storage{
 		"images": images,
 		"docs":   docs,
 	})
@@ -559,7 +559,7 @@ func TestStorages_Get(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	storages := NewStorages(map[string]Storage{"images": s})
+	storages := Storages(map[string]Storage{"images": s})
 
 	got, ok := storages.Get("images")
 	assert.True(t, ok)
@@ -570,21 +570,21 @@ func TestStorages_Get(t *testing.T) {
 }
 
 func TestStorages_WriteUnknownStorage(t *testing.T) {
-	storages := NewStorages(map[string]Storage{})
+	storages := Storages(map[string]Storage{})
 	err := storages.Write(context.Background(), "unknown", "path", []byte("data"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `unknown storage "unknown"`)
 }
 
 func TestStorages_DeleteUnknownStorage(t *testing.T) {
-	storages := NewStorages(map[string]Storage{})
+	storages := Storages(map[string]Storage{})
 	_, err := storages.Delete(context.Background(), "unknown", "path")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `unknown storage "unknown"`)
 }
 
 func TestStorages_URLUnknownStorage(t *testing.T) {
-	storages := NewStorages(map[string]Storage{})
+	storages := Storages(map[string]Storage{})
 	_, err := storages.URL(context.Background(), "unknown", "path")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `unknown storage "unknown"`)

@@ -8,11 +8,11 @@
 
 ```txt
 my-service/
-├── main.go                 # 入口：加载配置 → 创建 AppContext → 注册路由 → 启动服务
+├── main.go                 # 入口：加载配置 → 创建 ServiceContext → 注册路由 → 启动服务
 ├── config/                 # 配置定义（struct + json 标签默认值/校验，配合 conf 加载）
 │   └── config.go
-├── svc/                    # 依赖装配层：AppContext
-│   └── appcontext.go
+├── svc/                    # 依赖装配层：ServiceContext
+│   └── context.go
 ├── route/                  # 路由层：统一注册路由与全局/分组中间件
 │   └── route.go
 ├── middleware/             # 中间件层：认证、审计、权限、上下文等 HTTP 中间件
@@ -41,7 +41,7 @@ my-service/
 ## 分层职责与依赖方向
 
 ```txt
-main.go ──► config ──► svc(AppContext) ──► route ──► middleware / handler
+main.go ──► config ──► svc(ServiceContext) ──► route ──► middleware / handler
                     │                              │
                     └──► db / model ◄──────────────┴──► logic ──► model / logic/store
 ```
@@ -68,12 +68,12 @@ type Config struct {
 }
 ```
 
-### svc — 依赖装配（AppContext）
+### svc — 依赖装配（ServiceContext）
 
-将应用所需组件（数据库 / Redis / 加密 / JWT / 各业务 Logic 与 Handler）的创建、注入与生命周期管理统一收敛到一处，`main.go` 只做三件事——加载配置、创建 AppContext、启动服务。
+将应用所需组件（数据库 / Redis / 加密 / JWT / 各业务 Logic 与 Handler）的创建、注入与生命周期管理统一收敛到一处，`main.go` 只做三件事——加载配置、创建 ServiceContext、启动服务。
 
 ```go
-type AppContext struct {
+type ServiceContext struct {
     Config config.Config
     DB          *gorm.DB
     JWT         *jwt.JWT
@@ -84,11 +84,11 @@ type AppContext struct {
     // ...
 }
 
-func NewAppContext(c config.Config) (*AppContext, error) {
+func NewServiceContext(c config.Config) (*ServiceContext, error) {
     // 按依赖顺序：orm.New → db.Migrate → jwt.New → redisx.New → 各 NewXxxLogic → 各 NewXxxHandler
 }
 
-func (s *AppContext) Close() { /* 关闭 DB / Redis / 后台 worker */ }
+func (sc *ServiceContext) Close() { /* 关闭 DB / Redis / 后台 worker */ }
 ```
 
 ### route — 路由注册
@@ -96,7 +96,7 @@ func (s *AppContext) Close() { /* 关闭 DB / Redis / 后台 worker */ }
 统一在此注册所有路由与中间件链，包含路由规划注释。组合 `httpx` 的 `AddRoute` / `Group` / `Use` 能力。
 
 ```go
-func Register(server *httpx.Server, ctx *svc.AppContext) {
+func Register(server *httpx.Server, svcCtx *svc.ServiceContext) {
     server.Use(httpx.WithRequestID())
     server.Use(httpx.WithRecovery())
     server.Use(httpx.WithLogger())
@@ -105,7 +105,7 @@ func Register(server *httpx.Server, ctx *svc.AppContext) {
     v1.AddRoute(httpx.Route{
         Method: http.MethodPost,
         Path:   "/orders",
-        Handler: ctx.OrderHandler.Create,
+        Handler: svcCtx.OrderHandler.Create,
     })
     // 受保护路由：追加鉴权 / 权限中间件
 }
@@ -133,7 +133,7 @@ func (h *OrderHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 ### logic — 业务逻辑层
 
-核心业务、事务、校验、规则都在这层；可依赖其他 Logic（通过 AppContext 注入，或接口解耦如缓存失效回调）。纯数据访问放 `logic/store/` 子包（存储接口 + 多后端实现）。
+核心业务、事务、校验、规则都在这层；可依赖其他 Logic（通过 ServiceContext 注入，或接口解耦如缓存失效回调）。纯数据访问放 `logic/store/` 子包（存储接口 + 多后端实现）。
 
 ### model — 数据模型
 

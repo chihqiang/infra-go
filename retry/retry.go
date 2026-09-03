@@ -4,20 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
-	"math/rand/v2"
 	"time"
-)
-
-// --- 默认常量 ---
-
-const (
-	// defaultMaxRetries 默认最大重试次数。
-	defaultMaxRetries = 3
-	// defaultDelay 默认初始重试延迟。
-	defaultDelay = 100 * time.Millisecond
-	// defaultMaxDelay 默认最大重试延迟。
-	defaultMaxDelay = 10 * time.Second
 )
 
 // 错误定义。
@@ -27,107 +14,6 @@ var (
 	// ErrNoRetry 不再重试（用于 RetryIf 返回 false 时包装最终错误）。
 	ErrNoRetry = errors.New("retry: no retry")
 )
-
-// RetryIfFunc 判断是否需要重试的函数。
-// 返回 true 表示需要重试，false 表示不再重试。
-type RetryIfFunc func(error) bool
-
-// OnRetryFunc 每次重试前的回调函数。
-// attempt 为当前重试次数（从 1 开始）。
-type OnRetryFunc func(attempt int, err error)
-
-// DelayFunc 计算重试延迟时间的函数。
-// attempt 为当前重试次数（从 1 开始），上一次的延迟为 previousDelay。
-type DelayFunc func(attempt int, previousDelay time.Duration) time.Duration
-
-// Config 重试配置。
-type Config struct {
-	// MaxRetries 最大重试次数，默认 3。
-	// 总执行次数 = MaxRetries + 1（首次执行 + 重试次数）。
-	MaxRetries int
-	// Delay 初始重试延迟，默认 100 毫秒。
-	Delay time.Duration
-	// MaxDelay 最大重试延迟，默认 10 秒。
-	// 指数退避时延迟不会超过此值。
-	MaxDelay time.Duration
-	// DelayFunc 自定义延迟计算函数。
-	// 设置后会覆盖默认的延迟策略。
-	DelayFunc DelayFunc
-	// RetryIf 自定义重试判定函数。
-	// 默认所有 error 都重试。
-	RetryIf RetryIfFunc
-	// OnRetry 每次重试前的回调函数。
-	OnRetry OnRetryFunc
-	// Jitter 是否添加随机抖动，避免惊群效应，默认 false。
-	// 启用后会在延迟基础上添加 0~50% 的随机时间。
-	Jitter bool
-}
-
-// Option 配置选项。
-type Option func(*Config)
-
-// WithMaxRetries 设置最大重试次数。
-func WithMaxRetries(max int) Option {
-	return func(c *Config) {
-		c.MaxRetries = max
-	}
-}
-
-// WithDelay 设置初始重试延迟。
-func WithDelay(delay time.Duration) Option {
-	return func(c *Config) {
-		c.Delay = delay
-	}
-}
-
-// WithMaxDelay 设置最大重试延迟。
-func WithMaxDelay(maxDelay time.Duration) Option {
-	return func(c *Config) {
-		c.MaxDelay = maxDelay
-	}
-}
-
-// WithDelayFunc 设置自定义延迟计算函数。
-func WithDelayFunc(fn DelayFunc) Option {
-	return func(c *Config) {
-		c.DelayFunc = fn
-	}
-}
-
-// WithRetryIf 设置自定义重试判定函数。
-func WithRetryIf(fn RetryIfFunc) Option {
-	return func(c *Config) {
-		c.RetryIf = fn
-	}
-}
-
-// WithOnRetry 设置每次重试前的回调函数。
-func WithOnRetry(fn OnRetryFunc) Option {
-	return func(c *Config) {
-		c.OnRetry = fn
-	}
-}
-
-// WithJitter 启用随机抖动。
-func WithJitter() Option {
-	return func(c *Config) {
-		c.Jitter = true
-	}
-}
-
-// defaultConfig 返回带默认值的配置。
-func defaultConfig(opts ...Option) Config {
-	c := Config{
-		MaxRetries: defaultMaxRetries,
-		Delay:      defaultDelay,
-		MaxDelay:   defaultMaxDelay,
-		RetryIf:    func(err error) bool { return true },
-	}
-	for _, opt := range opts {
-		opt(&c)
-	}
-	return c
-}
 
 // Do 执行函数，失败时根据配置自动重试。
 // 使用默认配置。
@@ -206,70 +92,6 @@ func doRetry(ctx context.Context, fn func(ctx context.Context) error, c Config) 
 	}
 
 	return fmt.Errorf("%w: last error: %s", ErrMaxRetries, lastErr.Error())
-}
-
-// computeDelay 计算重试延迟。
-func computeDelay(c Config, attempt int, previousDelay time.Duration) time.Duration {
-	// 如果有自定义延迟函数，使用它
-	if c.DelayFunc != nil {
-		d := c.DelayFunc(attempt, previousDelay)
-		return capDelay(d, c.MaxDelay, c.Jitter)
-	}
-
-	// 默认指数退避：delay * 2^(attempt-1)，用位运算替代浮点指数计算。
-	d := c.Delay << uint(attempt-1)
-	// 位移溢出（attempt 过大）时直接取最大值，避免产生异常值。
-	if d < c.Delay {
-		d = c.MaxDelay
-	}
-	return capDelay(d, c.MaxDelay, c.Jitter)
-}
-
-// capDelay 限制延迟不超过最大值，并可选添加抖动。
-func capDelay(d, maxDelay time.Duration, jitter bool) time.Duration {
-	if d > maxDelay {
-		d = maxDelay
-	}
-	if d < 0 {
-		d = 0
-	}
-	if jitter && d > 0 {
-		// 添加 0~50% 的随机抖动
-		half := int64(d) / 2
-		if half > 0 {
-			jitterAmount := time.Duration(rand.Int64N(half))
-			d += jitterAmount
-			if d > maxDelay {
-				d = maxDelay
-			}
-		}
-	}
-	return d
-}
-
-// --- 延迟策略 ---
-
-// ExponentialBackoff 指数退避延迟。
-// base 为基础延迟，factor 为乘数因子，attempt 为当前重试次数。
-func ExponentialBackoff(base time.Duration, factor float64) DelayFunc {
-	return func(attempt int, _ time.Duration) time.Duration {
-		return time.Duration(float64(base) * math.Pow(factor, float64(attempt-1)))
-	}
-}
-
-// FixedDelay 固定延迟。
-func FixedDelay(delay time.Duration) DelayFunc {
-	return func(_ int, _ time.Duration) time.Duration {
-		return delay
-	}
-}
-
-// LinearDelay 线性增长延迟。
-// base 为基础延迟，increment 为每次重试的增加量。
-func LinearDelay(base, increment time.Duration) DelayFunc {
-	return func(attempt int, _ time.Duration) time.Duration {
-		return base + time.Duration(attempt-1)*increment
-	}
 }
 
 // --- 辅助函数 ---

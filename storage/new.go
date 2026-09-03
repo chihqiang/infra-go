@@ -27,10 +27,3 @@ func MustNew(cfg Config) Storage {
 	}
 	return s
 }
-
-// NewStorages 注入已实例化的 Storage 实例，按别名组织为存储实例集合。
-// 每个 Storage 实例绑定一个物理桶（由 NewLocal/NewOSS/NewCOS/NewKODO 创建），
-// key 为实例别名，支持一个集合管理多个存储桶、每种驱动独立配置。
-func NewStorages(storages map[string]Storage) Storages {
-	return Storages(storages)
-}
