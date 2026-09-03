@@ -30,7 +30,7 @@ description: '使用 infra-go Go 基础设施库在业务项目中搭建服务�
 | 下游保护（熔断快速失败） | `breaker` | `breaker.NewBreaker` 或 `breaker.Do`；按路由隔离用 `httpx.WithRouteBreaker` |
 | 失败重试 | `retry` | `retry.Do` |
 | 异步任务队列 | `taskq` | `taskq.NewProducer` / `NewConsumer` |
-| 对象存储 | `storage` | `storage.New` |
+| 对象存储（本地文件 / OSS/COS/KODO） | `storage` | `storage.New` |
 | WebSocket 实时通信 | `websocket` | `websocket.MustNew` |
 | 链路追踪 | `trace` | `trace.StartAgent` |
 | 密码 / 摘要哈希 | `hash` | `hash.BcryptHashDefault` |
@@ -50,7 +50,7 @@ description: '使用 infra-go Go 基础设施库在业务项目中搭建服务�
 - 接口需实时返回 → `httpx`（必要时 + `websocket`）；允许异步消费 → `taskq`
 - 需要互斥保护临界区 → `redisx.Locker`（跨实例）或 `syncx`（单进程）
 - 一次请求内需要防缓存击穿/重复执行 → `syncx.NewSingleFlight`
-- 文件上传/下载统一接口 → `storage`（Driver 决定 OSS/COS/KODO）
+- 文件上传/下载统一接口 → `storage`（Driver 决定 local/OSS/COS/KODO）
 
 ## Workflow（完整工作流）
 

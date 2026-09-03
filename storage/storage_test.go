@@ -12,6 +12,7 @@ import (
 
 func TestStorageInterface_CompileTimeCheck(t *testing.T) {
 	// 编译期验证所有实现都满足 Storage 接口
+	var _ Storage = (*localStorage)(nil)
 	var _ Storage = (*ossStorage)(nil)
 	var _ Storage = (*cosStorage)(nil)
 	var _ Storage = (*kodoStorage)(nil)
@@ -21,6 +22,7 @@ func TestDriverConstants(t *testing.T) {
 	assert.Equal(t, Driver("oss"), DriverOSS)
 	assert.Equal(t, Driver("cos"), DriverCOS)
 	assert.Equal(t, Driver("kodo"), DriverKODO)
+	assert.Equal(t, Driver("local"), DriverLocal)
 }
 
 // --- buildURL ---
@@ -453,7 +455,7 @@ func TestNew_UnsupportedDriver(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported driver")
-	assert.Contains(t, err.Error(), "supported: oss, cos, kodo")
+	assert.Contains(t, err.Error(), "supported: local, oss, cos, kodo")
 }
 
 func TestNew_EmptyDriver(t *testing.T) {

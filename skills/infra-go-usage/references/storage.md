@@ -1,13 +1,14 @@
 # storage
 
-统一对象存储接口，支持阿里云 OSS、腾讯云 COS 和七牛云 KODO，通过工厂模式根据配置自动选择实现。
+统一对象存储接口，支持本地文件系统、阿里云 OSS、腾讯云 COS 和七牛云 KODO，通过工厂模式根据配置自动选择实现。
 
 ## 架构
 
 ```bash
-Config.Driver ──▶ New() ──┬── "oss"  ──▶ NewOSS()  ──▶ ossStorage
-                          ├── "cos"  ──▶ NewCOS()  ──▶ cosStorage
-                          └── "kodo" ──▶ NewKODO() ──▶ kodoStorage
+Config.Driver ──▶ New() ──┬── "local" ──▶ NewLocal() ──▶ localStorage
+                          ├── "oss"   ──▶ NewOSS()   ──▶ ossStorage
+                          ├── "cos"   ──▶ NewCOS()   ──▶ cosStorage
+                          └── "kodo"  ──▶ NewKODO()  ──▶ kodoStorage
 
 所有实现都满足 Storage 接口：
     Write(ctx context.Context, path string, content []byte) error
@@ -74,11 +75,46 @@ func main() {
 
 ```go
 type Config struct {
-    Driver Driver       // 存储驱动类型，支持 "oss"、"cos"、"kodo"，必填
-    OSS    *OSSConfig   // 阿里云 OSS 配置，Driver 为 "oss" 时使用
-    COS    *COSConfig   // 腾讯云 COS 配置，Driver 为 "cos" 时使用
-    KODO   *KODOConfig  // 七牛云 KODO 配置，Driver 为 "kodo" 时使用
+    Driver Driver        // 存储驱动类型，支持 "local"、"oss"、"cos"、"kodo"，必填
+    Local  *LocalConfig  // 本地文件系统配置，Driver 为 "local" 时使用
+    OSS    *OSSConfig    // 阿里云 OSS 配置，Driver 为 "oss" 时使用
+    COS    *COSConfig    // 腾讯云 COS 配置，Driver 为 "cos" 时使用
+    KODO   *KODOConfig   // 七牛云 KODO 配置，Driver 为 "kodo" 时使用
 }
+```
+
+### 本地文件系统 Local
+
+将文件直接写入本地磁盘目录，适合开发/单机场景或作为云存储的本地替代，无需任何云凭证：
+
+```go
+type LocalConfig struct {
+    RootDir string // 本地存储根目录，必填；文件写入此目录下，path 对应根目录下的相对路径
+    URL     string // 访问 URL 前缀（可选），如 http://localhost:8080/static；为空时 URL() 返回 file:// 本地路径
+}
+```
+
+使用示例：
+
+```go
+// 通过工厂创建
+s, err := storage.New(storage.Config{
+    Driver: storage.DriverLocal,
+    Local: &storage.LocalConfig{
+        RootDir: "./data/storage",
+        URL:     "http://localhost:8080/static", // 可选
+    },
+})
+
+// 或直接创建
+s, err := storage.NewLocal(&storage.LocalConfig{
+    RootDir: "./data/storage",
+})
+
+ctx := context.Background()
+if err := s.Write(ctx, "a/b.txt", []byte("hello")); err != nil { /* 自动创建目录 */ }
+u, err := s.URL(ctx, "a/b.txt") // "file:///.../data/storage/a/b.txt" 或配置前缀
+n, err := s.Delete(ctx, "a/b.txt")
 ```
 
 ### 阿里云 OSS
@@ -264,10 +300,10 @@ s, ok := storages.Get("images")
 
 | 文件 | 说明 |
 | ------ | ------ |
-| `storage.go` | `Storage` 接口定义与驱动类型常量 |
-| `config.go` | `Config`、`OSSConfig`、`COSConfig`、`KODOConfig` 配置结构 |
+| `storage.go` | `Storage` 接口定义、驱动类型常量与 `Storages` 多实例集合 |
+| `config.go` | `Config`、`LocalConfig`、`OSSConfig`、`COSConfig`、`KODOConfig` 配置结构 |
+| `local.go` | 本地文件系统存储实现 |
 | `oss.go` | 阿里云 OSS 存储实现 |
 | `cos.go` | 腾讯云 COS 存储实现 |
 | `kodo.go` | 七牛云 KODO 存储实现 |
-| `factory.go` | 工厂方法，根据配置选择存储实现；`NewStorages` 注入实例组织多存储集合 |
-| `storage.go` | `Storage` 接口定义、驱动类型常量与 `Storages` 多实例集合 |
+| `new.go` | 工厂方法 `New`/`MustNew`，根据配置选择存储实现；`NewStorages` 注入实例组织多存储集合 |

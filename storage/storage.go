@@ -8,7 +8,7 @@ import (
 )
 
 // Storage 存储服务接口，定义了对象存储的基本操作。
-// 目前支持阿里云 OSS、腾讯云 COS 和七牛云 KODO 三种实现。
+// 目前支持本地文件系统、阿里云 OSS、腾讯云 COS 和七牛云 KODO 四种实现。
 //
 // 注意：阿里云 OSS SDK 不支持 context 取消，传给 Write/Delete 的 context
 // 在 OSS 实现中仅用于超时检测（通过 context-aware reader），不会中断 SDK 调用。
@@ -52,6 +52,8 @@ const (
 	DriverCOS Driver = "cos"
 	// DriverKODO 七牛云 KODO 存储。
 	DriverKODO Driver = "kodo"
+	// DriverLocal 本地文件系统存储。
+	DriverLocal Driver = "local"
 )
 
 // Storages 存储实例集合，key 为实例别名（如 "images"、"docs"），

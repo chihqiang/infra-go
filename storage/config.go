@@ -3,8 +3,11 @@ package storage
 // Config 存储服务配置。
 // 默认值通过结构体标签 default 定义，遵循 conf 标准。
 type Config struct {
-	// Driver 存储驱动类型，支持 "oss"、"cos" 和 "kodo"，必填。
+	// Driver 存储驱动类型，支持 "local"、"oss"、"cos" 和 "kodo"，必填。
 	Driver Driver `json:"driver"`
+
+	// Local 本地文件系统配置，当 Driver 为 "local" 时使用，默认空。
+	Local *LocalConfig `json:",optional"`
 
 	// OSS 阿里云 OSS 配置，当 Driver 为 "oss" 时使用，默认空。
 	OSS *OSSConfig `json:",optional"`
@@ -14,6 +17,17 @@ type Config struct {
 
 	// KODO 七牛云 KODO 配置，当 Driver 为 "kodo" 时使用，默认空。
 	KODO *KODOConfig `json:",optional"`
+}
+
+// LocalConfig 本地文件系统存储配置。
+type LocalConfig struct {
+	// RootDir 本地存储根目录，必填。
+	// 文件将写入此目录下，path 中的子路径对应根目录下的相对目录。
+	RootDir string `json:"root_dir"`
+
+	// URL 访问 URL 前缀（可选），例如静态文件服务地址 "http://localhost:8080/static"。
+	// 为空时 URL() 返回 file:// 协议的本地绝对路径。
+	URL string `json:",optional"`
 }
 
 // OSSConfig 阿里云 OSS 存储配置。
