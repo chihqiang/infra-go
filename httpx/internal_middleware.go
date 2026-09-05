@@ -216,10 +216,6 @@ func WithCryption(key []byte, skipPaths ...string) Middleware {
 	return AsMiddleware(middleware.NewCryption(key, skipPaths...).Middleware())
 }
 
-// ContentSecurityHeader 内容安全请求头 `X-Content-Security` 的字段名
-// （见 middleware.ContentSecurityHeader）。
-const ContentSecurityHeader = middleware.ContentSecurityHeader
-
 // WithContentSecurity 返回一个内容安全校验中间件（防篡改 + 防重放）。
 // 客户端需在 `X-Content-Security` 头携带签名：
 //
