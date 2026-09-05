@@ -33,6 +33,20 @@ func TestToIntSliceE_Error(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestToIntSliceE_MoreErrors(t *testing.T) {
+	// []any 中含不可转元素
+	_, err := ToIntSliceE([]any{1, "abc"})
+	assert.Error(t, err)
+
+	// 逗号字符串中含非法数字段
+	_, err = ToIntSliceE("1,abc")
+	assert.Error(t, err)
+
+	// 不支持的类型
+	_, err = ToIntSliceE(map[string]int{})
+	assert.Error(t, err)
+}
+
 // --- ToStringSlice 测试 ---
 
 func TestToStringSlice(t *testing.T) {
@@ -53,4 +67,14 @@ func TestToStringSlice(t *testing.T) {
 
 	// nil
 	assert.Equal(t, []string{}, ToStringSlice(nil))
+}
+
+func TestToStringSliceE_Errors(t *testing.T) {
+	// []any 中含不可字符串化元素（func 序列化失败）
+	_, err := ToStringSliceE([]any{func() {}})
+	assert.Error(t, err)
+
+	// 不支持的类型
+	_, err = ToStringSliceE(map[string]string{})
+	assert.Error(t, err)
 }

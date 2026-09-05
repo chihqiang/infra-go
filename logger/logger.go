@@ -90,7 +90,8 @@ type Config struct {
 	Rotation RotationConfig
 }
 
-// Logger 日志记录器，实现 LoggerInterface。
+// Logger 是 ILogger 接口的默认实现，内部封装 zap.Logger。
+// 通过 New / Default 创建；通常以 ILogger 接口形式使用，Close 负责刷新并关闭输出。
 type Logger struct {
 	zap     *zap.Logger
 	sugar   *zap.SugaredLogger
@@ -98,7 +99,7 @@ type Logger struct {
 	closers []io.Closer
 }
 
-// New 创建一个新的 Logger。
+// New 根据配置创建并返回一个 ILogger。
 func New(cfg Config) ILogger {
 	c := fillDefault(cfg)
 
@@ -149,11 +150,22 @@ func Default() ILogger {
 
 // --- 结构化日志方法 ---
 
+// Debug 以 Debug 级别记录一条结构化日志。
 func (l *Logger) Debug(msg string, fields ...Field) { l.zap.Debug(msg, fields...) }
-func (l *Logger) Info(msg string, fields ...Field)  { l.zap.Info(msg, fields...) }
-func (l *Logger) Warn(msg string, fields ...Field)  { l.zap.Warn(msg, fields...) }
+
+// Info 以 Info 级别记录一条结构化日志。
+func (l *Logger) Info(msg string, fields ...Field) { l.zap.Info(msg, fields...) }
+
+// Warn 以 Warn 级别记录一条结构化日志。
+func (l *Logger) Warn(msg string, fields ...Field) { l.zap.Warn(msg, fields...) }
+
+// Error 以 Error 级别记录一条结构化日志。
 func (l *Logger) Error(msg string, fields ...Field) { l.zap.Error(msg, fields...) }
+
+// Panic 以 Panic 级别记录日志后触发 panic。
 func (l *Logger) Panic(msg string, fields ...Field) { l.zap.Panic(msg, fields...) }
+
+// Fatal 以 Fatal 级别记录日志后调用 os.Exit(1)。
 func (l *Logger) Fatal(msg string, fields ...Field) { l.zap.Fatal(msg, fields...) }
 
 // --- 格式化日志方法 ---
@@ -161,93 +173,128 @@ func (l *Logger) Fatal(msg string, fields ...Field) { l.zap.Fatal(msg, fields...
 // 格式化日志方法在级别未启用时跳过 fmt.Sprintf，避免无谓的格式化开销。
 // Panic/Fatal 系列保持原样：zap 的 Panic/Fatal 即使级别未启用也会触发
 // panic/os.Exit，此处不改变其行为。
+
+// Debugf 以 Debug 级别记录格式化日志。
 func (l *Logger) Debugf(format string, args ...any) {
 	if l.zap.Core().Enabled(zapcore.DebugLevel) {
 		l.zap.Debug(fmt.Sprintf(format, args...))
 	}
 }
+
+// Infof 以 Info 级别记录格式化日志。
 func (l *Logger) Infof(format string, args ...any) {
 	if l.zap.Core().Enabled(zapcore.InfoLevel) {
 		l.zap.Info(fmt.Sprintf(format, args...))
 	}
 }
+
+// Warnf 以 Warn 级别记录格式化日志。
 func (l *Logger) Warnf(format string, args ...any) {
 	if l.zap.Core().Enabled(zapcore.WarnLevel) {
 		l.zap.Warn(fmt.Sprintf(format, args...))
 	}
 }
+
+// Errorf 以 Error 级别记录格式化日志。
 func (l *Logger) Errorf(format string, args ...any) {
 	if l.zap.Core().Enabled(zapcore.ErrorLevel) {
 		l.zap.Error(fmt.Sprintf(format, args...))
 	}
 }
+
+// Panicf 以 Panic 级别记录格式化日志后触发 panic。
 func (l *Logger) Panicf(format string, args ...any) { l.zap.Panic(fmt.Sprintf(format, args...)) }
+
+// Fatalf 以 Fatal 级别记录格式化日志后调用 os.Exit(1)。
 func (l *Logger) Fatalf(format string, args ...any) { l.zap.Fatal(fmt.Sprintf(format, args...)) }
 
 // --- 带上下文的结构化日志方法 ---
+//
+// 带上下文方法把 context 中注册的上下文提取器字段自动并入日志（如 request_id），
+// 便于链路追踪。实现上先检查级别，未启用时直接返回，避免提取字段的开销。
 
-// 带上下文方法先检查级别，未启用时直接返回，避免 extractContextFields 的
-// 开销；启用时直接将 context 字段并入 fields，避免 zap.With 派生新 logger。
+// DebugCtx 以 Debug 级别记录日志，自动并入 ctx 的上下文提取器字段。
 func (l *Logger) DebugCtx(ctx context.Context, msg string, fields ...Field) {
 	if !l.zap.Core().Enabled(zapcore.DebugLevel) {
 		return
 	}
 	l.zap.Debug(msg, append(extractContextFields(ctx), fields...)...)
 }
+
+// InfoCtx 以 Info 级别记录日志，自动并入 ctx 的上下文提取器字段。
 func (l *Logger) InfoCtx(ctx context.Context, msg string, fields ...Field) {
 	if !l.zap.Core().Enabled(zapcore.InfoLevel) {
 		return
 	}
 	l.zap.Info(msg, append(extractContextFields(ctx), fields...)...)
 }
+
+// WarnCtx 以 Warn 级别记录日志，自动并入 ctx 的上下文提取器字段。
 func (l *Logger) WarnCtx(ctx context.Context, msg string, fields ...Field) {
 	if !l.zap.Core().Enabled(zapcore.WarnLevel) {
 		return
 	}
 	l.zap.Warn(msg, append(extractContextFields(ctx), fields...)...)
 }
+
+// ErrorCtx 以 Error 级别记录日志，自动并入 ctx 的上下文提取器字段。
 func (l *Logger) ErrorCtx(ctx context.Context, msg string, fields ...Field) {
 	if !l.zap.Core().Enabled(zapcore.ErrorLevel) {
 		return
 	}
 	l.zap.Error(msg, append(extractContextFields(ctx), fields...)...)
 }
+
+// PanicCtx 以 Panic 级别记录日志后触发 panic，并自动并入 ctx 的上下文提取器字段。
 func (l *Logger) PanicCtx(ctx context.Context, msg string, fields ...Field) {
 	l.zap.With(extractContextFields(ctx)...).Panic(msg, fields...)
 }
+
+// FatalCtx 以 Fatal 级别记录日志后调用 os.Exit(1)，并自动并入 ctx 的上下文提取器字段。
 func (l *Logger) FatalCtx(ctx context.Context, msg string, fields ...Field) {
 	l.zap.With(extractContextFields(ctx)...).Fatal(msg, fields...)
 }
 
 // --- 带上下文的格式化日志方法 ---
 
+// DebugfCtx 以 Debug 级别记录格式化日志，自动并入 ctx 的上下文提取器字段。
 func (l *Logger) DebugfCtx(ctx context.Context, format string, args ...any) {
 	if !l.zap.Core().Enabled(zapcore.DebugLevel) {
 		return
 	}
 	l.zap.Debug(fmt.Sprintf(format, args...), extractContextFields(ctx)...)
 }
+
+// InfofCtx 以 Info 级别记录格式化日志，自动并入 ctx 的上下文提取器字段。
 func (l *Logger) InfofCtx(ctx context.Context, format string, args ...any) {
 	if !l.zap.Core().Enabled(zapcore.InfoLevel) {
 		return
 	}
 	l.zap.Info(fmt.Sprintf(format, args...), extractContextFields(ctx)...)
 }
+
+// WarnfCtx 以 Warn 级别记录格式化日志，自动并入 ctx 的上下文提取器字段。
 func (l *Logger) WarnfCtx(ctx context.Context, format string, args ...any) {
 	if !l.zap.Core().Enabled(zapcore.WarnLevel) {
 		return
 	}
 	l.zap.Warn(fmt.Sprintf(format, args...), extractContextFields(ctx)...)
 }
+
+// ErrorfCtx 以 Error 级别记录格式化日志，自动并入 ctx 的上下文提取器字段。
 func (l *Logger) ErrorfCtx(ctx context.Context, format string, args ...any) {
 	if !l.zap.Core().Enabled(zapcore.ErrorLevel) {
 		return
 	}
 	l.zap.Error(fmt.Sprintf(format, args...), extractContextFields(ctx)...)
 }
+
+// PanicfCtx 以 Panic 级别记录格式化日志后触发 panic，并自动并入 ctx 的上下文提取器字段。
 func (l *Logger) PanicfCtx(ctx context.Context, format string, args ...any) {
 	l.zap.With(extractContextFields(ctx)...).Panic(fmt.Sprintf(format, args...))
 }
+
+// FatalfCtx 以 Fatal 级别记录格式化日志后调用 os.Exit(1)，并自动并入 ctx 的上下文提取器字段。
 func (l *Logger) FatalfCtx(ctx context.Context, format string, args ...any) {
 	l.zap.With(extractContextFields(ctx)...).Fatal(fmt.Sprintf(format, args...))
 }

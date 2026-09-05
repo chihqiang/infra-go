@@ -1,28 +1,34 @@
 # httpx
 
-HTTP 工具包，提供请求参数绑定（参考 gin 的设计）和统一响应。
+HTTP 服务基础设施，位于 `httpx` 目录。主包提供服务器、统一响应、请求绑定便捷函数与中间件适配；核心能力按职责拆分到多个子包，均可被其它 `net/http` 兼容框架复用。
+
+## 模块结构
+
+```text
+httpx/
+├── request.go              — 请求绑定便捷 API（Bind*/MustBind*）+ 单值读取（QueryValue/PathValue/HeaderValue）
+├── response.go             — 统一响应：Response[T]/CodeError/Ok*/Write*/SSEWriter/Redirect*
+├── server.go               — 服务器：Server/Route/Group/路由注册/中间件链/优雅关闭
+├── internal_middleware.go  — 中间件适配层：With*（转发 httpx/middleware）+ AsMiddleware
+├── internal_route.go       — 内置路由（PprofRoutes）
+├── ctx.go                  — request_id context 工具（委托 httpx/middleware）
+├── binding/                — 请求绑定实现（绑定器/映射引擎/校验器，见下）
+├── middleware/             — 通用中间件实现（面向对象，一个中间件一个文件）
+├── match/                  — 路径匹配器（中间件 skip/ignore 规则，见 [match](./match.md)）
+└── respw/                  — ResponseWriter 增强包装（见 [respw](./respw.md)）
+```
+
+- `httpx/binding`：绑定器接口/实例、MIME 常量、反射映射引擎、校验器（`SetValidateFn`）。
+- `httpx/middleware`：各中间件核心逻辑，`NewXxx(...)` + `Middleware()` 面向对象形态，返回标准 `func(http.Handler) http.Handler`，不依赖 httpx，可被 gin / echo 等直接复用（详见「中间件」节）。
+- `httpx` 主包 = 服务器 + 统一响应 + 绑定便捷函数 + `With*` 适配层，是业务项目主要使用入口。
 
 ## 特性
 
-- **路由服务器**：基于 `http.ServeMux`，原生支持方法匹配、路径参数、通配路径
-- **中间件链**：全局中间件 + 组中间件，执行顺序清晰可控
-- **路由分组**：`WithPrefix` + `WithMiddleware` 或链式 `Group`，支持嵌套
-- **优雅关闭**：SIGINT/SIGTERM/SIGHUP 信号触发，可配置超时，关闭失败记录日志
-- **配置驱动**：`ServerConfig` 使用 `json` 标签声明默认值，兼容 `conf` 包从文件加载
-- **参数绑定**：支持 JSON、XML、Query、Form、Header、URI 六种绑定方式
-- **自动选择**：根据 Method 和 Content-Type 自动选择绑定器
-- **参数验证**：基于 `go-playground/validator/v10`，使用 `binding` 标签
-- **默认值**：通过 `default=xxx` 标签选项设置字段默认值
-- **泛型响应**：`Response[T]` 统一响应结构，data 字段类型安全
-- **请求 ID**：`WithRequestID` 中间件自动生成/透传 `request_id`，`Ctx` 响应函数自动携带到响应中
-- **智能包装**：`OkJSON` / `OkXML` 自动识别 error / CodeError / 普通数据
-- **多格式响应**：支持 JSON、XML、HTML 与 SSE 流式响应（`SSEWriter` 逐帧推送、自动 Flush）
-- **重定向**：`Redirect` 系列函数，支持 301/302 及自定义状态码
-- **自定义 404 响应**：`SetNotFoundHandler` 自定义未匹配路由的响应内容
-- **Context 变体**：每个响应函数都有对应的 `Ctx` 版本
-- **类型丰富**：支持 int/uint/bool/float/string/time.Time/time.Duration/slice/指针等
-- **MustBind**：绑定+验证+自动写入错误响应，一步到位
-- **cast 集成**：布尔和 Duration 类型转换使用 `cast` 包，统一类型转换逻辑
+- **统一响应**：`Response[T]` 结构 + `Ok*` / `WriteHTTPError*` 智能包装
+- **参数绑定**：JSON / XML / Form / Query / Header / URI 六种来源 + `binding` 标签校验
+- **通用中间件**：CORS、Recovery、RequestID、链路追踪、访问日志、熔断、超时、请求体限制、gzip 解压、并发数限制、限流、JWT 认证、加解密、内容安全
+- **可复用**：中间件核心逻辑在 `httpx/middleware` 子包，标准 `net/http` 形态，可被任何框架复用
+- **Server 路由**：Go 1.22 `{param}` 路径参数、路由组、中间件链、优雅关闭、pprof
 
 ## 安装
 
@@ -39,1082 +45,449 @@ import (
     "net/http"
 
     "github.com/chihqiang/infra-go/httpx"
+    "github.com/chihqiang/infra-go/httpx/middleware" // 可选：直接用子包中间件
 )
 
-type CreateUserRequest struct {
-    Name  string `json:"name" binding:"required"`
-    Email string `json:"email" binding:"required,email"`
-    Age   int    `json:"age" binding:"gte=0,lte=150"`
-}
-
-type User struct {
-    ID    int64  `json:"id"`
-    Name  string `json:"name"`
-    Email string `json:"email"`
-}
-
 func main() {
-    server := httpx.NewServer(httpx.ServerConfig{
-        Host: "0.0.0.0",
-        Port: 8080,
-    })
+    server := httpx.NewServer(httpx.ServerConfig{Host: "0.0.0.0", Port: 8080})
+
+    // 中间件（With* 便捷注册，等价于 middleware.NewXxx().Middleware() 经 AsMiddleware 接入）
+    server.Use(httpx.WithRecovery())
+    server.Use(httpx.WithRequestID())
+    server.Use(httpx.WithLogger("/healthz"))
+    server.Use(httpx.WithCors("*"))
 
     server.AddRoute(httpx.Route{
         Method: "POST",
         Path:   "/users",
         Handler: func(w http.ResponseWriter, r *http.Request) {
             var req CreateUserRequest
-            // 绑定 + 验证，出错自动写入 400 响应
             if err := httpx.MustBindJSON(w, r, &req); err != nil {
-                return
+                return // 已自动写 400
             }
-
-            user := User{ID: 1, Name: req.Name, Email: req.Email}
-            // 智能包装：自动设置 code=0, msg=ok, data=user
-            httpx.OkJSON(w, user)
+            httpx.OkJSON(w, map[string]any{"id": "user-1"}) // 自动包成 Response[T]
         },
     })
 
-    server.Start() // 阻塞，支持优雅关闭（SIGINT/SIGTERM/SIGHUP）
+    server.Start() // 阻塞；SIGINT/SIGTERM/SIGHUP 优雅关闭
 }
 ```
 
-## 请求参数绑定
+## 请求绑定
+
+将请求数据按来源绑定到结构体。字段通过 tag 指定来源名，并可用 `binding` 标签声明校验规则。
+
+> 绑定器的**实现**在 `httpx/binding` 子包（绑定器实例 `binding.JSON/XML/Form/Query/Header/Uri`、`binding.Default` 选择器、反射映射引擎与 `SetValidateFn` 校验入口）。httpx 主包 `Bind*` / `MustBind*` 便捷函数内部调用该子包，业务侧通常直接用主包函数即可。
 
 ### 支持的标签
 
-| 标签 | 适用绑定 | 说明 |
-| ------ | --------- | ------ |
-| `json` | JSON, XML | JSON 字段名 |
-| `form` | Form, Query | 表单/Query 参数名 |
+| 标签 | 适用来源 | 说明 |
+|------|---------|------|
+| `json` | JSON body | JSON 字段名 |
+| `xml` | XML body | XML 字段名 |
+| `form` | Form / Query | 表单 / Query 参数名 |
 | `uri` | URI | 路径参数名 |
-| `header` | Header | HTTP Header 名 |
-| `binding` | 全部 | 验证规则（基于 validator） |
-| `default` | Form, Query, Header | 默认值，如 `form:"sort,default=desc"` |
-| `time_format` | Form, Query | 时间格式，如 `time_format:"2006-01-02"` |
+| `header` | Header | HTTP 请求头名（大小写不敏感） |
+| `binding` | 全部 | 校验规则，见[参数验证](#参数验证) |
+| `default` | Form / Query / Header / URI | 字段默认值，如 `form:"sort,default=desc"` |
+| `time_format` / `time_utc` / `time_location` | Form / Query | 时间解析控制 |
+| `-` | 全部 | 忽略该字段，不做绑定 |
 
-### BindJSON - JSON Body 绑定
+### 绑定函数一览
+
+| 函数 | 数据来源 | 说明 |
+|------|---------|------|
+| `BindJSON(r, &obj)` | JSON body | |
+| `BindXML(r, &obj)` | XML body | |
+| `BindForm(r, &obj)` | Query + POST form | |
+| `BindQuery(r, &obj)` | URL Query | |
+| `BindHeader(r, &obj)` | HTTP Header | |
+| `BindURI(params, &obj)` | 路径参数 | `params` 为 `map[string]string` |
+| `BindURIWithValues(params, &obj)` | 路径参数 | `params` 为 `map[string][]string` |
+| `Bind(r, &obj)` | 自动 | 按 Method / Content-Type 选择 |
+| `MustBind*` | — | 绑定 + 自动错误响应 |
+
+### 示例
 
 ```go
+// JSON
 type LoginRequest struct {
     Username string `json:"username" binding:"required"`
     Password string `json:"password" binding:"required,min=6"`
 }
-
 var req LoginRequest
 if err := httpx.BindJSON(r, &req); err != nil {
     httpx.WriteHTTPError(w, http.StatusBadRequest, err.Error())
     return
 }
-```
 
-### BindQuery - URL Query 绑定
-
-```go
+// Query（form 标签，支持 default）
 type ListRequest struct {
-    Page     int    `form:"page" binding:"required,gte=1"`
-    PageSize int    `form:"page_size" binding:"required,gte=1,lte=100"`
-    Keyword  string `form:"keyword"`
+    Page     int    `form:"page" binding:"gte=1"`
+    PageSize int    `form:"page_size" binding:"gte=1,lte=100"`
     Sort     string `form:"sort,default=desc"`
 }
+if err := httpx.BindQuery(r, &req); err != nil { /* handle */ }
 
-var req ListRequest
-if err := httpx.BindQuery(r, &req); err != nil {
-    // handle error
-}
-```
-
-### BindForm - 表单绑定
-
-```go
-type UploadRequest struct {
-    Title       string   `form:"title" binding:"required"`
-    Description string   `form:"description"`
-    Tags        []string `form:"tags"`
-}
-
-var req UploadRequest
-if err := httpx.BindForm(r, &req); err != nil {
-    // handle error
-}
-```
-
-### BindHeader - Header 绑定
-
-```go
+// Header
 type AuthRequest struct {
     Token   string `header:"X-Auth-Token" binding:"required"`
-    TraceID string `header:"X-Trace-Id"`
     Version string `header:"X-Version,default=v1"`
 }
+if err := httpx.BindHeader(r, &req); err != nil { /* handle */ }
 
-var req AuthRequest
-if err := httpx.BindHeader(r, &req); err != nil {
-    // handle error
-}
-```
-
-### BindURI - 路径参数绑定
-
-```go
+// URI（路径参数 /users/{id}）
 type GetUserRequest struct {
     ID int `uri:"id" binding:"required"`
 }
-
-// params 通常来自路由解析，如 /users/:id => {"id": "123"}
-params := map[string]string{"id": "123"}
-var req GetUserRequest
-if err := httpx.BindURI(params, &req); err != nil {
-    // handle error
-}
+params := map[string]string{"id": r.PathValue("id")}
+if err := httpx.BindURI(params, &req); err != nil { /* handle */ }
 ```
 
-### Bind - 自动选择绑定器
+### 自动选择规则
 
-根据 Method 和 Content-Type 自动选择：
+`Bind(r, &obj)` 按 Method 与 Content-Type 选择：GET → Form（Query）；POST + `application/json` → JSON；`application/xml`/`text/xml` → XML；`application/x-www-form-urlencoded` / `multipart/form-data` → Form；其它/无法解析 → Form。
 
-```go
-var req MyRequest
-if err := httpx.Bind(r, &req); err != nil {
-    // handle error
-}
-```
+### MustBind — 绑定 + 自动错误响应
 
-选择规则：
-
-- GET 请求 → Form 绑定（Query 参数）
-- POST + `application/json` → JSON 绑定
-- POST + `application/x-www-form-urlencoded` → Form 绑定
-- POST + `multipart/form-data` → Form 绑定
-
-### MustBind 系列 - 绑定 + 自动错误响应
+绑定或校验失败时自动写入 HTTP 错误响应（携带 `request_id`）并返回 error 供控制流判断：
 
 ```go
-var req CreateUserRequest
-// 出错自动写入 400 响应，返回 error 供控制流判断
 if err := httpx.MustBindJSON(w, r, &req); err != nil {
-    return
+    return // 已自动写 400
 }
-
-// 同系列函数
-httpx.MustBind(w, r, &req)         // 自动选择
-httpx.MustBindQuery(w, r, &req)    // Query
-httpx.MustBindForm(w, r, &req)     // Form
-httpx.MustBindURI(w, params, &req) // URI
+// 同系列：MustBind（自动选择）/ MustBindQuery / MustBindForm
 ```
 
-### 便捷单值读取 - 泛型 QueryValue/PathValue/HeaderValue
+### 单值读取 — QueryValue / PathValue / HeaderValue
 
-无需定义结构体即可直接按 key 读取单个值，适合少量参数场景。覆盖 URL Query、路径参数、Header 三种来源（请求体表单请走 `BindForm`/`MustBindForm`），底层复用 `cast.ToE` 做类型转换，支持 string、int/uint/float 各宽度、bool、time.Duration、time.Time：
+按 key 读取单个值并转换类型（底层复用 `cast.ToE`），无需定义结构体：
 
 ```go
-page := httpx.QueryValue(r, "page", 1)      // int，缺失/非法 → 1
-pageSize := httpx.QueryValue(r, "ps", 20)
-tag := httpx.QueryValue[string](r, "tag")   // string，缺失 → ""
-id := httpx.PathValue(r, "id", int64(0))    // 路径参数 {id}
+page  := httpx.QueryValue(r, "page", 1)     // int，缺失/非法 → 1
+tag   := httpx.QueryValue[string](r, "tag") // string，缺失 → ""
+id    := httpx.PathValue(r, "id", int64(0)) // 路径参数 {id}
 token := httpx.HeaderValue(r, "X-Token", "")
 ```
 
-- `def` 为可选默认值：key 缺失、值为空或转换失败时返回 `def`；不传则返回类型零值。
-- 因绑定器变量 `Query/Header` 已占用，函数统一以 `Value` 结尾：`QueryValue/PathValue/HeaderValue`。
-
 ## 参数验证
 
-基于 [go-playground/validator/v10](https://github.com/go-playground/validator)，使用 `binding` 标签：
+绑定器映射后自动校验 `binding` 标签规则（基于 [go-playground/validator/v10](https://github.com/go-playground/validator)）：
 
 ```go
 type RegisterRequest struct {
     Username string `json:"username" binding:"required,min=3,max=20"`
     Password string `json:"password" binding:"required,min=8"`
     Email    string `json:"email" binding:"required,email"`
-    Age      int    `json:"age" binding:"gte=18,lte=120"`
     Role     string `json:"role" binding:"required,oneof=admin user guest"`
 }
 ```
 
-常用验证规则：
+常用规则：`required` 必填；`min=N`/`max=N`；`gte=N`/`lte=N`；`email`/`url`；`oneof=a b c` 枚举；`len=N`。
 
-| 规则 | 说明 |
-| ------ | ------ |
-| `required` | 必填 |
-| `min=N` | 最小长度/最小值 |
-| `max=N` | 最大长度/最大值 |
-| `gte=N` | 大于等于 |
-| `lte=N` | 小于等于 |
-| `email` | 邮箱格式 |
-| `oneof=a b c` | 枚举值 |
-| `url` | URL 格式 |
-| `len=N` | 长度等于 |
+默认校验器为 `httpx/binding` 子包的 `DefaultValidator`（标签 `binding`）。需要自定义校验器时，实现 `binding.StructValidator` 并通过 `binding.SetValidateFn` 注入校验入口（见附录）；传 `nil` 恢复默认。httpx 主包便捷绑定函数与 binding 绑定器共享同一校验入口。
 
 ## 支持的数据类型
 
-绑定支持以下 Go 类型：
-
 | 类型 | 示例 |
-| ------ | ------ |
-| `string` | `` Name string `form:"name"` `` |
-| `int/int8/int16/int32/int64` | `` Age int `form:"age"` `` |
-| `uint/uint8/.../uint64` | `` Count uint `form:"count"` `` |
-| `bool` | `` Active bool `form:"active"` `` |
-| `float32/float64` | `` Score float64 `form:"score"` `` |
-| `time.Duration` | `` Timeout time.Duration `form:"timeout"` `` |
-| `time.Time` | `` CreatedAt time.Time `form:"created_at" time_format:"2006-01-02"` `` |
-| `[]string` / `[]int` 等 | `` Tags []string `form:"tags"` `` |
-| 指针类型 | `` Name *string `json:"name"` `` |
-| 嵌套结构体 | 自动递归处理 |
-| `map[string]string` | 通过 JSON 解析 |
-
-### 时间格式
-
-```go
-type TimeRequest struct {
-    // RFC3339 格式（默认）
-    CreatedAt time.Time `form:"created_at"`
-    // 自定义格式
-    Birthday time.Time `form:"birthday" time_format:"2006-01-02"`
-    // Unix 时间戳
-    Timestamp time.Time `form:"timestamp" time_format:"unix"`
-    // UTC 时区
-    UTCTime time.Time `form:"utc_time" time_format:"2006-01-02" time_utc:"true"`
-}
-```
-
-### 切片绑定
-
-Query 参数 `tags=a,b,c` 会自动分割为 `["a", "b", "c"]`：
-
-```go
-type SearchRequest struct {
-    Tags []string `form:"tags"` // tags=golang,redis,mysql => ["golang","redis","mysql"]
-}
-```
+|------|------|
+| `string` | `Name string \`form:"name"\`` |
+| `int/int8/int16/int32/int64`、`uint/.../uint64` | `Age int \`form:"age"\`` |
+| `bool` | `Active bool \`form:"active"\`` |
+| `float32/float64` | `Score float64 \`form:"score"\`` |
+| `time.Time` | 支持 `time_format`/`time_utc`/`time_location` 与 unix 时间戳 |
+| `time.Duration` | `Timeout time.Duration \`form:"timeout"\``（如 `1m30s`） |
+| `[]string` 等切片 | 逗号分隔或重复 key 自动收集 |
+| 内嵌结构体 / `map[string]string` 目标 | 递归 / 直接填充 |
 
 ## 统一响应
 
-### Response 泛型结构
+### Response[T] 结构
 
 ```go
 type Response[T any] struct {
-    Code      int    `json:"code" xml:"code"`                     // 业务码，0 表示成功
-    Msg       string `json:"msg" xml:"msg"`                       // 提示信息
-    Data      T      `json:"data,omitempty" xml:"data,omitempty"` // 响应数据
-    RequestID string `json:"request_id,omitempty" xml:"request_id,omitempty"` // 请求 ID（可选）
+    Code      int    `json:"code" xml:"code"`
+    Msg       string `json:"msg" xml:"msg"`
+    Data      T      `json:"data,omitempty" xml:"data,omitempty"`
+    RequestID string `json:"request_id,omitempty" xml:"request_id,omitempty"`
 }
 ```
 
 ### 智能包装（推荐）
 
-`OkJSON` 和 `OkXML` 会根据传入值的类型自动包装为统一响应：
+`Ok*` 系列自动把 `v` 包进 `Response[T]`；若 `v` 是 `*CodeError` / `CodeError` / `error`，自动取对应业务码与消息：
 
 ```go
-// 1. 传入普通数据 → code=0, msg=ok, data=数据
-httpx.OkJSON(w, user)
-// 输出: {"code":0,"msg":"ok","data":{"name":"Alice"}}
-
-// 2. 传入 *CodeError → 使用其 Code 和 Msg
-httpx.OkJSON(w, httpx.NewCodeError(httpx.CodeNotFound, "user not found"))
-// 输出: {"code":404,"msg":"user not found"}
-
-// 3. 传入普通 error → code=-1, msg=错误信息
-httpx.OkJSON(w, errors.New("database error"))
-// 输出: {"code":-1,"msg":"database error"}
-```
-
-### JSON 响应
-
-```go
-// 智能包装 + HTTP 200
-httpx.OkJSON(w, data)
-
-// 带 context 的版本
-httpx.OkJSONCtx(ctx, w, data)
-
-// 低级：直接序列化写入，不做包装
-httpx.WriteJSON(w, http.StatusCreated, data)
-
-// HTTP 错误响应（设置 HTTP 状态码）
-httpx.WriteHTTPError(w, http.StatusNotFound, "not found")
-
-// 分离 HTTP 状态码与业务码（适用于需要细粒度业务错误码的场景）
-// HTTP 400，业务码 10001
-httpx.WriteHTTPErrorWithCode(w, http.StatusBadRequest, 10001, "username already exists")
-```
-
-#### WriteHTTPErrorWithCode / WriteHTTPErrorWithCodeCtx
-
-在 RESTful API 中，HTTP 状态码反映传输层状态（如 400 Bad Request），而业务码反映业务语义（如 10001 表示"用户名已存在"）。`WriteHTTPErrorWithCode` 允许二者独立设置：
-
-```go
-// HTTP 400，业务码 10001
-httpx.WriteHTTPErrorWithCode(w, http.StatusBadRequest, 10001, "username already exists")
-// 输出: {"code":10001,"msg":"username already exists"}
-
-// 带 context 的版本（自动携带 request_id）
-httpx.WriteHTTPErrorWithCodeCtx(ctx, w, http.StatusBadRequest, 10001, "username already exists")
-```
-
-### XML 响应
-
-```go
-// 智能包装 + HTTP 200，带 XML 声明
+httpx.OkJSON(w, data)          // {code:0,msg:"ok",data:...}
+httpx.OkJSONCtx(ctx, w, data)  // 响应携带 request_id
 httpx.OkXML(w, data)
-// 输出: <xml version="1.0" encoding="UTF-8"><code>0</code><msg>ok</msg><data>...</data></xml>
-
-// 带 context 的版本
 httpx.OkXMLCtx(ctx, w, data)
-
-// 低级：直接序列化写入
-httpx.WriteXML(w, http.StatusOK, data)
+httpx.OkHTML(w, "<h1>hi</h1>")
+httpx.OkHTMLCtx(ctx, w, "<h1>hi</h1>")
 ```
 
-### HTML 响应
+### 底层输出
 
 ```go
-// HTML 200
-httpx.OkHTML(w, "<h1>Hello</h1>")
-
-// 带 context 的版本
-httpx.OkHTMLCtx(ctx, w, "<h1>Hello</h1>")
-
-// 指定状态码
-httpx.WriteHTML(w, http.StatusOK, "<h1>Hello</h1>")
+httpx.WriteJSON(w, status, v)        // 任意状态码 + 任意结构
+httpx.WriteJSONCtx(ctx, w, status, v)
+httpx.WriteXML(w, status, v)
+httpx.WriteXMLCtx(ctx, w, status, v)
 ```
 
-### SSE 响应（Server-Sent Events）
-
-`SSEWriter` 用于向客户端推送 SSE 流式事件，常用于实时通知、进度推送、AI 流式输出等场景。
-创建后即可连续写入事件帧，每次写入自动 `Flush` 保证事件实时到达；事件方法返回 error（通常是客户端已断开连接）时应停止推送并退出 Handler。
+### 错误响应
 
 ```go
-func streamHandler(w http.ResponseWriter, r *http.Request) {
-    sse := httpx.NewSSEWriter(w) // 自动设置 text/event-stream 等响应头
-    for i := 0; i < 10; i++ {
-        if err := sse.JSONEvent("ping", map[string]int{"n": i}); err != nil {
-            return // 客户端已断开
-        }
-    }
-}
+httpx.WriteHTTPError(w, status, msg)                       // code = status
+httpx.WriteHTTPErrorCtx(ctx, w, status, msg)               // 带 request_id
+httpx.WriteHTTPErrorWithCode(w, status, code, msg)         // 业务码与 HTTP 码分离
+httpx.WriteHTTPErrorWithCodeCtx(ctx, w, status, code, msg)
 ```
 
-`NewSSEWriter` 自动设置响应头：`Content-Type: text/event-stream`、`Cache-Control: no-cache`、`Connection: keep-alive`，并关闭反向代理缓冲（`X-Accel-Buffering: no`），避免事件被 nginx 等缓冲后延迟推送。
-
-写入方法：
-
-| 方法 | 说明 |
-| ---- | ---- |
-| `NewSSEWriter(w)` | 创建写入器，设置上述 SSE 响应头 |
-| `Event(event, data)` | 写入一条事件帧；`event` 为空表示默认 `message` 事件 |
-| `Data(data)` | 写入默认事件类型（`message`）的数据帧 |
-| `JSONEvent(event, v)` | 将 `v` 序列化为 JSON 后作为事件数据写入（前端 `JSON.parse` 解析） |
-| `Comment(text)` | 写入注释帧（`: ...`），客户端会忽略，常用于心跳保活 |
-| `Retry(ms)` | 告知浏览器断线后的重连间隔（毫秒） |
-| `Flush()` | 手动刷新缓冲到客户端（底层不支持 `http.Flusher` 时为空操作） |
-
-事件帧格式（`Event` / `JSONEvent` 写入）：
-
-```text
-事件帧之间以空行分隔，字段按 SSE 规范编写：
-
-: keep-alive            ← Comment，心跳保活
-
-retry: 3000             ← Retry，断线重连间隔
-
-event: order            ← Event 指定事件类型
-data: {"id":"1"}        ← JSONEvent 写入的 JSON 数据
-
-data: hello world       ← Data / Event 的事件内容
-```
-
-- 多行文本会自动拆成多行 `data:` 字段，符合 SSE 规范
-- 每次写入自动 `Flush`；客户端断开后 `Write` 返回错误，应据此结束推送（如在 goroutine 中发送需监听 `r.Context().Done()`）
-- `WithTimeout` 中间件已对 SSE 长连接豁免；自定义 ResponseWriter 包装（如 `respw.RecorderWriter`）会透传 `http.Flusher`（见 [respw](./respw.md)），可安全叠加使用
-
-### 重定向
-
-`Redirect` 系列函数基于 `http.Redirect`，自动设置 `Location` 响应头：
-
-```go
-// 指定状态码重定向
-httpx.Redirect(w, r, "/login", http.StatusFound)
-
-// 带 context 的版本
-httpx.RedirectCtx(ctx, w, r, "/login", http.StatusFound)
-
-// 便捷封装：临时重定向（302 Found）
-httpx.RedirectTemporary(w, r, "/temporary")
-httpx.RedirectTemporaryCtx(ctx, w, r, "/temporary")
-
-// 便捷封装：永久重定向（301 Moved Permanently）
-httpx.RedirectPermanent(w, r, "/permanent")
-httpx.RedirectPermanentCtx(ctx, w, r, "/permanent")
-```
-
-| 函数 | 状态码 | 说明 |
-| ---- | ------ | ---- |
-| `Redirect(w, r, url, status)` | 自定义 | 指定状态码重定向 |
-| `RedirectTemporary(w, r, url)` | 302 | 临时重定向 |
-| `RedirectPermanent(w, r, url)` | 301 | 永久重定向 |
-
-> 注意：`Redirect` 系列函数需要 `*http.Request` 参数，因此没有 `OkJSON` 那样的 `w` 单参版本。
-
-### 业务码
-
-| 码 | 常量 | 说明 |
-| ---- | ------ | ------ |
-| 0 | `CodeOK` | 成功 |
-| -1 | `CodeDefaultError` | 默认错误码 |
-| 400 | `CodeBadRequest` | 参数错误 |
-| 401 | `CodeUnauthorized` | 未认证 |
-| 403 | `CodeForbidden` | 无权限 |
-| 404 | `CodeNotFound` | 资源不存在 |
-| 413 | `CodeRequestEntityTooLarge` | 请求体过大 |
-| 500 | `CodeInternalError` | 服务器内部错误 |
-| 503 | `CodeServiceUnavailable` | 服务不可用 |
-| 504 | `CodeTimeout` | 请求超时 |
+业务码常量：`CodeOK = 0`、`MsgOK = "ok"`、`CodeDefaultError = -1`。
 
 ### CodeError
 
 ```go
-// 创建错误
-err := httpx.NewCodeError(httpx.CodeNotFound, "user not found")
-
-// 带原始错误
-err := httpx.NewCodeErrorWithCause(httpx.CodeInternalError, "database error", dbErr)
-
-// 直接传入 OkJSON，自动识别
-httpx.OkJSON(w, err)
-// 输出: {"code":404,"msg":"user not found"}
-
-// 支持 errors.Is / errors.As
-if errors.Is(err, dbErr) {
-    // ...
-}
+httpx.NewCodeError(code, msg)                 // 业务错误
+httpx.NewCodeErrorWithCause(code, msg, err)   // 带根因，可 errors.Is/As
 ```
 
-## JSON 解析
+### SSE 流式响应
 
 ```go
-// 直接解析 JSON body
-var req MyRequest
-if err := httpx.ParseJSON(r, &req); err != nil {
-    // handle error
-}
+sse := httpx.NewSSEWriter(w, r)
+sse.SendEvent("message", map[string]any{"a": 1}) // data: {...}
+sse.SendData(v)        // 序列化后写 data
+sse.Comment("keepalive")
+sse.Retry(3000)        // 断线重连间隔
+sse.Flush()
+```
 
-// 限制 body 大小（防止超大请求）
-if err := httpx.ParseJSONWithLimit(r, &req, 1<<20); err != nil {
-    // handle error
-}
+> `WithTimeout` 对 SSE/WebSocket 长连接豁免。
+
+### 重定向
+
+```go
+httpx.Redirect(w, r, url, http.StatusFound)   // RedirectCtx / RedirectTemporary / RedirectTemporaryCtx
 ```
 
 ## 请求 ID（Request ID）
 
-用于链路追踪与问题排查。`WithRequestID` 中间件从 `X-Request-Id` 请求头读取，不存在则自动生成，注入 context 并回写响应头。
+`WithRequestID` 从 `X-Request-Id` 头读取（缺省自动生成 uuid），注入 context 并回写响应头。下游读取：
 
 ```go
-// 启用中间件（建议放在最前）
-server.Use(httpx.WithRequestID())
+id := httpx.RequestIDFromContext(r.Context())
 ```
 
-`Ctx` 响应函数会自动将 `request_id` 写入响应：
-
-```go
-func handler(w http.ResponseWriter, r *http.Request) {
-    // context 由中间件注入了 request_id
-    httpx.OkJSONCtx(r.Context(), w, user)              // {"code":0,"msg":"ok","data":...,"request_id":"a1b2c3d4"}
-    httpx.OkXMLCtx(r.Context(), w, user)               // XML 同样携带
-    httpx.WriteHTTPErrorCtx(r.Context(), w, 404, "not found") // {"code":404,"msg":"not found","request_id":"..."}
-}
-```
-
-### 手动注入
-
-非 HTTP 场景可手动注入/提取：
-
-```go
-ctx := httpx.ContextWithRequestID(context.Background(), "req-123")
-id := httpx.RequestIDFromContext(ctx) // "req-123"
-```
-
-> 注意：
-> - 无 `request_id` 时 `RequestID` 字段自动省略（`omitempty`），不改变原有输出结构
-> - 只有智能包装函数（`OkJSONCtx` / `OkXMLCtx` / `WriteHTTPErrorCtx`）会注入；低级函数 `WriteJSONCtx` / `WriteXMLCtx` 不做包装，传什么写什么
-> - 中间件回写 `X-Request-Id` 响应头，客户端可拿到本次请求的 ID 用于上报排查
+> request_id 的 context key 与存取实现统一在 `httpx/middleware`（`middleware.ContextWithRequestID`/`RequestIDFromContext`），httpx `ctx.go` 委托转发；配合 `OkJSONCtx`/`WriteHTTPErrorCtx` 会自动出现在响应 `request_id` 字段，配合 `logger.XxxCtx` 自动出现在日志。
 
 ## 路由与服务器
 
-基于 `http.ServeMux` 实现，原生支持方法匹配、路径参数和通配路径。
-不内置任何中间件，仅提供路由注册、前缀分组、中间件链和优雅关闭。
-
-### 基本示例
+### 服务器创建
 
 ```go
-package main
-
-import (
-    "net/http"
-
-    "github.com/chihqiang/infra-go/httpx"
-)
-
-func main() {
-    server := httpx.NewServer(httpx.ServerConfig{
-        Host: "0.0.0.0",
-        Port: 8080,
-    })
-
-    server.AddRoute(httpx.Route{
-        Method: "GET",
-        Path:   "/health",
-        Handler: func(w http.ResponseWriter, r *http.Request) {
-            httpx.OkJSON(w, "ok")
-        },
-    })
-
-    server.Start() // 阻塞，支持优雅关闭（SIGINT/SIGTERM/SIGHUP）
-}
+server := httpx.NewServer(httpx.ServerConfig{Host: "0.0.0.0", Port: 8080})
 ```
 
-### 闭包注册路由
-
-`RunOption` 本身就是 `func(*Server)`，可直接传入闭包，在构造时执行任意 Server 方法：
+### Route 与注册
 
 ```go
-server := httpx.NewServer(httpx.ServerConfig{
-    Host: "0.0.0.0",
-    Port: 8080,
-}, func(s *httpx.Server) {
-    s.Use(loggingMiddleware)
-
-    api := s.Group("/api/v1", authMiddleware)
-    api.AddRoute(httpx.Route{Method: "GET", Path: "/users", Handler: listUsers})
-    api.AddRoute(httpx.Route{Method: "POST", Path: "/users", Handler: createUser})
-
-    s.AddRoute(httpx.Route{Method: "GET", Path: "/health", Handler: healthCheck})
-})
-
-server.Start()
-```
-
-### Route
-
-```go
-type Route struct {
-    Method  string           // HTTP 方法：GET/POST/PUT/DELETE/...
-    Path    string           // 路径，支持 {id} 参数和 {path...} 通配
-    Handler http.HandlerFunc // 处理函数
-}
-```
-
-### 路由注册
-
-```go
-// 单个路由
-server.AddRoute(httpx.Route{
-    Method: "POST", Path: "/users", Handler: createUser,
-})
-
-// 批量注册（共享前缀和中间件）
-server.AddRoutes([]httpx.Route{
-    {Method: "GET",    Path: "/users",     Handler: listUsers},
-    {Method: "GET",    Path: "/users/{id}", Handler: getUser},
-    {Method: "DELETE", Path: "/users/{id}", Handler: deleteUser},
-}, httpx.WithPrefix("/api/v1"))
-```
-
-### 路由前缀
-
-```go
-server.AddRoutes(routes, httpx.WithPrefix("/api/v1"))
-// /users → /api/v1/users
-// /users/{id} → /api/v1/users/{id}
-```
-
-### 中间件
-
-中间件类型：`func(http.HandlerFunc) http.HandlerFunc`
-
-执行顺序：**全局中间件 → 组中间件 → handler**
-
-```go
-// 日志中间件
-func logging(next http.HandlerFunc) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        start := time.Now()
-        next(w, r)
-        log.Printf("%s %s %v", r.Method, r.URL.Path, time.Since(start))
-    }
-}
-
-// 全局中间件（对所有路由生效）
-server.Use(logging)
-
-// 组中间件（仅对这组路由生效）
-server.AddRoutes(adminRoutes,
-    httpx.WithPrefix("/admin"),
-    httpx.WithMiddleware(authMiddleware),
-    httpx.WithMiddleware(rateLimitMiddleware),
-)
-
-// 多个中间件一起添加
-server.AddRoutes(routes, httpx.WithMiddlewares(mw1, mw2, mw3))
-```
-
-#### 中间件短路
-
-中间件不调用 `next` 即中断链路：
-
-```go
-func auth(next http.HandlerFunc) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        if r.Header.Get("Authorization") == "" {
-            httpx.WriteHTTPError(w, http.StatusUnauthorized, "unauthorized")
-            return // 不调用 next，handler 不会执行
-        }
-        next(w, r)
-    }
-}
-```
-
-#### 独立包装函数
-
-对特定路由单独包装中间件：
-
-```go
-server.AddRoutes(httpx.ApplyMiddleware(authMiddleware,
-    httpx.Route{Method: "GET", Path: "/profile", Handler: getProfile},
-    httpx.Route{Method: "PUT", Path: "/profile", Handler: updateProfile},
-))
-
-// 多个中间件
-server.AddRoutes(httpx.ApplyMiddlewares([]httpx.Middleware{authMW, logMW},
-    httpx.Route{Method: "GET", Path: "/settings", Handler: getSettings},
-))
-```
-
-#### 内置中间件
-
-httpx 提供两个常用中间件，直接开箱即用：
-
-##### WithRecovery
-
-捕获 handler 中的 panic，记录堆栈并返回 500，防止进程崩溃：
-
-```go
-server.Use(httpx.WithRecovery())
-```
-
-panic 时会通过 `logger` 包记录错误日志（含 method、path、remote、stack），并返回统一格式的 500 响应。
-
-##### WithLogger
-
-记录每个请求的方法、路径、状态码、响应字节数和耗时，基于 `logger` 包的结构化日志：
-
-```go
-server.Use(httpx.WithLogger())
-```
-
-`WithLogger(skipPaths ...string)` 支持传入不记录日志的路径列表，常用于健康检查、心跳等高频探活接口。路径匹配由 `match` 包统一提供（`match.NewPathMatcher`），支持三种形式：
-
-- 精确匹配：如 `/healthz`、`/metrics`
-- 前缀通配：以 `*` 结尾（可跨目录），如 `/internal/*` 命中 `/internal/a/b`
-- glob 通配：`*` 不跨目录，如 `/api/*/x`
-
-```go
-// 记录所有请求
-server.Use(httpx.WithLogger())
-
-// 精确跳过：/healthz、/metrics 不记录访问日志
-server.Use(httpx.WithLogger("/healthz", "/metrics"))
-
-// 前缀通配：/internal/ 下的所有路径（含子路径）不记录
-server.Use(httpx.WithLogger("/internal/*"))
-```
-
-被跳过的路径业务照常处理，仅不写访问日志。输出示例：
-
-```json
-{"level":"INFO","msg":"http request","method":"GET","path":"/api/users","status":200,"bytes":42,"latency":"1.2ms"}
-```
-
-配合 `trace` 包使用时，日志会自动带上 `trace_id`、`span_id`（logger 的 Ctx 提取器自动提取）：
-
-```go
-import _ "github.com/chihqiang/infra-go/trace" // 自动注册 trace 提取器
-
-server.Use(httpx.WithRecovery(), httpx.WithLogger())
-```
-
-##### WithCors
-
-设置 CORS 响应头，处理跨域请求和 OPTIONS 预检：
-
-```go
-// 允许所有来源
-server.Use(httpx.WithCors("*"))
-
-// 允许指定来源
-server.Use(httpx.WithCors("https://example.com", "https://app.example.com"))
-```
-
-##### WithBreaker
-
-熔断保护，防止下游故障级联拖垮服务（基于 `breaker` 模块的 Google SRE 算法）：
-
-```go
-server.Use(httpx.WithBreaker())
-```
-
-熔断打开时请求立即返回 503，不再等待慢速下游；请求成功（<500）计入成功，失败（>=500）计入失败，驱动熔断状态自动流转。
-
-##### WithRouteBreaker
-
-按路由隔离的熔断保护，每个路由（`METHOD:path`）拥有独立的熔断器，统计互不影响，避免单个路由的失败拉低其他路由的通过率：
-
-```go
-server.Use(httpx.WithRouteBreaker())
-```
-
-熔断器通过 `breaker.GetBreaker` 按名称缓存，同名路由共享同一实例。适用于不同路由下游依赖差异较大的场景。
-
-##### WithTimeout
-
-请求超时控制，每个请求最多执行指定时长，超时返回 503；WebSocket / SSE 长连接不受限制：
-
-```go
-server.Use(httpx.WithTimeout(5 * time.Second))
-```
-
-`duration <= 0` 时中间件不生效。客户端主动断开返回非标准状态码 499（nginx 约定）。
-
-##### WithMaxBytes
-
-限制请求体大小，超过限制返回 413；对分块传输请求在读取时限制：
-
-```go
-server.Use(httpx.WithMaxBytes(1 << 20)) // 限制 1MB
-```
-
-`n <= 0` 表示不限制。
-
-##### WithGunzip
-
-自动解压 gzip 请求体（`Content-Encoding: gzip`），解压失败返回 400：
-
-```go
-server.Use(httpx.WithGunzip())
-```
-
-##### WithMaxConns
-
-限制同时处理的请求数，防止连接耗尽；超限返回 503：
-
-```go
-server.Use(httpx.WithMaxConns(1000))
-```
-
-`n <= 0` 表示不限制。
-
-##### WithCryption
-
-AES-GCM 请求/响应加密中间件：请求体为 base64 编码的 AES-GCM 密文（`nonce || ciphertext`），解密后交给 handler；handler 的响应会被加密后返回：
-
-```go
-// 密钥必须为 16/24/32 字节（AES-128/192/256）
-server.Use(httpx.WithCryption([]byte("0123456789abcdef")))
-```
-
-AES-GCM 是认证加密（AEAD），同时保证机密性与完整性（防篡改），nonce 每次随机生成。
-
-`WithCryption(key, skipPaths ...string)` 支持传入不进行请求/响应加解密的路径列表，命中路径以明文透传（常用于回调、静态资源等无法加密的场景），匹配方式与 `WithLogger` 一致（精确匹配、以 `*` 结尾的前缀通配、glob 通配，基于 `match` 包）：
-
-```go
-// 全部接口加解密
-server.Use(httpx.WithCryption([]byte("0123456789abcdef")))
-
-// 精确跳过：/callback 明文透传
-server.Use(httpx.WithCryption([]byte("0123456789abcdef"), "/callback"))
-
-// 前缀通配：/public/ 下的路径明文透传
-server.Use(httpx.WithCryption([]byte("0123456789abcdef"), "/public/*"))
-```
-
-> **大响应保护**：响应超过 1MB 时自动回退为明文输出（不加密），并记录告警日志，避免大响应导致内存暴涨。
-
-##### WithContentSecurity
-
-内容安全校验中间件（防篡改 + 防重放）。客户端需在 `X-Content-Security` 头携带签名 `time=<unix秒>; signature=<base64 HMAC-SHA256>`，签名内容为 `timestamp\nmethod\npath\nquery\nbodySha256Hex`：
-
-```go
-server.Use(httpx.WithContentSecurity([]byte("shared-secret"), 5*time.Minute))
-```
-
-- 签名无效 → 401
-- 时间戳超出容差（防重放）→ 403
-- 校验通过 → 放行
-
-##### 链路追踪
-
-OpenTelemetry 链路追踪中间件由 `trace` 包提供（`trace.HTTPMiddleware()`，返回标准 `func(http.Handler) http.Handler`），从请求头提取上游 span 上下文（W3C traceparent），为每个请求创建服务端 span，并注入 context 供下游 `logger` / `orm` / `redisx` 等模块自动关联 `trace_id`：
-
-```go
-// 包装为 httpx.Middleware 使用
-server.Use(func(next http.HandlerFunc) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        trace.HTTPMiddleware()(http.HandlerFunc(next)).ServeHTTP(w, r)
-    }
-})
-```
-
-### 路由组（Group）
-
-链式创建路由组，支持嵌套：
-
-```go
-// 方式一：RouteOption
-server.AddRoutes([]httpx.Route{
-    {Method: "GET", Path: "/users", Handler: listUsers},
-}, httpx.WithPrefix("/api/v1"), httpx.WithMiddleware(authMW))
-
-// 方式二：Group（更简洁）
-api := server.Group("/api/v1", authMW)
-api.AddRoute(httpx.Route{Method: "GET", Path: "/users", Handler: listUsers})
-api.AddRoute(httpx.Route{Method: "POST", Path: "/users", Handler: createUser})
-
-// 嵌套子组（继承父组前缀和中间件）
-v1 := api.Group("/v1") // 前缀 /api/v1/v1，中间件 authMW
-v2 := api.Group("/v2", rateLimitMW) // 前缀 /api/v1/v2，中间件 authMW → rateLimitMW
+server.AddRoute(httpx.Route{Method: "GET", Path: "/users", Handler: handler})
+server.AddRoutes([]httpx.Route{{...}, ...}, httpx.WithPrefix("/api/v1"))
+server.Routes() // 返回全部路由副本
 ```
 
 ### 路径参数
 
-基于 `http.ServeMux` 原生路径参数，直接使用 `r.PathValue`：
+Go 1.22 路由模式 `{param}`：
 
 ```go
-server.AddRoute(httpx.Route{
-    Method: "GET",
-    Path:   "/users/{id}",
-    Handler: func(w http.ResponseWriter, r *http.Request) {
-        id := r.PathValue("id") // "42"
-        httpx.OkJSON(w, id)
-    },
-})
-
-// 通配路径
-server.AddRoute(httpx.Route{
-    Method: "GET",
-    Path:   "/files/{path...}",
-    Handler: func(w http.ResponseWriter, r *http.Request) {
-        p := r.PathValue("path") // "dir/sub/file.txt"
-        httpx.OkJSON(w, p)
-    },
-})
+server.AddRoute(httpx.Route{Method: "GET", Path: "/users/{id}", Handler: func(w http.ResponseWriter, r *http.Request) {
+    id := r.PathValue("id")
+    httpx.OkJSON(w, id)
+}})
 ```
 
-#### 路径参数绑定
+### 中间件
 
 ```go
-server.AddRoute(httpx.Route{
-    Method: "GET",
-    Path:   "/users/{id}/posts/{postID}",
-    Handler: func(w http.ResponseWriter, r *http.Request) {
-        var req struct {
-            ID     int `uri:"id" binding:"required"`
-            PostID int `uri:"postID" binding:"required"`
-        }
-        // 收集路径参数，绑定+验证，出错写入 400 响应
-        params := map[string]string{
-            "id":     r.PathValue("id"),
-            "postID": r.PathValue("postID"),
-        }
-        if err := httpx.MustBindURI(w, params, &req); err != nil {
-            return
-        }
-        httpx.OkJSON(w, req)
-    },
-})
+type Middleware func(http.HandlerFunc) http.HandlerFunc
+
+server.Use(mw1, mw2)              // 全局中间件（对所有路由生效）
+server.AddRoutes(rs, httpx.WithMiddleware(authMW)) // 单路由组中间件
+server.AddRoutes(httpx.ApplyMiddleware(authMW, routes...)) // 直接包装路由
 ```
 
-### 自定义 404 响应
+执行顺序：全局中间件（`Use`）→ 组中间件 → 路由 handler。
 
-`SetNotFoundHandler` 用于自定义 404 响应，替代默认的 `404 page not found`：
+### 路由组（Group）
 
 ```go
-// 自定义 404 响应：所有未被路由匹配的请求都会走这里
+api := server.Group("/api", authMW)
+v1 := api.Group("/v1", logMW) // 前缀 /api/v1，中间件叠加
+v1.AddRoute(httpx.Route{...})
+```
+
+### 自定义 404
+
+```go
 server.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
-    httpx.WriteHTTPError(w, http.StatusNotFound, "resource not found: "+r.URL.Path)
+    httpx.OkJSON(w, "not found")
 })
 ```
-
-执行顺序：
-
-```text
-mux → 404 拦截 → 全局中间件
-```
-
-- 404 拦截紧贴 mux，只对真正未匹配的请求生效，不影响 405 Method Not Allowed 和已注册路由
 
 ### panic 恢复
 
-路由或中间件抛出 panic 时，使用内置 `WithRecovery` 中间件即可捕获并返回 500，避免连接被 net/http 直接关闭：
-
-```go
-server.Use(httpx.WithRecovery())
-```
-
-### Server 配置
-
-`ServerConfig` 使用 `json` 标签声明默认值和约束，兼容 `conf` 包从配置文件加载：
-
-```go
-type ServerConfig struct {
-    Host            string        `json:",default=0.0.0.0"`
-    Port            int           `json:",default=8080,range=[1:65535]"`
-    CertFile        string        `json:",optional"`
-    KeyFile         string        `json:",optional"`
-    ReadTimeout     time.Duration `json:",default=10s"`
-    WriteTimeout    time.Duration `json:",default=10s"`
-    IdleTimeout     time.Duration `json:",default=120s"`
-    MaxHeaderBytes  int           `json:",default=1048576"`
-    ShutdownTimeout time.Duration `json:",default=10s"`
-}
-```
-
-代码中使用（零值字段自动填充默认值）：
-
-```go
-server := httpx.NewServer(httpx.ServerConfig{
-    Host:     "0.0.0.0",
-    Port:     8080,
-    CertFile: "cert.pem",  // TLS 证书（可选，设置后启用 HTTPS）
-    KeyFile:  "key.pem",   // TLS 私钥（可选）
-}, httpx.WithReadTimeout(30*time.Second))
-```
-
-从配置文件加载（配合 `conf` 包）：
-
-```go
-var cfg httpx.ServerConfig
-conf.MustLoad("config.yaml", &cfg)
-server := httpx.NewServer(cfg)
-```
-
-```yaml
-# config.yaml
-host: 0.0.0.0
-port: 8080
-readTimeout: 30s
-writeTimeout: 30s
-```
-
-#### RunOption（编程式覆盖）
-
-RunOption 优先级高于配置文件，用于代码中动态覆盖：
-
-| 选项 | 说明 |
-| ------ | ------ |
-| `WithReadTimeout(d)` | 读超时 |
-| `WithWriteTimeout(d)` | 写超时 |
-| `WithIdleTimeout(d)` | 空闲连接超时 |
-| `WithMaxHeaderBytes(n)` | 最大请求头字节数 |
-| `WithTLSConfig(cfg)` | TLS 配置 |
-| `WithShutdownTimeout(d)` | 优雅关闭超时 |
+`WithRecovery` 捕获 handler panic，记录堆栈并返回 500。
 
 ### 启动与关闭
 
 ```go
-// 启动（阻塞，收到 SIGINT/SIGTERM/SIGHUP 自动优雅关闭）
-// 收到信号时记录日志，Shutdown 失败时记录错误日志
-if err := server.Start(); err != nil {
-    log.Fatal(err)
-}
-
-// 手动关闭
-if err := server.Shutdown(); err != nil {
-    log.Printf("shutdown error: %v", err)
-}
+server.Start()    // 阻塞，SIGINT/SIGTERM/SIGHUP 优雅关闭
+server.Shutdown() // 手动关闭
 ```
 
-### 路由查看
+## 中间件
+
+httpx 中间件分两层：
+
+1. **`httpx/middleware` 子包（实现层）**：一个中间件一个文件、一个类型；`NewXxx(...)` 构造（构造时完成参数预计算），`(m *Xxx) Middleware()` 返回标准 `func(http.Handler) http.Handler`。不依赖 httpx，可被 gin/echo/标准库复用。错误响应经 `middleware.SetErrorHandler` 注入（httpx 主包 init 注入统一 JSON）。
+2. **`httpx` 主包（适配层）**：`WithXxx(...)` 便捷函数把子包标准中间件适配为 `httpx.Middleware` 供 `server.Use` 注册，方法签名稳定。
+
+### 内置中间件清单（httpx.With*）
+
+| 中间件 | 用途 |
+|--------|------|
+| `WithCors(origins...)` | CORS；`"*"` 全放行；同源不设头；未授权 403；OPTIONS 204 |
+| `WithRecovery()` | panic 恢复 → 500 + 堆栈日志 |
+| `WithRequestID()` | request_id 注入 context / 回写响应头 |
+| `WithTracing(ignorePaths...)` | 链路追踪（服务端 span，默认全局 TracerProvider） |
+| `WithLogger(skipPaths...)` | 访问日志（method/path/status/bytes/latency） |
+| `WithBreaker()` | 全局限流熔断（全局单一熔断器） |
+| `WithRouteBreaker()` | 按路由 `METHOD:path` 隔离熔断 |
+| `WithTimeout(d)` | 请求超时（WS/SSE 豁免；客户端断开 499） |
+| `WithMaxBytes(n)` | 请求体大小限制（413） |
+| `WithGunzip()` | gzip 请求体自动解压 |
+| `WithMaxConns(n)` | 并发连接数限制（503） |
+| `WithRateLimit(limiter, skipPaths...)` | 限流（429；limiter 来自 ratelimit 包，见 [ratelimit](./ratelimit.md)） |
+| `WithJWT(j, getToken)` | JWT 认证（转发 `jwt.AuthMiddleware`，见 [jwt](./jwt.md)） |
+| `WithCryption(key, skipPaths...)` | 请求/响应 AES-GCM 加解密 |
+| `WithContentSecurity(key, tolerance)` | 内容安全校验（防篡改 + 防重放） |
+
+用法：
 
 ```go
-// 打印已注册路由
-server.PrintRoutes()
-// 输出：
-// DELETE  /admin/users/{id}   --> main.deleteUser
-// GET     /api/v1/users       --> main.listUsers
-// GET     /api/v1/users/{id}  --> main.getUser
-// GET     /health             --> main.health
-// POST    /api/v1/users       --> main.createUser
-//
-// 5 routes registered
-
-// 获取已注册路由
-routes := server.Routes()
-for _, r := range routes {
-    fmt.Printf("%s %s\n", r.Method, r.Path)
-}
+server.Use(httpx.WithRecovery(), httpx.WithRequestID(), httpx.WithLogger("/healthz"))
+server.Use(httpx.WithCors("*"))
+server.Use(httpx.WithTracing("/health*", "/metrics/*"))   // 放最前，日志带 trace_id
+server.Use(httpx.WithRateLimit(ratelimit.NewTokenBucket(100, 200)))
+server.Use(httpx.WithJWT(j, func(r *http.Request) string {
+    return strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+}))
+server.Use(httpx.WithTimeout(5 * time.Second))
 ```
 
-## 目录结构
-
-```text
-httpx/
-├── bind.go              — 公开 API：Bind*, MustBind*, Validate, ParseJSON*
-├── binding.go           — 绑定器实现：接口定义、MIME 常量、内置绑定器、反射映射、验证器
-├── request.go           — 便捷单值读取：泛型 QueryValue/PathValue/HeaderValue（复用 cast.ToE）
-├── response.go          — 公开 API：Response[T], CodeError, OkJSON/OkXML/OkHTML/SSEWriter, Write*, Redirect*
-├── server.go            — 公开 API：Route, Middleware, Server, Group, WithPrefix, Start/Shutdown, SetNotFoundHandler
-├── route.go             — 独立路由函数：PprofRoutes
-├── middleware.go        — 内置中间件：WithRecovery, WithLogger, WithCors, WithRequestID, WithBreaker, WithTimeout, WithMaxBytes, WithGunzip, WithMaxConns, WithCryption, WithContentSecurity
-├── ctx.go               — context 工具：ContextWithRequestID / RequestIDFromContext
-├── bind_test.go         — 绑定测试（Bind*/MustBind*/ParseJSON）
-├── binding_test.go      — 绑定器选择测试（Default / BindBody）
-├── ctx_test.go          — context 工具测试（request_id）
-├── request_test.go      — 单值读取测试（QueryValue/PathValue/HeaderValue）
-├── response_test.go     — 响应测试（JSON/XML/HTML/SSE/CodeError/重定向）
-├── middleware_test.go   — 中间件测试（含加密/内容安全）
-├── server_test.go       — 服务器测试（路由/中间件链/优雅关闭）
-└── benchmark_test.go    — 基准测试
-```
-
-> 绑定逻辑全部合并在 `binding.go` 单文件中，不再使用子包。布尔和 Duration 类型转换使用 `cast` 包，整数和浮点类型保留 `strconv` 以支持位宽溢出检查。AES-GCM 加密与 HMAC 签名/校验由 `hash` 包提供（见 [hash](./hash.md)）。
->
-> 自定义 ResponseWriter 已统一抽离到 `respw` 包（一类一文件）：`RecorderWriter` 捕获状态码/字节数、`TimeoutWriter` 超时缓冲丢弃、`CryptionWriter` 响应加密缓冲，均透传 Flush/Hijack/Push（见 [respw](./respw.md)）。
-
-## 自定义验证器
+### 直接使用 httpx/middleware 子包（其它框架 / 标准库）
 
 ```go
-import "github.com/chihqiang/infra-go/httpx"
+import "github.com/chihqiang/infra-go/httpx/middleware"
 
-// 实现 StructValidator 接口
+// 标准 net/http
+handler := middleware.NewRecovery().Middleware()(
+    middleware.NewRequestID().Middleware()(mux),
+)
+http.ListenAndServe(":8080", handler)
+
+// gin：用 WrapH 接入
+router.Use(gin.WrapH(middleware.NewCORS("*").Middleware()(router)))
+```
+
+错误响应机制：`middleware.WriteError(ctx, w, status, msg)`（导出）。httpx 主包被 import 时输出统一 JSON（携带 request_id）；否则默认 `http.Error` 纯文本。gin/echo 等可用 `middleware.SetErrorHandler` 注入自己的错误渲染。
+
+### 自定义 / 第三方标准中间件接入 httpx
+
+`httpx.AsMiddleware(mw)` 把任意标准 `func(http.Handler) http.Handler` 中间件适配为 `httpx.Middleware`：
+
+```go
+server.Use(httpx.AsMiddleware(myStdMiddleware))                            // 自定义/第三方
+server.Use(httpx.AsMiddleware(middleware.NewCORS("*").Middleware()))       // 子包 OO 形态
+```
+
+### skipPaths / ignorePaths 匹配
+
+`WithLogger` / `WithRateLimit` / `WithCryption` 的 `skipPaths`、`WithTracing` 的 `ignorePaths` 使用 `httpx/match` 子包的 `PathMatcher`，支持精确匹配（`/health`）、前缀通配（`/health*`，跨目录）、glob（`/api/*/x`，不跨目录），见 [match](./match.md)。
+
+## 内置路由：PprofRoutes
+
+```go
+server.AddRoutes(httpx.PprofRoutes(""))                 // 默认前缀 /debug/pprof
+server.AddRoutes(httpx.PprofRoutes(""), httpx.WithMiddleware(authMW)) // 生产建议加认证
+```
+
+## Server 配置
+
+```go
+server := httpx.NewServer(httpx.ServerConfig{
+    Host: "0.0.0.0", Port: 8080,
+    ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second,
+    IdleTimeout: 120 * time.Second, MaxHeaderBytes: 1 << 20,
+    ShutdownTimeout: 10 * time.Second,
+})
+```
+
+或 `RunOption` 编程式覆盖：
+
+```go
+httpx.NewServer(httpx.ServerConfig{...},
+    httpx.WithReadTimeout(10*time.Second),
+    httpx.WithWriteTimeout(10*time.Second),
+    httpx.WithIdleTimeout(120*time.Second),
+    httpx.WithMaxHeaderBytes(1<<20),
+)
+```
+
+## 附录
+
+### 自定义校验器
+
+```go
+import "github.com/chihqiang/infra-go/httpx/binding"
+
 type myValidator struct{}
 
-func (v *myValidator) ValidateStruct(obj any) error {
-    // 自定义验证逻辑
-    return nil
-}
+func (v *myValidator) ValidateStruct(obj any) error { return nil }
+func (v *myValidator) Engine() any                  { return nil }
 
-func (v *myValidator) Engine() any {
-    return nil
-}
-
-// 替换全局验证器
-httpx.Validator = &myValidator{}
+binding.SetValidateFn((&myValidator{}).ValidateStruct) // 接入自定义校验
+binding.SetValidateFn(nil)                             // 恢复默认（go-playground/validator）
 ```
 
-## HTTP 中间件示例
-
-本包不内置 HTTP 中间件，但可以很方便地自行封装：
+### 绑定器直接使用（httpx/binding）
 
 ```go
-// BindJSONMiddleware 自动绑定 JSON 请求体
-func BindJSONMiddleware(handler func(http.ResponseWriter, *http.Request, *MyRequest)) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        var req MyRequest
-        if err := httpx.MustBindJSON(w, r, &req); err != nil {
-            return // MustBindJSON 已自动写入错误响应
+import "github.com/chihqiang/infra-go/httpx/binding"
+
+var obj MyReq
+_ = binding.JSON.BindBody([]byte(`{...}`), &obj)   // 从原始字节绑定
+b := binding.Default(r.Method, r.Header.Get("Content-Type")) // 绑定器选择
+```
+
+### 常见中间件封装示例
+
+```go
+// 封装「绑定 + 校验 + 权限」的处理器（供路由挂载）
+func authzMW(roles ...string) httpx.Middleware {
+    return func(next http.HandlerFunc) http.HandlerFunc {
+        return func(w http.ResponseWriter, r *http.Request) {
+            claims := jwt.ClaimsFromContext(r.Context())
+            role, _ := claims[jwt.ClaimKeyRole].(string)
+            if !slices.Contains(roles, role) {
+                httpx.WriteHTTPErrorCtx(r.Context(), w, http.StatusForbidden, "forbidden")
+                return
+            }
+            next(w, r)
         }
-        handler(w, r, &req)
     }
 }
 ```

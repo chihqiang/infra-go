@@ -13,13 +13,13 @@ Go 项目底层基础设施通用封装库，整合存储、日志、配置、�
 | [orm](./skills/infra-go-usage/references/orm.md) | ORM 封装，基于 gorm，支持 MySQL/PostgreSQL/SQLite |
 | [redisx](./skills/infra-go-usage/references/redisx.md) | Redis 客户端封装，连接池、健康检查、分布式锁 |
 | [cache](./skills/infra-go-usage/references/cache.md) | 统一缓存接口，内存（LRU 淘汰、命中率统计）+ Redis（防击穿/防穿透）两种实现 |
-| [httpx](./skills/infra-go-usage/references/httpx.md) | HTTP 工具，请求参数绑定、统一泛型响应、路由注册、中间件链（熔断/超时/限流/加密/降载等）、优雅关闭 |
-| [ratelimit](./skills/infra-go-usage/references/ratelimit.md) | 限流器，令牌桶/滑动窗口，内存 + Redis 双后端 |
+| [httpx](./skills/infra-go-usage/references/httpx.md) | HTTP 工具，请求参数绑定、统一泛型响应、路由注册、优雅关闭。内置中间件：CORS/Recovery/RequestID/链路追踪/访问日志/熔断/超时/请求体限制/gzip/并发数限制/限流/JWT 认证/加解密/内容安全。核心按子包拆分：`binding`（绑定实现）、`middleware`（通用中间件，标准 `func(http.Handler) http.Handler`，可被 gin/echo 复用）、`match`（路径匹配）、`respw`（ResponseWriter 包装） |
+| [ratelimit](./skills/infra-go-usage/references/ratelimit.md) | 限流器，令牌桶/滑动窗口，内存 + Redis 双后端。HTTP 限流中间件统一为 `httpx.WithRateLimit`（实现见 `httpx/middleware` 子包） |
 | [breaker](./skills/infra-go-usage/references/breaker.md) | 熔断器，Google SRE 算法，快速失败、降级、防雪崩 |
 | [retry](./skills/infra-go-usage/references/retry.md) | 重试机制，指数退避、固定延迟、抖动 |
-| [jwt](./skills/infra-go-usage/references/jwt.md) | JWT 签发与解析，支持 HS256/HS384/HS512（HMAC） |
+| [jwt](./skills/infra-go-usage/references/jwt.md) | JWT 签发与解析，支持 HS256/HS384/HS512（HMAC）；认证中间件 `AuthMiddleware` / `httpx.WithJWT`，验证后注入业务 claims 到 context |
 | [hash](./skills/infra-go-usage/references/hash.md) | 哈希加密，MD5/SHA/Bcrypt/HMAC，AES-GCM 加密，HMAC 签名/校验 |
-| [trace](./skills/infra-go-usage/references/trace.md) | 链路追踪，基于 OpenTelemetry |
+| [trace](./skills/infra-go-usage/references/trace.md) | 链路追踪，基于 OpenTelemetry：agent / span 管理 / gRPC·HTTP 头传播 / 属性封装。HTTP 服务端埋点统一为 `httpx.WithTracing` |
 | [mapping](./skills/infra-go-usage/references/mapping.md) | map → struct 反序列化，struct tag 解析引擎 |
 | [cast](./skills/infra-go-usage/references/cast.md) | 类型安全转换，支持基本类型/时间/切片/泛型 |
 | [syncx](./skills/infra-go-usage/references/syncx.md) | 并发工具，SingleFlight/ConcurrentMap/Semaphore |

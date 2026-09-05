@@ -458,6 +458,24 @@ func TestNew_UnsupportedDriver(t *testing.T) {
 	assert.Contains(t, err.Error(), "supported: local, oss, cos, kodo")
 }
 
+func TestNew_Local(t *testing.T) {
+	s, err := New(Config{
+		Driver: DriverLocal,
+		Local:  &LocalConfig{RootDir: t.TempDir()},
+	})
+	require.NoError(t, err)
+	assert.NotNil(t, s)
+
+	_, ok := s.(*localStorage)
+	assert.True(t, ok)
+}
+
+func TestNew_LocalNilConfig(t *testing.T) {
+	_, err := New(Config{Driver: DriverLocal})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "local config is nil")
+}
+
 func TestNew_EmptyDriver(t *testing.T) {
 	_, err := New(Config{})
 	require.Error(t, err)

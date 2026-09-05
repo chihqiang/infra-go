@@ -1,9 +1,9 @@
-# match
+# httpx/match
 
-轻量路径/模式匹配器，供各 HTTP 中间件复用同一套「忽略/跳过规则」，避免各自重复实现（如 `httpx.WithLogger` / `httpx.WithCryption` 的 `skipPaths`、`trace.HTTPMiddleware` 的 `ignorePaths`）。
+轻量路径匹配器，位于 `httpx/match` 子包，供 `httpx/middleware` 各中间件复用同一套「忽略 / 跳过」规则，避免各自重复实现。
 
 ```go
-import "github.com/chihqiang/infra-go/match"
+import "github.com/chihqiang/infra-go/httpx/match"
 ```
 
 ## PathMatcher
@@ -27,15 +27,14 @@ m.Match("/healthz") // true
 
 空字符串规则会被忽略；未传规则时不命中任何路径。
 
-### 应用场景
+## 应用场景
 
 ```go
-// httpx：跳过访问日志 / 请求-响应加解密
-server.Use(httpx.WithLogger("/health*", "/metrics/*"))
-server.Use(httpx.WithCryption(key, "/callback", "/public/*"))
-
-// trace：忽略链路追踪
-handler := trace.HTTPMiddleware("/health*", "/metrics/*")(mux)
+// 经 httpx.With* 中间件跳过特定路径（中间件内部已调用 NewPathMatcher，无需直接使用本包）
+server.Use(httpx.WithLogger("/health*", "/metrics/*"))   // 访问日志跳过探活
+server.Use(httpx.WithCryption(key, "/callback", "/public/*")) // 加解密跳过
+server.Use(httpx.WithRateLimit(limiter, "/healthz"))     // 限流跳过探活
+server.Use(httpx.WithTracing("/health*", "/metrics/*"))  // 链路追踪跳过探活
 ```
 
-各中间件入口通常已接受 `...string` 路径参数并内部调用 `NewPathMatcher`，业务侧无需直接使用本包；如需自定义匹配规则（如网关鉴权白名单）可直接使用 `NewPathMatcher` + `Match`。
+`httpx.With*` 中间件入口通常已接受 `...string` 路径参数并在内部调用 `match.NewPathMatcher`，业务侧无需直接使用本包；如需自定义匹配规则（如网关鉴权白名单）可 `NewPathMatcher` + `Match` 直接使用。

@@ -155,3 +155,85 @@ func TestMustFillAndOverride_Panic(t *testing.T) {
 		MustFillAndOverride(c, Config{})
 	})
 }
+
+// --- 补充：覆盖语义分支 ---
+
+func TestFillAndOverride_OverridesPointer(t *testing.T) {
+	type Config struct {
+		Host string `json:",default=0.0.0.0"`
+	}
+	var c Config
+	// overrides 传指针也应正常解引用
+	err := FillAndOverride(&c, &Config{Host: "1.1.1.1"})
+	assert.NoError(t, err)
+	assert.Equal(t, "1.1.1.1", c.Host)
+}
+
+func TestFillAndOverride_BoolField(t *testing.T) {
+	type Config struct {
+		Verbose bool `json:",optional"`
+	}
+	var c Config
+	// true 覆盖
+	err := FillAndOverride(&c, Config{Verbose: true})
+	assert.NoError(t, err)
+	assert.True(t, c.Verbose)
+
+	// false 视为未设置 → 保留零值
+	var c2 Config
+	err = FillAndOverride(&c2, Config{Verbose: false})
+	assert.NoError(t, err)
+	assert.False(t, c2.Verbose)
+}
+
+func TestFillAndOverride_BoolPointerExplicitFalse(t *testing.T) {
+	type Config struct {
+		Verbose *bool `json:",optional"`
+	}
+	f := false
+	var c Config
+	err := FillAndOverride(&c, Config{Verbose: &f})
+	assert.NoError(t, err)
+	require.NotNil(t, c.Verbose)
+	assert.False(t, *c.Verbose)
+}
+
+func TestFillAndOverride_SliceField(t *testing.T) {
+	type Config struct {
+		Tags []string `json:",optional"`
+	}
+	var c Config
+	// 非空 slice 覆盖
+	err := FillAndOverride(&c, Config{Tags: []string{"a"}})
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"a"}, c.Tags)
+
+	// 空 slice 视为未设置 → 不覆盖（保持 nil）
+	var c2 Config
+	err = FillAndOverride(&c2, Config{Tags: []string{}})
+	assert.NoError(t, err)
+	assert.Nil(t, c2.Tags)
+}
+
+func TestFillAndOverride_MapField(t *testing.T) {
+	type Config struct {
+		Labels map[string]string `json:",optional"`
+	}
+	var c Config
+	// 非空 map 覆盖
+	err := FillAndOverride(&c, Config{Labels: map[string]string{"a": "1"}})
+	assert.NoError(t, err)
+	assert.Equal(t, "1", c.Labels["a"])
+}
+
+func TestFillAndOverride_UnexportedField(t *testing.T) {
+	type Config struct {
+		Host string `json:",default=0.0.0.0"`
+		// unexported 字段应被跳过
+		hidden string
+	}
+	var c Config
+	err := FillAndOverride(&c, Config{})
+	assert.NoError(t, err)
+	assert.Equal(t, "0.0.0.0", c.Host)
+}

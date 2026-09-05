@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // --- parseKeyAndOptions 测试 ---
@@ -168,4 +169,89 @@ func TestIsInRange(t *testing.T) {
 	opts3 := &fieldOptions{Range: &numberRange{left: 0, leftInclude: false, right: 100, rightInclude: true}}
 	assert.False(t, opts3.isInRange(0))
 	assert.True(t, opts3.isInRange(100))
+}
+
+// --- 补充：边界与错误分支 ---
+
+func TestIsInRange_RightExceeded(t *testing.T) {
+	// 右闭区间越界（覆盖 isInRange 的 right 越界分支）
+	opts := &fieldOptions{Range: &numberRange{left: 0, leftInclude: true, right: 100, rightInclude: true}}
+	assert.False(t, opts.isInRange(101))
+}
+
+func TestParseKeyAndOptions_InvalidOption(t *testing.T) {
+	// 任一 option 解析失败应返回错误
+	type S struct {
+		X string `json:"x,range=bad"`
+	}
+	_, _, err := parseKeyAndOptions("json", reflect.TypeOf(S{}).Field(0))
+	assert.Error(t, err)
+}
+
+func TestParseKeyAndOptions_Inherit(t *testing.T) {
+	type S struct {
+		X string `json:"x,inherit"`
+	}
+	_, opts, err := parseKeyAndOptions("json", reflect.TypeOf(S{}).Field(0))
+	assert.NoError(t, err)
+	require.NotNil(t, opts)
+	assert.True(t, opts.Inherit)
+}
+
+func TestParseKeyAndOptions_OptionalDep(t *testing.T) {
+	type S struct {
+		X string `json:"x,optional=Other"`
+	}
+	_, opts, err := parseKeyAndOptions("json", reflect.TypeOf(S{}).Field(0))
+	assert.NoError(t, err)
+	require.NotNil(t, opts)
+	assert.True(t, opts.Optional)
+	assert.Equal(t, "Other", opts.OptionalDep)
+}
+
+func TestParseKeyAndOptions_OptionalInvalid(t *testing.T) {
+	// optional=a=b 多等号报错
+	type S struct {
+		X string `json:"x,optional=a=b"`
+	}
+	_, _, err := parseKeyAndOptions("json", reflect.TypeOf(S{}).Field(0))
+	assert.Error(t, err)
+}
+
+func TestParseKeyAndOptions_OptionDoubleEqual(t *testing.T) {
+	// default=foo=bar 值内含多个等号报错
+	type S struct {
+		X string `json:"x,default=foo=bar"`
+	}
+	_, _, err := parseKeyAndOptions("json", reflect.TypeOf(S{}).Field(0))
+	assert.Error(t, err)
+}
+
+func TestParseOptionsValue_Pipe(t *testing.T) {
+	// 管道分隔
+	type S struct {
+		X string `json:"x,options=a|b|c"`
+	}
+	_, opts, err := parseKeyAndOptions("json", reflect.TypeOf(S{}).Field(0))
+	assert.NoError(t, err)
+	require.NotNil(t, opts)
+	assert.Equal(t, []string{"a", "b", "c"}, opts.Options)
+}
+
+func TestParseNumberRange_MoreErrors(t *testing.T) {
+	for _, input := range []string{"[", "1]", "[:]", "abc:5]", "[1:xyz]"} {
+		_, err := parseNumberRange(input)
+		assert.Error(t, err, "parseNumberRange(%q) should error", input)
+	}
+}
+
+func TestIsRightInclude_Invalid(t *testing.T) {
+	_, err := isRightInclude('x')
+	assert.Error(t, err)
+}
+
+func TestParseSegments_EscapedComma(t *testing.T) {
+	// 转义逗号不分割
+	segs := parseSegments(`default=a\,b,c`)
+	assert.Equal(t, []string{"default=a,b", "c"}, segs)
 }

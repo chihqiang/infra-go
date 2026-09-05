@@ -1,7 +1,8 @@
 // Package match 提供轻量的模式匹配器。
 //
-// 目前提供 HTTP 请求路径匹配器，供 httpx（跳过访问日志 / 请求-响应加解密）、
-// trace（忽略链路追踪）等中间件复用同一套路径忽略规则，避免各自重复实现。
+// 目前提供 HTTP 请求路径匹配器，供 httpx/middleware 各中间件复用同一套
+// 路径忽略规则（如 WithLogger / WithCryption 的 skipPaths、WithTracing 的
+// ignorePaths），避免各自重复实现。
 package match
 
 import (

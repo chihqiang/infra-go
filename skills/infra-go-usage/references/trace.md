@@ -1,17 +1,19 @@
 # trace — 链路追踪
 
-基于 [OpenTelemetry](https://opentelemetry.io) 的链路追踪包，提供简洁的 API 用于在服务间传递和记录链路上下文。
+基于 [OpenTelemetry](https://opentelemetry.io) 的链路追踪包，提供简洁 API 用于在服务间传递与记录链路上下文。
+
+> **HTTP 服务端追踪中间件**已迁至 `httpx/middleware` 子包（`middleware.NewTracing`），并由 httpx 主包 `httpx.WithTracing` 便捷注册（见 [httpx](./httpx.md)）。`trace` 包专注：TracerProvider 装配、span 管理、gRPC/HTTP 头传播与属性封装。
 
 ## 特性
 
 - **多导出器支持**：OTLP gRPC、OTLP HTTP、Zipkin、文件输出
-- **gRPC / HTTP 传播**：链路上下文在 gRPC metadata 和 HTTP header 间自动注入和提取
-- **配置驱动**：Config 通过 `default` 结构体标签定义默认值，遵循 conf 标准
-- **日志集成**：OpenTelemetry 内部错误自动转发到 `logger` 包
+- **gRPC / HTTP 传播**：链路上下文在 gRPC metadata 与 HTTP header 间自动注入/提取
+- **配置驱动**：Config 用 `default` 结构体标签定义默认值，遵循 conf 标准
+- **日志集成**：注册 context 提取器，`logger.XxxCtx` 自动携带 `trace_id`/`span_id`
 - **资源管理**：支持添加自定义资源属性（服务名、环境等）
-- **全局单例**：`StartAgent` 使用 `sync.Once` 确保只初始化一次
+- **全局单例**：`StartAgent` 用 `sync.Once` 确保只初始化一次
 - **采样控制**：可配置采样率（0.0~1.0）
-- **零外部依赖**：封装 `attribute` 和 `trace` 包，外部无需直接导入 OpenTelemetry
+- **零外部依赖**：封装 `attribute` 与 `trace` 包，外部无需直接导入 OpenTelemetry
 
 ## 安装
 
@@ -22,16 +24,9 @@ go get github.com/chihqiang/infra-go/trace
 ## 快速开始
 
 ```go
-package main
-
-import (
-    "context"
-
-    "github.com/chihqiang/infra-go/trace"
-)
+import "github.com/chihqiang/infra-go/trace"
 
 func main() {
-    // 启动链路追踪 agent
     trace.StartAgent(trace.Config{
         Name:     "my-service",
         Endpoint: "localhost:4317", // OTLP gRPC
@@ -40,27 +35,18 @@ func main() {
     })
     defer trace.StopAgent()
 
-    // 创建 span
     ctx, span := trace.StartSpan(context.Background(), "operation-name")
     defer span.End()
 
-    // 在 ctx 中传递链路上下文到下游调用...
-    handleRequest(ctx)
-}
-
-func handleRequest(ctx context.Context) {
-    ctx, span := trace.StartSpan(ctx, "handle-request")
-    defer span.End()
-
-    // trace id 可用于日志关联
     traceID := trace.TraceIDFromContext(ctx)
-    println("trace id:", traceID)
+    // logger.XxxCtx 会自动带 trace_id / span_id（空导入 trace 即注册提取器）
+    logger.InfoCtx(ctx, "handle", logger.String("handler", "main"))
 }
 ```
 
-## 配置
+> HTTP 服务端自动埋点：`httpx.WithTracing()`（在 `WithLogger` 前注册，使访问日志带上 `trace_id`）。
 
-### Config 结构体
+## 配置
 
 ```go
 trace.StartAgent(trace.Config{
@@ -76,10 +62,8 @@ trace.StartAgent(trace.Config{
 })
 ```
 
-### 配置项说明
-
 | 字段 | 类型 | 默认值 | 说明 |
-| ------ | ------ | -------- | ------ |
+|------|------|--------|------|
 | `Name` | `string` | `infra-go` | 服务名称，标识链路来源 |
 | `Endpoint` | `string` | `""` | 导出器地址（file 类型为文件路径） |
 | `Sampler` | `float64` | `1.0` | 采样率，0.0~1.0 |
@@ -90,10 +74,8 @@ trace.StartAgent(trace.Config{
 | `OtlpGrpcSecure` | `bool` | `false` | OTLP gRPC 是否使用 TLS（连接 TLS collector） |
 | `Disabled` | `bool` | `false` | 是否禁用链路追踪 |
 
-### 导出器类型
-
-| 类型 | 说明 | Endpoint 示例 |
-| ------ | ------ | --------------- |
+| 导出器类型 | 说明 | Endpoint 示例 |
+|------|------|---------------|
 | `otlpgrpc` | OTLP gRPC 导出（默认） | `localhost:4317` |
 | `otlphttp` | OTLP HTTP 导出 | `localhost:4318` |
 | `zipkin` | Zipkin 导出 | `http://localhost:9411/api/v2/spans` |
@@ -101,29 +83,18 @@ trace.StartAgent(trace.Config{
 
 ## API
 
-### Agent 管理
+### Agent 与 Span
 
 ```go
-// 启动 agent
-trace.StartAgent(cfg)
+trace.StartAgent(cfg)  // 启动（全局单例）
+trace.StopAgent()      // 关闭（程序退出前调用）
 
-// 关闭 agent（程序退出前调用）
-trace.StopAgent()
-```
-
-### Span 管理
-
-```go
-// 创建并启动 span
-ctx, span := trace.StartSpan(ctx, "operation-name")
+ctx, span := trace.StartSpan(ctx, "op") // 创建并启动 span
 defer span.End()
 
-// 从 context 获取 tracer
-tracer := trace.TracerFromContext(ctx)
-
-// 获取 trace id / span id
-traceID := trace.TraceIDFromContext(ctx)
-spanID := trace.SpanIDFromContext(ctx)
+tracer  := trace.TracerFromContext(ctx) // 从 context 获取 tracer
+traceID := trace.TraceIDFromContext(ctx) // trace id（日志关联用）
+spanID  := trace.SpanIDFromContext(ctx)
 ```
 
 ### gRPC 传播
@@ -139,64 +110,50 @@ md, _ := metadata.FromIncomingContext(ctx)
 ctx, spanContext := trace.Extract(ctx, &md)
 ```
 
-### HTTP 传播
+### HTTP 传播（客户端发起 / 服务端提取）
 
 ```go
 // 客户端：注入链路上下文到 HTTP header
 req, _ := http.NewRequest("GET", "http://example.com", nil)
-trace.InjectHeader(ctx, req.Header)
+trace.InjectHeader(ctx, req.Header) // 写入 Traceparent
 client.Do(req)
 
-// 服务端：从 HTTP header 提取链路上下文
+// 服务端：从 HTTP header 提取（供非 httpx 的框架手动接入）
 ctx, spanContext := trace.ExtractHeader(r.Context(), r.Header)
 ```
 
-### HTTP 服务端中间件
+### HTTP 服务端中间件（已迁移）
 
-`HTTPMiddleware(ignorePaths ...string)` 提供开箱即用的 HTTP 服务端链路追踪中间件（返回标准 `func(http.Handler) http.Handler`，不依赖具体框架）。自动完成：提取上游 span 上下文（W3C traceparent）→ 创建服务端 span（携带 method/path/status 等 HTTP 语义属性）→ 注入 context 供下游模块关联 `trace_id`。
-
-`ignorePaths` 用于指定不追踪的请求路径（如健康检查、探针、监控接口），命中规则的请求直接放行、不创建 span。不传参时行为与旧版一致。
+HTTP 服务端追踪中间件现位于 `httpx/middleware` 子包，经 `httpx.WithTracing(ignorePaths...)` 注册即可，自动完成：提取上游 span 上下文（W3C traceparent）→ 创建服务端 span（携带 method/path/status 等语义属性）→ 注入 context 供下游关联 `trace_id`：
 
 ```go
-// 标准 net/http（忽略健康检查与监控路径）
-handler := trace.HTTPMiddleware("/health*", "/metrics/*")(mux)
+// httpx
+server.Use(httpx.WithTracing())                            // 追踪全部
+server.Use(httpx.WithTracing("/health*", "/metrics/*"))   // 跳过探活
+
+// 标准 net/http / 其它框架
+import "github.com/chihqiang/infra-go/httpx/middleware"
+handler := middleware.NewTracing("/health*", "/metrics/*").Middleware()(mux)
 http.ListenAndServe(":8080", handler)
-
-// httpx：包装为 Middleware 使用
-server.Use(func(next http.HandlerFunc) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        trace.HTTPMiddleware("/health*", "/metrics/*")(http.HandlerFunc(next)).ServeHTTP(w, r)
-    }
-})
 ```
-
-`ignorePaths` 匹配规则：
-
-| 写法 | 匹配示例 | 说明 |
-| ------ | ------ | ------ |
-| `/health` | `/health` | 精确匹配 |
-| `/health*` | `/health`、`/healthz`、`/health/live` | 以 `*` 结尾做前缀匹配（跨目录） |
-| `/metrics/*` | `/metrics/foo` | 通配符匹配，`*` 不跨目录 |
 
 ### 属性
 
-本包封装了 `attribute` 包，无需直接导入 `go.opentelemetry.io/otel/attribute`：
+封装 `attribute` 包，无需直接导入 `go.opentelemetry.io/otel/attribute`：
 
 ```go
-// 属性构造函数
-trace.AttrString("key", "value")     // 字符串
-trace.AttrInt("count", 42)           // int
-trace.AttrInt64("id", 9999999999)    // int64
-trace.AttrBool("enabled", true)      // bool
-trace.AttrFloat64("ratio", 0.75)     // float64
+trace.AttrString("key", "value")       // 字符串
+trace.AttrInt("count", 42)             // int
+trace.AttrInt64("id", 9999999999)      // int64
+trace.AttrBool("enabled", true)        // bool
+trace.AttrFloat64("ratio", 0.75)       // float64
 trace.AttrStringSlice("tags", []string{"a", "b"})
 trace.AttrIntSlice("nums", []int{1, 2, 3})
 ```
 
-### Span 属性
+创建 span 时携带属性：
 
 ```go
-// 创建 span 时携带属性
 ctx, span := trace.StartSpan(ctx, "operation",
     trace.WithAttributes(
         trace.AttrString("user", "alice"),
@@ -233,68 +190,38 @@ import (
 )
 
 func main() {
-    // 初始化日志
-    logInstance := logger.New(logger.Config{
-        Level:   logger.InfoLevel,
-        AppName: "demo",
-    })
+    logInstance := logger.New(logger.Config{Level: logger.InfoLevel, AppName: "demo"})
     logger.SetGlobal(logInstance)
     defer logInstance.Close()
 
-    // 添加资源属性
-    trace.AddResources(
-        trace.AttrString("env", "development"),
-        trace.AttrString("host", "localhost"),
-    )
-
-    // 启动链路追踪
+    trace.AddResources(trace.AttrString("env", "development"))
     trace.StartAgent(trace.Config{
-        Name:     "demo-service",
-        Endpoint: "localhost:4317",
-        Batcher:  trace.BatcherOTLPGRPC,
-        Sampler:  1.0,
+        Name: "demo-service", Endpoint: "localhost:4317",
+        Batcher: trace.BatcherOTLPGRPC, Sampler: 1.0,
     })
     defer trace.StopAgent()
 
-    // 创建根 span
     ctx, rootSpan := trace.StartSpan(context.Background(), "main-operation")
     defer rootSpan.End()
 
-    traceID := trace.TraceIDFromContext(ctx)
-    logger.Info("starting operation", logger.String("trace_id", traceID))
-
-    // 模拟处理请求
     handleRequest(ctx)
-
-    // 模拟 HTTP 调用
     callHTTP(ctx)
-
-    logger.Info("operation completed", logger.String("trace_id", traceID))
 }
 
 func handleRequest(ctx context.Context) {
     ctx, span := trace.StartSpan(ctx, "handle-request",
-        trace.WithAttributes(trace.AttrString("handler", "handleRequest")),
-    )
+        trace.WithAttributes(trace.AttrString("handler", "handleRequest")))
     defer span.End()
-
     time.Sleep(10 * time.Millisecond)
-    logger.Info("request handled",
-        logger.String("trace_id", trace.TraceIDFromContext(ctx)),
-        logger.String("span_id", trace.SpanIDFromContext(ctx)),
-    )
+    logger.InfoCtx(ctx, "request handled")
 }
 
 func callHTTP(ctx context.Context) {
     ctx, span := trace.StartSpan(ctx, "http-call")
     defer span.End()
 
-    // 创建 HTTP 请求并注入链路上下文
     req, _ := http.NewRequest("GET", "http://localhost:9090/api", nil)
-    trace.InjectHeader(ctx, req.Header)
-
-    // trace id 会自动通过 header 传递
+    trace.InjectHeader(ctx, req.Header) // 写入 Traceparent
     fmt.Println("trace-id header:", req.Header.Get("Traceparent"))
 }
 ```
-

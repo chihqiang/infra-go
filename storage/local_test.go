@@ -90,3 +90,56 @@ func TestLocal_URLFileScheme(t *testing.T) {
 	assert.True(t, strings.HasPrefix(u, "file://"))
 	assert.True(t, strings.HasSuffix(u, "dir/f.txt"))
 }
+
+// --- 补充：local 错误分支 ---
+
+func TestLocal_WriteCancelledCtx(t *testing.T) {
+	s, err := NewLocal(&LocalConfig{RootDir: t.TempDir()})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = s.Write(ctx, "a.txt", []byte("x"))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "write local file")
+}
+
+func TestLocal_DeleteCancelledCtx(t *testing.T) {
+	s, err := NewLocal(&LocalConfig{RootDir: t.TempDir()})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = s.Delete(ctx, "a.txt")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "delete local file")
+}
+
+func TestLocal_WriteDirBlockedByFile(t *testing.T) {
+	// 父路径被同名文件占据 → MkdirAll 失败
+	root := t.TempDir()
+	s, err := NewLocal(&LocalConfig{RootDir: root})
+	require.NoError(t, err)
+
+	blocker := filepath.Join(root, "blocker")
+	require.NoError(t, os.WriteFile(blocker, []byte("file"), 0o644))
+
+	// blocker/x.txt 的父目录 blocker 是个文件 → MkdirAll 报错
+	err = s.Write(context.Background(), "blocker/x.txt", []byte("x"))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create local directory")
+}
+
+func TestLocal_DeleteDirectory(t *testing.T) {
+	// 对非空目录调用 os.Remove 会报错
+	root := t.TempDir()
+	s, err := NewLocal(&LocalConfig{RootDir: root})
+	require.NoError(t, err)
+
+	dir := filepath.Join(root, "adir")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "sub"), 0o755)) // 非空
+
+	_, err = s.Delete(context.Background(), "adir")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to delete local file")
+}

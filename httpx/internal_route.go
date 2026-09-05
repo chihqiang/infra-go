@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+// 本文件提供内置路由：PprofRoutes 生成标准 pprof 性能分析路由表。
+
 // --- pprof 性能分析路由 ---
 
 // PprofRoutes 返回标准 pprof 性能分析路由列表，不会自动注册到 Server。

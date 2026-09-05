@@ -12,6 +12,11 @@ import (
 	"github.com/chihqiang/infra-go/logger"
 )
 
+// 本文件实现 HTTP 统一响应层：
+//   - Response[T] 统一响应结构、CodeError 业务错误与业务/HTTP 状态码常量
+//   - JSON / XML / HTML / SSE 响应输出（Ok*/Write* 系列）
+//   - 错误响应（WriteHTTPError*）与重定向（Redirect*）
+
 // --- 业务码常量 ---
 
 const (
@@ -119,12 +124,12 @@ func (e *CodeError) Unwrap() error {
 	return e.Cause
 }
 
-// NewCodeError 创建一个 CodeError。
+// NewCodeError 创建携带业务码 code 与消息 msg 的 CodeError。
 func NewCodeError(code int, msg string) *CodeError {
 	return &CodeError{Code: code, Msg: msg}
 }
 
-// NewCodeErrorWithCause 创建一个带原始错误的 CodeError。
+// NewCodeErrorWithCause 创建带原始错误 cause 的 CodeError，便于 errors.Is/As 追溯。
 func NewCodeErrorWithCause(code int, msg string, cause error) *CodeError {
 	return &CodeError{Code: code, Msg: msg, Cause: cause}
 }
@@ -211,6 +216,8 @@ func writeJSON(w http.ResponseWriter, status int, v any) error {
 // --- XML 响应 ---
 
 // WriteXML 以 XML 格式写入 HTTP 响应。
+// 与 WriteJSON 一样是低级函数：不会对 v 做任何包装，直接序列化写入；
+// 需要智能包装（统一 code/msg/data）时使用 OkXML。
 func WriteXML(w http.ResponseWriter, status int, v any) {
 	if err := writeXML(w, status, v); err != nil {
 		logger.Error("write xml response failed", logger.Err(err))
@@ -223,6 +230,8 @@ func WriteXMLCtx(ctx context.Context, w http.ResponseWriter, status int, v any) 
 }
 
 // OkXML 智能包装 v 并以 XML 格式写入响应（HTTP 200）。
+// 包装规则同 OkJSON：若 v 是 *CodeError、CodeError 或 error，自动使用其错误码与消息；
+// 否则 Code=0, Msg="ok", Data=v；并带上 XML 声明。
 func OkXML(w http.ResponseWriter, v any) {
 	WriteXML(w, http.StatusOK, wrapXMLResponse(context.Background(), v))
 }
@@ -259,6 +268,7 @@ func writeXML(w http.ResponseWriter, status int, v any) error {
 // --- HTML 响应 ---
 
 // WriteHTML 以 HTML 格式写入 HTTP 响应。
+// v 为原始 HTML 字符串，不做转义或包装，按文本原样输出。
 func WriteHTML(w http.ResponseWriter, status int, v string) {
 	if err := writeHTML(w, status, v); err != nil {
 		logger.Error("write html response failed", logger.Err(err))
@@ -270,7 +280,7 @@ func WriteHTMLCtx(ctx context.Context, w http.ResponseWriter, status int, v stri
 	WriteHTML(w, status, v)
 }
 
-// OkHTML 以 HTML 格式写入响应（HTTP 200）。
+// OkHTML 以 HTML 格式写入响应（HTTP 200），内容为 v 原样输出。
 func OkHTML(w http.ResponseWriter, v string) {
 	WriteHTML(w, http.StatusOK, v)
 }

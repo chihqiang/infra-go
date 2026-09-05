@@ -1,8 +1,8 @@
 // Package respw 提供对 http.ResponseWriter 的增强包装工具。
 //
 // 当前提供 RecorderWriter，用于透明包装 ResponseWriter 并捕获响应状态码与
-// 写入字节数，供 httpx（访问日志 / 熔断）、trace（记录 span 状态码）等中间件
-// 复用，避免各包重复实现导致能力漂移（如漏透传 Flush/Hijack 等可选接口）。
+// 写入字节数，供 httpx/middleware（访问日志 / 熔断 / 链路追踪记录 span 状态码）
+// 等中间件复用，避免各包重复实现导致能力漂移（如漏透传 Flush/Hijack 等可选接口）。
 package respw
 
 import (

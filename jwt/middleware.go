@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/chihqiang/infra-go/httpx"
+	"github.com/chihqiang/infra-go/httpx/middleware"
 	stdjwt "github.com/golang-jwt/jwt/v5"
 )
 
@@ -47,24 +47,26 @@ func ClaimsFromContext(ctx context.Context) Claims {
 //
 // getToken 由调用方提供，从请求中提取 token（如从 Header/Cookie/Query），
 // 中间件只负责解析验证和注入 claims，不关心 token 来源。
-// 验证失败返回 401 Unauthorized，响应格式统一为 httpx.Response[T] 结构。
+// 验证失败返回 401 Unauthorized，错误响应经 httpx/middleware 的统一错误机制输出
+// （import httpx 主包时为其统一 JSON 响应，否则为 http.Error 纯文本）。
 //
-// 返回类型为 func(http.HandlerFunc) http.HandlerFunc，兼容 httpx.Middleware。
+// 返回类型为 func(http.HandlerFunc) http.HandlerFunc，兼容 httpx.Middleware，
+// 可直接 server.Use 注册；也可通过 httpx.WithJWT 便捷注册。
 func (j *JWT) AuthMiddleware(getToken func(*http.Request) string) func(http.HandlerFunc) http.HandlerFunc {
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			token := getToken(r)
 			if token == "" {
-				httpx.WriteHTTPErrorCtx(r.Context(), w, http.StatusUnauthorized, msgTokenMissing)
+				middleware.WriteError(r.Context(), w, http.StatusUnauthorized, msgTokenMissing)
 				return
 			}
 
 			claims, err := j.ParseAccessToken(token)
 			if err != nil {
 				if errors.Is(err, ErrExpiredToken) {
-					httpx.WriteHTTPErrorCtx(r.Context(), w, http.StatusUnauthorized, msgTokenExpired)
+					middleware.WriteError(r.Context(), w, http.StatusUnauthorized, msgTokenExpired)
 				} else {
-					httpx.WriteHTTPErrorCtx(r.Context(), w, http.StatusUnauthorized, msgInvalidToken)
+					middleware.WriteError(r.Context(), w, http.StatusUnauthorized, msgInvalidToken)
 				}
 				return
 			}

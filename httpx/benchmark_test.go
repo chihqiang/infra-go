@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/chihqiang/infra-go/httpx/binding"
 )
 
 // discardWriter 丢弃响应内容的 ResponseWriter，用于基准测试避免内存累积。
@@ -140,7 +142,7 @@ func BenchmarkBindJSON(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		body := bytes.NewBufferString(`{"name":"Alice","age":25,"email":"alice@example.com"}`)
 		req := httptest.NewRequest(http.MethodPost, "/", body)
-		req.Header.Set("Content-Type", MIMEJSON)
+		req.Header.Set("Content-Type", binding.MIMEJSON)
 
 		var obj benchRequest
 		if err := BindJSON(req, &obj); err != nil {
@@ -165,7 +167,7 @@ func BenchmarkBindQuery(b *testing.B) {
 func BenchmarkBindForm(b *testing.B) {
 	body := bytes.NewBufferString("name=Alice&age=25&email=alice%40example.com")
 	req := httptest.NewRequest(http.MethodPost, "/", body)
-	req.Header.Set("Content-Type", MIMEPOSTForm)
+	req.Header.Set("Content-Type", binding.MIMEPOSTForm)
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -183,7 +185,7 @@ func BenchmarkBind_AutoDetect(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		body := bytes.NewBufferString(`{"name":"Alice","age":25,"email":"alice@example.com"}`)
 		req := httptest.NewRequest(http.MethodPost, "/", body)
-		req.Header.Set("Content-Type", MIMEJSON)
+		req.Header.Set("Content-Type", binding.MIMEJSON)
 
 		var obj benchRequest
 		if err := Bind(req, &obj); err != nil {

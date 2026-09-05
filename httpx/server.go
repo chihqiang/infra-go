@@ -17,9 +17,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/chihqiang/infra-go/httpx/respw"
 	"github.com/chihqiang/infra-go/logger"
 	mp "github.com/chihqiang/infra-go/mapping"
 )
+
+// 本文件实现 HTTP 服务器：
+//   - 核心类型（Middleware / Route / RouteOption / RunOption / Server）
+//   - 路由注册（AddRoute(s)/Use/Routes/PrintRoutes）、路由组选项（With*）与中间件包装（Apply*）
+//   - 路由组 Group、全局中间件懒加载与自定义 404
+//   - 服务器启动与优雅关闭（Start/Shutdown）
 
 // --- 核心类型 ---
 
@@ -37,10 +44,13 @@ import (
 //	}
 type Middleware func(http.HandlerFunc) http.HandlerFunc
 
-// Route 表示一个 HTTP 路由。
+// Route 表示一个 HTTP 路由，注册后由 Server 分发。
 type Route struct {
-	Method  string
-	Path    string
+	// Method HTTP 方法（如 GET、POST），大小写不敏感。
+	Method string
+	// Path 路由路径，支持 Go 1.22 ServeMux 模式：/users/{id}、/files/{path...}。
+	Path string
+	// Handler 处理该路由的 HTTP 处理器。
 	Handler http.HandlerFunc
 }
 
@@ -439,41 +449,8 @@ func (s *Server) SetNotFoundHandler(h http.HandlerFunc) {
 // wrapNotFound 包装 mux，将 404 响应拦截并转交给自定义处理器。
 func (s *Server) wrapNotFound(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		next(&notFoundResponseWriter{
-			ResponseWriter: w,
-			request:        r,
-			handler:        s.notFoundHandler,
-		}, r)
+		next(respw.NewNotFoundResponseWriter(w, r, s.notFoundHandler), r)
 	}
-}
-
-// notFoundResponseWriter 拦截 ServeMux 写入的 404 响应，改为调用自定义处理器。
-// 自定义处理器处理完成后，后续的 404 正文写入会被吞掉，避免覆盖响应。
-type notFoundResponseWriter struct {
-	http.ResponseWriter
-	request    *http.Request
-	handler    http.HandlerFunc
-	handled    bool // 是否已转交给自定义 404 处理器
-	suppressed bool // 是否吞掉后续写入
-}
-
-// WriteHeader 拦截 404 状态码，转交给自定义处理器。
-func (w *notFoundResponseWriter) WriteHeader(status int) {
-	if status == http.StatusNotFound && !w.handled {
-		w.handled = true
-		w.suppressed = true
-		w.handler(w.ResponseWriter, w.request)
-		return
-	}
-	w.ResponseWriter.WriteHeader(status)
-}
-
-// Write 在已转交自定义处理器后吞掉 ServeMux 的默认 404 正文。
-func (w *notFoundResponseWriter) Write(p []byte) (int, error) {
-	if w.suppressed {
-		return len(p), nil
-	}
-	return w.ResponseWriter.Write(p)
 }
 
 // --- 路由组（Group）---

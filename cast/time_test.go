@@ -1,10 +1,12 @@
 package cast
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // --- ToDuration 测试 ---
@@ -44,5 +46,83 @@ func TestToTime(t *testing.T) {
 
 func TestToTimeE_Error(t *testing.T) {
 	_, err := ToTimeE("not a time")
+	assert.Error(t, err)
+}
+
+// --- 补充：ToDurationE / ToTimeE 类型族与失败分支 ---
+
+func TestToDurationE_TypeFamily(t *testing.T) {
+	cases := []struct {
+		name  string
+		input any
+		want  time.Duration
+	}{
+		{"duration", 5 * time.Second, 5 * time.Second},
+		{"int", 42, 42},
+		{"int8", int8(8), 8},
+		{"int16", int16(16), 16},
+		{"int32", int32(32), 32},
+		{"int64", int64(64), 64},
+		{"uint", uint(7), 7},
+		{"uint8", uint8(1), 1},
+		{"uint16", uint16(2), 2},
+		{"uint32", uint32(3), 3},
+		{"uint64", uint64(4), 4},
+		{"float32", float32(1.5), 1},
+		{"float64", 1.5, 1},
+		{"string", "5s", 5 * time.Second},
+		{"json.Number", json.Number("42"), 42},
+		{"nil", nil, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := ToDurationE(c.input)
+			require.NoError(t, err)
+			assert.Equal(t, c.want, got)
+		})
+	}
+}
+
+func TestToDurationE_Errors(t *testing.T) {
+	_, err := ToDurationE(json.Number("1.5")) // Int64 失败
+	assert.Error(t, err)
+	_, err = ToDurationE([]int{})
+	assert.Error(t, err)
+}
+
+func TestToTimeE_TypeFamily(t *testing.T) {
+	base := int64(1700000000)
+	cases := []struct {
+		name  string
+		input any
+	}{
+		{"time.Time", time.Unix(base, 0)},
+		{"int", int(base)},
+		{"int8", int8(10)},
+		{"int16", int16(10)},
+		{"int32", int32(base)},
+		{"int64", base},
+		{"uint", uint(base)},
+		{"uint8", uint8(10)},
+		{"uint16", uint16(10)},
+		{"uint32", uint32(base)},
+		{"uint64", uint64(base)},
+		{"float32", float32(base)},
+		{"float64", float64(base)},
+		{"json.Number", json.Number("1700000000")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := ToTimeE(c.input)
+			require.NoError(t, err)
+			assert.False(t, got.IsZero())
+		})
+	}
+}
+
+func TestToTimeE_Errors(t *testing.T) {
+	_, err := ToTimeE(json.Number("1e2"))
+	assert.Error(t, err)
+	_, err = ToTimeE([]int{})
 	assert.Error(t, err)
 }
