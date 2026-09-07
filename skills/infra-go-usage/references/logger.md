@@ -226,6 +226,8 @@ l := logger.New(logger.Config{
 logger.SetGlobal(l)
 ```
 
+> **关闭说明**：`New` 返回的是 `ILogger` 接口，**接口不含 `Close`**（`Close` 仅在具体类型 `*logger.Logger` 上定义）。全局实例退出前用包级 `logger.Sync()` 刷缓冲即可；确需手动关闭某个实例时用类型断言 `l.(*logger.Logger).Close()`。运行时热切换可用 `logger.ReplaceGlobal(cfg)`，它返回被替换的旧实例供你自行关闭。
+
 ### 上下文日志
 
 所有日志方法都有 `Ctx` 后缀版本，自动从 `context.Context` 中提取字段并注入日志。

@@ -12,8 +12,8 @@
 - **日志集成**：注册 context 提取器，`logger.XxxCtx` 自动携带 `trace_id`/`span_id`
 - **资源管理**：支持添加自定义资源属性（服务名、环境等）
 - **全局单例**：`StartAgent` 用 `sync.Once` 确保只初始化一次
-- **采样控制**：可配置采样率（0.0~1.0）
-- **零外部依赖**：封装 `attribute` 与 `trace` 包，外部无需直接导入 OpenTelemetry
+- **采样控制**：可配置采样率（`0`~`1.0`，注意传 `0` 会被忽略回落为 `1.0`，想关闭采样请用 `Disabled`）
+- **易用封装**：封装 `attribute`/`trace` 类型，日常调用无需直接使用 OpenTelemetry API（仅在显式声明返回类型时才需导入 `go.opentelemetry.io/otel/trace`）
 
 ## 安装
 
@@ -66,7 +66,7 @@ trace.StartAgent(trace.Config{
 |------|------|--------|------|
 | `Name` | `string` | `infra-go` | 服务名称，标识链路来源 |
 | `Endpoint` | `string` | `""` | 导出器地址（file 类型为文件路径） |
-| `Sampler` | `float64` | `1.0` | 采样率，0.0~1.0 |
+| `Sampler` | `float64` | `1.0` | 采样率（`0`~`1.0`；传 `0` 会被忽略并回落为默认 `1.0` 全采样，想关闭采样请用 `Disabled`） |
 | `Batcher` | `Batcher` | `otlpgrpc` | 导出器类型 |
 | `OtlpHeaders` | `map[string]string` | `nil` | OTLP 传输自定义请求头 |
 | `OtlpHttpPath` | `string` | `""` | OTLP HTTP 路径 |
@@ -192,7 +192,8 @@ import (
 func main() {
     logInstance := logger.New(logger.Config{Level: logger.InfoLevel, AppName: "demo"})
     logger.SetGlobal(logInstance)
-    defer logInstance.Close()
+    // ILogger 接口不含 Close（Close 仅在 *Logger 具体类型上）；退出前用包级 Sync 刷缓冲
+    defer logger.Sync()
 
     trace.AddResources(trace.AttrString("env", "development"))
     trace.StartAgent(trace.Config{

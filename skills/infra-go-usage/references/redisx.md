@@ -144,7 +144,9 @@ lock, err = client.Locker("resource:1", 10*time.Second).Lock(ctx, 500*time.Milli
 defer lock.Unlock(ctx)
 
 // 自动续期（防止业务执行时间超过锁过期时间）
-// 需要单独使用 LockerWithTTL 和 WithAutoRenew
+// 开启方式：在 Locker 上追加选项，例如
+//     client.Locker(key, 0, redisx.WithTTL(10*time.Second), redisx.WithAutoRenew())
+// 不存在单独的 LockerWithTTL API；TTL 通过 Locker 第二参或 WithTTL 选项指定
 // 续期 goroutine 监听 ctx.Done()，即使调用方忘记 Unlock 也不会泄漏
 ```
 

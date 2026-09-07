@@ -61,14 +61,16 @@ _, _ = w.Write([]byte(encrypted))
 
 ## 可选接口透传
 
-上述包装器正确透传可选接口，避免包装导致 SSE 流式、WebSocket 升级、HTTP/2 Push 等功能静默失效：
+包装器对不同可选接口的透传能力如下（仅 `RecorderWriter` 完整透传全部四种；`TimeoutWriter` 与 `CryptionWriter` 因缓冲/加密语义受限）：
 
-| 接口 | 方法 | 场景 |
-|------|------|------|
-| `http.ResponseController` | `Unwrap()` | 运行时能力协商 |
-| `http.Flusher` | `Flush()` | SSE 等流式响应（底层不支持时静默忽略） |
-| `http.Hijacker` | `Hijack()` | WebSocket 升级等连接接管（不支持时返回错误） |
-| `http.Pusher` | `Push()` | HTTP/2 Server Push（不支持时返回错误） |
+| 接口 | 方法 | `RecorderWriter` | `TimeoutWriter` | `CryptionWriter` | 场景 |
+|------|------|:---:|:---:|:---:|------|
+| `http.ResponseController` | `Unwrap()` | ✅ | ❌ | ❌ | 运行时能力协商 |
+| `http.Flusher` | `Flush()` | ✅ | ✅ | ✅ | SSE 等流式响应（底层不支持时静默忽略） |
+| `http.Hijacker` | `Hijack()` | ✅ | ✅ | ❌ | WebSocket 升级等连接接管（不支持时返回错误） |
+| `http.Pusher` | `Push()` | ✅ | ❌ | ❌ | HTTP/2 Server Push（不支持时返回错误） |
+
+> 若需在超时/加密包装（`TimeoutWriter`/`CryptionWriter`）之上使用 WebSocket(`Hijack`)、HTTP/2 Push 或 `http.ResponseController`，应避免经这两类中间件包装或在其外层自行处理，防止能力静默失效。
 
 ## 应用
 

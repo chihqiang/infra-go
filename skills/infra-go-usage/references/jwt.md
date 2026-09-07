@@ -1,11 +1,11 @@
 # jwt
 
-基于 [golang-jwt/jwt/v5](https://github.com/golang-jwt/jwt) 的 JWT 封装包，面向对象设计，配置只初始化一次，用 `MapClaims` 支持自由扩展声明字段。
+基于 [golang-jwt/jwt/v5](https://github.com/golang-jwt/jwt) 的 JWT 封装包，面向对象设计，配置只初始化一次，用 `Claims`（即 golang-jwt 的 `MapClaims` 别名）支持自由扩展声明字段。
 
 ## 特性
 
 - **面向对象**：`JWT` 实例封装配置，无需每次传参
-- **MapClaims**：使用 `jwt.MapClaims` 别名，自由扩展任意声明字段
+- **自由声明**：`jwt.Claims` 即 golang-jwt 的 `MapClaims` 类型别名（`map[string]any`），可自由扩展任意声明字段
 - **双令牌模式**：访问令牌（短期）+ 刷新令牌（长期），自动生成令牌对
 - **多算法支持**：HS256 / HS384 / HS512
 - **令牌刷新**：用刷新令牌生成全新令牌对
@@ -100,7 +100,7 @@ newPair, err := j.RefreshToken(oldRefreshToken) // 用刷新令牌生成新令�
 
 ### Claims 与 ClaimKey
 
-`jwt.Claims` 是 `jwt.MapClaims` 别名（`map[string]any`），可自由扩展：
+`jwt.Claims` 是 golang-jwt 的 `MapClaims` 类型别名（`map[string]any`），可自由扩展：
 
 ```go
 claims := jwt.Claims{

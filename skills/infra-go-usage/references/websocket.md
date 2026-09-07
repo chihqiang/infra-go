@@ -30,6 +30,7 @@ package main
 import (
     "encoding/json"
     "net/http"
+    "time"
 
     "github.com/chihqiang/infra-go/logger"
     "github.com/chihqiang/infra-go/websocket"
@@ -300,7 +301,7 @@ srv.To("room1").Emit("chat", map[string]string{"msg": "hello"})
 // 在事件处理器中解码数据
 h.Handle("chat", func(conn *websocket.Conn, data json.RawMessage) {
     var msg struct{ Text string `json:"text"` }
-    _ = data.Unmarshal(data, &msg) // 或用 event.Decode(&msg)
+    _ = json.Unmarshal(data, &msg) // data 为 json.RawMessage，无 Unmarshal 方法，须用 json.Unmarshal
 })
 ```
 

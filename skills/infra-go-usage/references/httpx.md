@@ -256,9 +256,10 @@ httpx.NewCodeErrorWithCause(code, msg, err)   // 带根因，可 errors.Is/As
 ### SSE 流式响应
 
 ```go
-sse := httpx.NewSSEWriter(w, r)
-sse.SendEvent("message", map[string]any{"a": 1}) // data: {...}
-sse.SendData(v)        // 序列化后写 data
+sse := httpx.NewSSEWriter(w)                    // 构造器只接收 w
+sse.Event("message", `{"a":1}`)                // 写 event+data 帧
+sse.JSONEvent("message", map[string]any{"a": 1}) // v 序列化为 JSON 后写 data
+sse.Data("ping")                                // 写默认 message 事件的 data
 sse.Comment("keepalive")
 sse.Retry(3000)        // 断线重连间隔
 sse.Flush()

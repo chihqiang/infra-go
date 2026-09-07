@@ -245,15 +245,11 @@ s, err := storage.NewKODO(&storage.KODOConfig{
 出错时 panic，适合初始化场景：
 
 ```go
+// Storage 为无状态客户端（接口仅 Write/Delete/URL，无 Close，无需释放）
 s := storage.MustNew(storage.Config{
     Driver: storage.DriverOSS,
     OSS:    &storage.OSSConfig{...},
 })
-defer func() {
-    if err := s.Close(); err != nil {
-        logger.Fatal("close storage failed", logger.Err(err))
-    }
-}()
 ```
 
 ## 多存储实例 Storages

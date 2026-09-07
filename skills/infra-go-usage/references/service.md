@@ -64,7 +64,8 @@ func main() {
         },
     })
 
-    // 用 WithStart 包装为 Service（Start 阻塞，Stop 调用 server.Shutdown）
+    // 用 WithStart 包装为 Service（Start 阻塞；注意 WithStart 的 Stop 是空操作，
+    // 不会调用 server.Shutdown，需自行在信号处理中优雅关停）
     sg.Add(service.WithStart(func() {
         fmt.Println("HTTP server starting on :8080")
         server.Start()
@@ -80,10 +81,11 @@ func main() {
 ```go
 sg := service.NewServiceGroup()
 
-// 添加多个服务
-sg.Add(httpService)     // HTTP 服务
-sg.Add(redisService)   // Redis 消费者
-sg.Add(cronService)    // 定时任务
+// 添加多个服务：需用 WithStart 包装（或实现 Service 接口）。
+// 注意：httpx.Server 不满足 Service 接口（Start 返回 error、无 Stop，仅有 Shutdown），不能直接 Add。
+sg.Add(service.WithStart(func() { _ = server.Start() }))  // HTTP 服务
+sg.Add(service.WithStart(func() { _ = consumer.Run() })) // Redis 消费者
+sg.Add(service.WithStart(func() { cronTick() }))          // 定时任务
 
 // 并发启动，阻塞直到全部退出
 sg.Start()
@@ -156,7 +158,8 @@ sg.Add(normalService)     // 正常服务
 sg.Add(panicService)      // Start 中 panic
 
 sg.Start() // 正常返回，不 panic
-// 日志输出: {"level":"ERROR",...,"msg":"service: panic during start: boom"}
+// 日志输出格式（源码实际格式）:
+// {"level":"ERROR",...,"msg":"service: panic during start, index: <idx>, type: <服务类型>, reason: <panic 值>"}
 
 // normalService 已被 Stop
 ```
@@ -171,7 +174,8 @@ sg.Start() // 正常返回，不 panic
 
 ```go
 sg.Stop() // 正常返回，panic 被记录
-// 日志输出: {"level":"ERROR",...,"msg":"service: panic during stop: ..."}
+// 日志输出格式（源码实际格式）:
+// {"level":"ERROR",...,"msg":"service: panic during stop, index: <idx>, type: <服务类型>, reason: <panic 值>"}
 ```
 
 ## API
@@ -181,7 +185,7 @@ sg.Stop() // 正常返回，panic 被记录
 | 方法 | 说明 |
 | ------ | ------ |
 | `NewServiceGroup()` | 创建服务组 |
-| `Add(service)` | 添加服务（插入头部，逆序停止） |
+| `Add(service)` | 添加服务（追加到尾部；启动按添加顺序，停止按逆序） |
 | `Start()` | 并发启动所有服务，阻塞直到全部退出 |
 | `Stop()` | 并发停止所有服务，保证只执行一次 |
 
@@ -194,14 +198,14 @@ sg.Stop() // 正常返回，panic 被记录
 
 ## 停止顺序
 
-`Add` 时服务插入到头部，`Stop` 时按切片顺序停止（即添加的逆序）：
+`Add` 将服务追加到尾部，启动按添加顺序执行；`Stop` 逆序遍历（后添加的先停止）：
 
 ```text
 Add(A)  → services: [A]
-Add(B)  → services: [B, A]
-Add(C)  → services: [C, B, A]
+Add(B)  → services: [A, B]
+Add(C)  → services: [A, B, C]
 
-Stop 顺序: C → B → A（但并发执行，不保证精确顺序）
+Stop 顺序: C → B → A（逆序，但并发执行，不保证精确顺序）
 ```
 
 ## 目录结构

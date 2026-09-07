@@ -218,7 +218,8 @@ func main() {
         AppName: "myapp",
     })
     logger.SetGlobal(l)
-    defer l.Close()
+    // ILogger 接口不含 Close（Close 仅在 *Logger 具体类型上）；全局实例退出前用包级 Sync 刷缓冲
+    defer logger.Sync()
 
     // ORM 日志自动桥接到 logger
     db := orm.MustNewSQLite(orm.Config{
@@ -291,7 +292,8 @@ func main() {
         AppName: "demo",
     })
     logger.SetGlobal(logInstance)
-    defer logInstance.Close()
+    // ILogger 接口不含 Close（Close 仅在 *Logger 具体类型上）；退出前用包级 Sync 刷缓冲
+    defer logger.Sync()
 
     // 创建数据库连接
     db := orm.MustNewSQLite(orm.Config{
@@ -303,32 +305,32 @@ func main() {
 
     // 自动迁移
     if err := db.AutoMigrate(&User{}); err != nil {
-        logger.FatalIf(err, "failed to migrate database")
+        logger.Fatal("failed to migrate database", logger.Err(err))
     }
 
     // 创建
     user := User{Name: "alice", Email: "alice@example.com", Age: 30}
     if err := db.Create(&user).Error; err != nil {
-        logger.FatalIf(err, "failed to create user")
+        logger.Fatal("failed to create user", logger.Err(err))
     }
     fmt.Printf("Created user: ID=%d\n", user.ID)
 
     // 查询
     var found User
     if err := db.First(&found, user.ID).Error; err != nil {
-        logger.FatalIf(err, "failed to find user")
+        logger.Fatal("failed to find user", logger.Err(err))
     }
     fmt.Printf("Found user: Name=%s, Email=%s\n", found.Name, found.Email)
 
     // 更新
     found.Age = 31
     if err := db.Save(&found).Error; err != nil {
-        logger.FatalIf(err, "failed to update user")
+        logger.Fatal("failed to update user", logger.Err(err))
     }
 
     // 删除
     if err := db.Delete(&found).Error; err != nil {
-        logger.FatalIf(err, "failed to delete user")
+        logger.Fatal("failed to delete user", logger.Err(err))
     }
 
     logger.Info("demo completed")

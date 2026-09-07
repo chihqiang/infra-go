@@ -195,4 +195,4 @@ if !ok { /* 被限流 */ }
 
 | 错误 | 说明 |
 |------|------|
-| `ErrLimitExceeded` | 超出限流 |
+| `ErrLimitExceeded` | 已定义但**当前不被任何限流器返回**；被限流时 `Allow`/`AllowContext` 返回 `false`（error 为 nil），仅 Redis 或 ctx 出错时才有非 nil error |
