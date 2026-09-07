@@ -199,7 +199,9 @@ func WithRateLimit(limiter middleware.RateLimiter, skipPaths ...string) Middlewa
 
 // WithCryption 返回一个 AES-GCM 请求/响应加密中间件。
 // 请求体需为 base64 编码的 AES-GCM 密文（nonce || ciphertext），
-// 中间件解密后交给 handler；handler 写入的响应会被加密后返回给客户端。
+// 中间件解密后交给 handler（兼容 chunked 请求，密文默认上限 4MB，超限返回 413）；
+// 响应体**仅 2xx（且非 204/205、非 HEAD）加密**，错误/重定向等非 2xx 及无 body
+// 场景明文透传并保留原始状态码，便于客户端排查与 HTTP 语义正确。
 //
 // 采用 AES-GCM 认证加密（AEAD），同时保证机密性与完整性（防篡改），
 // nonce 每次随机生成；响应超过 1MB 时自动回退为明文输出（不加密），

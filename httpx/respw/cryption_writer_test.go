@@ -47,3 +47,23 @@ func TestCryptionWriter_Overflow(t *testing.T) {
 	assert.Error(t, err)
 	assert.True(t, cw.Overflowed())
 }
+
+func TestCryptionWriter_FlushIsNoop(t *testing.T) {
+	// 加密需整体缓冲后输出，Flush 不应向底层透传（避免"半发送"空响应）
+	underlying := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
+	cw := &CryptionWriter{ResponseWriter: underlying}
+
+	cw.WriteHeader(http.StatusOK)
+	cw.Flush()
+
+	assert.False(t, underlying.flushed, "Flush must not reach underlying writer")
+	assert.Empty(t, underlying.Body.String())
+}
+
+// flushRecorder 记录是否收到 Flush 调用的测试 writer。
+type flushRecorder struct {
+	*httptest.ResponseRecorder
+	flushed bool
+}
+
+func (f *flushRecorder) Flush() { f.flushed = true }

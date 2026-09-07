@@ -53,14 +53,13 @@ func (w *CryptionWriter) Write(p []byte) (int, error) {
 	return w.buf.Write(p)
 }
 
-// WriteHeader 记录状态码（延迟到加密完成后写入）。
+// WriteHeader 记录状态码（延迟到加密/透传完成后由中间件统一写入底层）。
 func (w *CryptionWriter) WriteHeader(code int) {
 	w.code = code
 }
 
-// Flush 底层支持 Flush 时透传（流式响应场景）。
-func (w *CryptionWriter) Flush() {
-	if f, ok := w.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
-}
+// Flush 为空操作。
+// 加密模式需将完整响应体缓冲后才能统一加密输出，不支持流式；
+// 若在此透传底层 Flush，会在数据尚未就绪时向客户端发出空响应，造成"半发送"状态。
+// 因此实现 http.Flusher 仅为满足接口，实际不触发底层刷新。
+func (w *CryptionWriter) Flush() {}

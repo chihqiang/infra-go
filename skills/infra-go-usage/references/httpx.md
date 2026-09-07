@@ -374,7 +374,7 @@ httpx 中间件分两层：
 | `WithMaxConns(n)` | 并发连接数限制（503） |
 | `WithRateLimit(limiter, skipPaths...)` | 限流（429；limiter 来自 ratelimit 包，见 [ratelimit](./ratelimit.md)） |
 | `WithJWT(j, getToken)` | JWT 认证（转发 `jwt.AuthMiddleware`，见 [jwt](./jwt.md)） |
-| `WithCryption(key, skipPaths...)` | 请求/响应 AES-GCM 加解密 |
+| `WithCryption(key, skipPaths...)` | 请求/响应 AES-GCM 加解密：解密请求体（密文上限默认 4MB，超限 413）；响应体**仅 2xx（且非 204/205/HEAD）加密**，错误/重定向等非 2xx 明文透传并保留状态码；响应超 1MB 自动回退明文 |
 | `WithContentSecurity(key, tolerance)` | 内容安全校验（防篡改 + 防重放） |
 
 用法：

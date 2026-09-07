@@ -35,23 +35,26 @@ tw.Timeout()
 
 ## CryptionWriter — 响应加密缓冲
 
-缓冲 handler 写入的响应，便于结束后统一加密输出（`cryption_writer.go`），`maxBufBytes` 限制缓冲上限避免 OOM，供 `middleware.Cryption` 使用：
+缓冲 handler 写入的响应，便于结束后统一加密输出（`cryption_writer.go`），`maxBufBytes` 限制缓冲上限避免 OOM，供 `middleware.Cryption` 使用。`Flush` 为空操作——加密需整体缓冲后输出，不支持流式，避免在数据未就绪时向底层透传造成“半发送”状态：
 
 ```go
 cw := respw.NewCryptionWriter(w, maxBytes)
 next.ServeHTTP(cw, r)
 
-if cw.Overflowed() {
-    // 缓冲超限：回退为明文输出（StatusCode() / Buffered() 可取已写内容）
-    if cw.StatusCode() != 0 {
-        w.WriteHeader(cw.StatusCode())
-    }
-    _, _ = w.Write(cw.Buffered())
-    return
+code := cw.StatusCode()
+if code == 0 {
+    code = http.StatusOK
 }
 
-// 正常：对 cw.Buffered() 统一加密后写回
+// 超限 / 非加密场景（非 2xx、204/205、HEAD）：明文透传，保留状态码
+w.Header().Del("Content-Length")
+w.WriteHeader(code)
+_, _ = w.Write(cw.Buffered())
+
+// 加密场景：对 cw.Buffered() 统一加密后写回（清理 Content-Length、设置 Content-Type）
 encrypted, _ := hash.AESGCMEncrypt(key, cw.Buffered())
+w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+w.WriteHeader(code)
 _, _ = w.Write([]byte(encrypted))
 ```
 
@@ -66,7 +69,7 @@ _, _ = w.Write([]byte(encrypted))
 | 接口 | 方法 | `RecorderWriter` | `TimeoutWriter` | `CryptionWriter` | 场景 |
 |------|------|:---:|:---:|:---:|------|
 | `http.ResponseController` | `Unwrap()` | ✅ | ❌ | ❌ | 运行时能力协商 |
-| `http.Flusher` | `Flush()` | ✅ | ✅ | ✅ | SSE 等流式响应（底层不支持时静默忽略） |
+| `http.Flusher` | `Flush()` | ✅ | ✅ | ❌ | SSE 等流式响应（底层不支持时静默忽略；`CryptionWriter` 为空操作） |
 | `http.Hijacker` | `Hijack()` | ✅ | ✅ | ❌ | WebSocket 升级等连接接管（不支持时返回错误） |
 | `http.Pusher` | `Push()` | ✅ | ❌ | ❌ | HTTP/2 Server Push（不支持时返回错误） |
 
