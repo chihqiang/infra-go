@@ -12,12 +12,13 @@ import (
 // 对应 meta.go：structMeta/fieldMeta 的解析与缓存。
 
 type metaSample struct {
-	Name   string                `form:"name,default=foo"`
-	Skip   string                `form:"-"`
-	When   time.Time             `form:"when" time_format:"2006-01-02"`
-	Dur    time.Duration         `form:"dur"`
-	File   *multipart.FileHeader `form:"file"`
-	hidden string                // 未导出的非匿名字段，应被跳过
+	Name string                `form:"name,default=foo"`
+	Skip string                `form:"-"`
+	When time.Time             `form:"when" time_format:"2006-01-02"`
+	Dur  time.Duration         `form:"dur"`
+	File *multipart.FileHeader `form:"file"`
+	// hidden 未导出字段：测试 fixture，仅用于验证解析器会跳过它（值不影响解析）
+	hidden string
 }
 
 func findField(meta *structMeta, name string) *fieldMeta {
@@ -30,7 +31,9 @@ func findField(meta *structMeta, name string) *fieldMeta {
 }
 
 func TestParseStructMeta(t *testing.T) {
-	meta := getStructMeta(reflect.TypeOf(metaSample{}), "form")
+	// 构造携带未导出字段值的实例：验证解析器会跳过该字段（值不影响元数据）
+	sample := metaSample{hidden: "should-not-appear"}
+	meta := getStructMeta(reflect.TypeOf(sample), "form")
 
 	// 未导出字段被跳过；导出字段共 5 个
 	assert.Len(t, meta.fields, 5)

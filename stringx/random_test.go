@@ -111,17 +111,14 @@ func TestRandn_NegativeOrZeroLength(t *testing.T) {
 }
 
 func TestRandId_HexCharset(t *testing.T) {
-	// RandId 应返回小写 hex 字符串（32 字符 = 16 字节）
+	// RandId 应返回小写 hex 字符串（16 字符 = 8 字节）
+	re := regexp.MustCompile(`^[0-9a-f]{16}$`)
 	for i := 0; i < 20; i++ {
 		s := RandId()
 		if len(s) != idLen*2 {
 			t.Errorf("RandId() length = %d, want %d", len(s), idLen*2)
 		}
-		matched, err := regexp.MatchString(`^[0-9a-f]{16}$`, s)
-		if err != nil {
-			t.Fatalf("invalid pattern: %v", err)
-		}
-		if !matched {
+		if !re.MatchString(s) {
 			t.Errorf("RandId() = %q, not a 16-char lowercase hex string", s)
 		}
 	}

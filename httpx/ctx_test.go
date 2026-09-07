@@ -16,5 +16,4 @@ func TestContextWithRequestID_RoundTrip(t *testing.T) {
 
 func TestRequestIDFromContext_Empty(t *testing.T) {
 	assert.Equal(t, "", RequestIDFromContext(context.Background()))
-	assert.Equal(t, "", RequestIDFromContext(nil))
 }

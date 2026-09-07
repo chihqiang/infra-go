@@ -219,14 +219,6 @@ name: app
 	assert.Equal(t, "app", cfg.Name)
 }
 
-// mustJSONNumber 断言 v 是 json.Number 并返回。
-func mustJSONNumber(t *testing.T, v any) json.Number {
-	t.Helper()
-	n, ok := v.(json.Number)
-	assert.True(t, ok, "expected json.Number, got %T", v)
-	return n
-}
-
 // --- 字符串内容辅助断言 ---
 
 func TestUnmarshalMap_LowercasesKeys(t *testing.T) {

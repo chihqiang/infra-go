@@ -228,12 +228,13 @@ func TestFillAndOverride_MapField(t *testing.T) {
 
 func TestFillAndOverride_UnexportedField(t *testing.T) {
 	type Config struct {
-		Host string `json:",default=0.0.0.0"`
-		// unexported 字段应被跳过
-		hidden string
+		Host   string `json:",default=0.0.0.0"`
+		hidden string // 未导出字段应被覆盖逻辑跳过
 	}
 	var c Config
-	err := FillAndOverride(&c, Config{})
+	c.hidden = "keep-me" // 设置初始值：若误处理未导出字段，该值会被 src 覆盖
+	err := FillAndOverride(&c, Config{hidden: "drop-me"})
 	assert.NoError(t, err)
-	assert.Equal(t, "0.0.0.0", c.Host)
+	assert.Equal(t, "0.0.0.0", c.Host)   // 导出字段仍按 default 填充
+	assert.Equal(t, "keep-me", c.hidden) // 未导出字段保持原值，未被覆盖
 }
