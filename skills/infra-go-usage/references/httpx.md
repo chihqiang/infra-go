@@ -8,8 +8,10 @@ HTTP 服务基础设施，位于 `httpx` 目录。主包提供服务器、统一
 httpx/
 ├── request.go              — 请求绑定便捷 API（Bind*/MustBind*）+ 单值读取（QueryValue/PathValue/HeaderValue）
 ├── response.go             — 统一响应：Response[T]/CodeError/Ok*/Write*/SSEWriter/Redirect*
-├── server.go               — 服务器：Server/Route/Group/路由注册/中间件链/优雅关闭
-├── internal_middleware.go  — 中间件适配层：With*（转发 httpx/middleware）+ AsMiddleware
+├── server.go               — 服务器核心：Server/Route/ServerConfig 类型、路由注册/中间件链、Handler/404、启动与优雅关闭
+├── server_options.go       — 选项与适配：RouteOption/RunOption、With*/Apply*、AsMiddleware
+├── server_group.go         — 路由组：Group（前缀 + 中间件，支持嵌套）
+├── internal_middleware.go  — 内置中间件适配层：With*（转发 httpx/middleware）
 ├── internal_route.go       — 内置路由（PprofRoutes）
 ├── ctx.go                  — request_id context 工具（委托 httpx/middleware）
 ├── binding/                — 请求绑定实现（绑定器/映射引擎/校验器，见下）

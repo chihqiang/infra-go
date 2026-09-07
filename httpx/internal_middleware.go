@@ -30,21 +30,6 @@ func init() {
 	})
 }
 
-// AsMiddleware 将标准形式的中间件适配为 httpx.Middleware，方便快速把
-// 任意 func(http.Handler) http.Handler 中间件（如 httpx/middleware 子包的
-// NewXxx().Middleware()，或其它基于 net/http 的第三方中间件）注册到 server。
-//
-//	// 自定义/第三方标准中间件 → httpx 中间件
-//	server.Use(httpx.AsMiddleware(myStdMiddleware))
-//
-//	// 使用 httpx/middleware 子包（OO 形态）时亦可通过本函数接入：
-//	server.Use(httpx.AsMiddleware(middleware.NewCORS("*").Middleware()))
-func AsMiddleware(mw func(http.Handler) http.Handler) Middleware {
-	return func(next http.HandlerFunc) http.HandlerFunc {
-		return mw(http.HandlerFunc(next)).ServeHTTP
-	}
-}
-
 // WithCors 返回一个为响应设置 CORS 头的中间件。
 //
 // allowOrigins 为允许的来源列表；传入 "*" 表示允许所有来源。

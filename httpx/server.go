@@ -22,11 +22,15 @@ import (
 	mp "github.com/chihqiang/infra-go/mapping"
 )
 
-// 本文件实现 HTTP 服务器：
-//   - 核心类型（Middleware / Route / RouteOption / RunOption / Server）
-//   - 路由注册（AddRoute(s)/Use/Routes/PrintRoutes）、路由组选项（With*）与中间件包装（Apply*）
-//   - 路由组 Group、全局中间件懒加载与自定义 404
-//   - 服务器启动与优雅关闭（Start/Shutdown）
+// 本文件承载 HTTP 服务器 Server 核心：
+//   - 核心类型（Middleware / Route / ServerConfig / Server）
+//   - 服务器构造与路由注册（NewServer / AddRoute(s) / Use / Routes / PrintRoutes）
+//   - 全局中间件懒加载与自定义 404（Handler / SetNotFoundHandler）
+//   - 服务器启动与优雅关闭（Start / Shutdown / Stop）
+//   - 内部路径辅助（buildPattern / normalizePath / joinPath）
+//
+// 说明：路由组选项 / 中间件包装 / Server 选项（With* / Apply*）在 server_options.go；
+// 路由组 Group 在 server_group.go。
 
 // --- 核心类型 ---
 
@@ -53,18 +57,6 @@ type Route struct {
 	// Handler 处理该路由的 HTTP 处理器。
 	Handler http.HandlerFunc
 }
-
-// RouteOption 用于自定义一组路由的选项，如前缀、中间件。
-type RouteOption func(*routeGroup)
-
-// RunOption 用于自定义 Server 的选项，如超时、TLS。
-// 也可直接传入闭包，在构造时注册路由、添加中间件等：
-//
-//	server := httpx.NewServer(conf, func(s *httpx.Server) {
-//	    s.Use(loggingMiddleware)
-//	    s.AddRoute(httpx.Route{Method: "GET", Path: "/ping", Handler: ping})
-//	})
-type RunOption func(*Server)
 
 // ServerConfig 是 HTTP 服务器配置。
 // 使用 json 标签声明默认值和约束，兼容 conf 包从配置文件加载。
@@ -108,12 +100,6 @@ func fillDefault(cfg ServerConfig) ServerConfig {
 
 // --- 内部类型 ---
 
-// routeGroup 是一组路由及其配置。
-type routeGroup struct {
-	routes      []Route
-	middlewares []Middleware
-}
-
 // Server 是一个 HTTP 服务器，支持路由注册、中间件和优雅关闭。
 //
 // 底层使用 http.ServeMux，原生支持：
@@ -133,123 +119,6 @@ type Server struct {
 
 	// notFoundHandler 自定义 404 响应处理器（可选），通过 SetNotFoundHandler 设置。
 	notFoundHandler http.HandlerFunc
-}
-
-// --- 路由组选项（RouteOption）---
-
-// WithPrefix 为路由组添加路径前缀。
-//
-//	server.AddRoutes([]Route{
-//	    {Method: "GET", Path: "/users", Handler: listUsers},
-//	    {Method: "POST", Path: "/users", Handler: createUser},
-//	}, httpx.WithPrefix("/api/v1"))
-//
-// 注册的路由为：GET /api/v1/users, POST /api/v1/users
-func WithPrefix(prefix string) RouteOption {
-	return func(g *routeGroup) {
-		if prefix == "" {
-			return
-		}
-		routes := make([]Route, 0, len(g.routes))
-		for _, r := range g.routes {
-			routes = append(routes, Route{
-				Method:  r.Method,
-				Path:    joinPath(prefix, r.Path),
-				Handler: r.Handler,
-			})
-		}
-		g.routes = routes
-	}
-}
-
-// WithMiddleware 为路由组添加一个中间件。
-// 中间件按添加顺序执行（先添加的先执行）。
-func WithMiddleware(mw Middleware) RouteOption {
-	return func(g *routeGroup) {
-		g.middlewares = append(g.middlewares, mw)
-	}
-}
-
-// WithMiddlewares 为路由组添加多个中间件。
-// 中间件按传入顺序执行（第一个先执行）。
-func WithMiddlewares(mws ...Middleware) RouteOption {
-	return func(g *routeGroup) {
-		g.middlewares = append(g.middlewares, mws...)
-	}
-}
-
-// --- 独立函数形式的中间件包装 ---
-
-// ApplyMiddleware 将中间件应用到路由，返回包装后的路由。
-// 适用于需要在添加路由前对特定路由包装中间件的场景。
-//
-//	server.AddRoutes(httpx.ApplyMiddleware(authMiddleware,
-//	    httpx.Route{Method: "GET", Path: "/profile", Handler: getProfile},
-//	    httpx.Route{Method: "PUT", Path: "/profile", Handler: updateProfile},
-//	))
-func ApplyMiddleware(mw Middleware, rs ...Route) []Route {
-	routes := make([]Route, len(rs))
-	for i, r := range rs {
-		routes[i] = Route{
-			Method:  r.Method,
-			Path:    r.Path,
-			Handler: mw(r.Handler),
-		}
-	}
-	return routes
-}
-
-// ApplyMiddlewares 将多个中间件应用到路由，返回包装后的路由。
-// 中间件按切片顺序执行（第一个先执行）。
-func ApplyMiddlewares(mws []Middleware, rs ...Route) []Route {
-	for i := len(mws) - 1; i >= 0; i-- {
-		rs = ApplyMiddleware(mws[i], rs...)
-	}
-	return rs
-}
-
-// --- Server 选项（RunOption）---
-
-// WithReadTimeout 设置读超时。覆盖配置中的 ReadTimeout。
-func WithReadTimeout(d time.Duration) RunOption {
-	return func(s *Server) {
-		s.conf.ReadTimeout = d
-	}
-}
-
-// WithWriteTimeout 设置写超时。覆盖配置中的 WriteTimeout。
-func WithWriteTimeout(d time.Duration) RunOption {
-	return func(s *Server) {
-		s.conf.WriteTimeout = d
-	}
-}
-
-// WithIdleTimeout 设置空闲连接超时。覆盖配置中的 IdleTimeout。
-func WithIdleTimeout(d time.Duration) RunOption {
-	return func(s *Server) {
-		s.conf.IdleTimeout = d
-	}
-}
-
-// WithMaxHeaderBytes 设置最大请求头字节数。覆盖配置中的 MaxHeaderBytes。
-func WithMaxHeaderBytes(n int) RunOption {
-	return func(s *Server) {
-		s.conf.MaxHeaderBytes = n
-	}
-}
-
-// WithTLSConfig 设置 TLS 配置。
-func WithTLSConfig(cfg *tls.Config) RunOption {
-	return func(s *Server) {
-		s.tlsConfig = cfg
-	}
-}
-
-// WithShutdownTimeout 设置优雅关闭超时时间，覆盖配置中的 ShutdownTimeout。
-func WithShutdownTimeout(d time.Duration) RunOption {
-	return func(s *Server) {
-		s.conf.ShutdownTimeout = d
-	}
 }
 
 // --- Server 构造与路由注册 ---
@@ -450,64 +319,6 @@ func (s *Server) SetNotFoundHandler(h http.HandlerFunc) {
 func (s *Server) wrapNotFound(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		next(respw.NewNotFoundResponseWriter(w, r, s.notFoundHandler), r)
-	}
-}
-
-// --- 路由组（Group）---
-
-// Group 是一个路由组，共享路径前缀和中间件。
-// 支持链式调用和嵌套，便于按模块组织路由。
-type Group struct {
-	server      *Server
-	prefix      string
-	middlewares []Middleware
-}
-
-// Group 创建一个路由组。
-//
-//	api := server.Group("/api/v1")
-//	api.AddRoute(httpx.Route{Method: "GET", Path: "/users", Handler: listUsers})
-func (s *Server) Group(prefix string, mws ...Middleware) *Group {
-	return &Group{
-		server:      s,
-		prefix:      prefix,
-		middlewares: append([]Middleware(nil), mws...),
-	}
-}
-
-// Use 添加中间件到路由组。
-func (g *Group) Use(mws ...Middleware) {
-	g.middlewares = append(g.middlewares, mws...)
-}
-
-// AddRoute 添加单个路由到路由组，可附加 RouteOption。
-// opts 中的 RouteOption 会追加在组前缀、组中间件之后应用。
-func (g *Group) AddRoute(r Route, opts ...RouteOption) {
-	g.AddRoutes([]Route{r}, opts...)
-}
-
-// AddRoutes 添加多个路由到路由组，可附加 RouteOption。
-// 路由路径会自动拼接组前缀，handler 会应用组中间件。
-// opts 中的 RouteOption 会追加在组前缀、组中间件之后应用。
-func (g *Group) AddRoutes(rs []Route, opts ...RouteOption) {
-	allOpts := []RouteOption{WithPrefix(g.prefix)}
-	if len(g.middlewares) > 0 {
-		allOpts = append(allOpts, WithMiddlewares(g.middlewares...))
-	}
-	allOpts = append(allOpts, opts...)
-	g.server.AddRoutes(rs, allOpts...)
-}
-
-// Group 创建子路由组，继承父组的前缀和中间件。
-//
-//	api := server.Group("/api", logMiddleware)
-//	v1 := api.Group("/v1", authMiddleware)
-//	// 路由前缀 /api/v1，中间件 logMiddleware → authMiddleware
-func (g *Group) Group(prefix string, mws ...Middleware) *Group {
-	return &Group{
-		server:      g.server,
-		prefix:      joinPath(g.prefix, prefix),
-		middlewares: append(append([]Middleware(nil), g.middlewares...), mws...),
 	}
 }
 
