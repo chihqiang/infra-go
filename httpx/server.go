@@ -575,6 +575,13 @@ func (s *Server) Shutdown() error {
 	return err
 }
 
+// Stop 停止服务器并返回关闭错误，委托 Shutdown。
+// 提供与 Shutdown 等价的“停止”命名入口，便于适配要求 Stop() error 的管理接口
+// （如配合 service.AsService 纳入 ServiceGroup 管理）；直接调用方也可像 Shutdown 一样获取错误。
+func (s *Server) Stop() error {
+	return s.Shutdown()
+}
+
 // --- 内部辅助函数 ---
 
 // buildPattern 构建 ServeMux 的路由模式（格式："METHOD /path"）。

@@ -871,6 +871,54 @@ func TestServer_ShutdownNotStarted(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestServer_Stop(t *testing.T) {
+	s := NewServer(ServerConfig{Host: "127.0.0.1", Port: 0, ShutdownTimeout: 2 * time.Second})
+	s.AddRoute(Route{
+		Method: "GET", Path: "/ping", Handler: func(w http.ResponseWriter, r *http.Request) { OkJSON(w, "pong") },
+	})
+
+	ln, err := newTestListener()
+	require.NoError(t, err)
+	port := ln.Addr().(*testAddr).port
+	ln.Close()
+	s.conf.Port = port
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Start()
+	}()
+
+	// 等待服务器就绪
+	var lastErr error
+	for i := 0; i < 50; i++ {
+		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/ping", port))
+		if err != nil {
+			lastErr = err
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		resp.Body.Close()
+		lastErr = nil
+		break
+	}
+	require.NoError(t, lastErr, "server should be ready")
+
+	// Stop 返回 error，委托 Shutdown
+	assert.NoError(t, s.Stop())
+
+	select {
+	case err := <-errCh:
+		assert.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("server did not stop in time")
+	}
+}
+
+func TestServer_StopNotStarted(t *testing.T) {
+	s := newTestServer()
+	assert.NoError(t, s.Stop())
+}
+
 func TestServer_ContextPropagation(t *testing.T) {
 	s := newTestServer()
 	s.AddRoute(Route{

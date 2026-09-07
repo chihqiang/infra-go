@@ -346,7 +346,8 @@ server.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
 
 ```go
 server.Start()    // 阻塞，SIGINT/SIGTERM/SIGHUP 优雅关闭
-server.Shutdown() // 手动关闭
+server.Shutdown() // 手动关闭（返回 error）
+server.Stop()     // 停止，委托 Shutdown（返回 error），便于 service.AsService 纳入 ServiceGroup 管理
 ```
 
 ## 中间件

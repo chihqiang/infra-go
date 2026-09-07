@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/chihqiang/infra-go/logger"
@@ -152,4 +153,46 @@ func (s startOnlyService) Start() {
 type starterOnlyService struct {
 	Starter
 	noopStopper
+}
+
+// --- error 型服务适配 ---
+
+// AsService 将实现了 Start() error 与 Stop() error 的对象适配为 Service，便于直接纳入 ServiceGroup。
+// 典型对象如 *httpx.Server（Start/Stop 均返回 error，签名与 Service.Starter/Stopper 不同）。
+//
+//	sg := service.NewServiceGroup()
+//	sg.Add(service.AsService(srv)) // srv *httpx.Server
+//	sg.Start()
+//
+// Start / Stop 返回的 error 都会记录为错误日志（Service 接口无返回值，无法向上传递）；
+// Start 中的 panic 仍由 ServiceGroup 统一恢复并触发 Stop。
+func AsService[T interface {
+	Start() error
+	Stop() error
+}](s T) Service {
+	return errorServiceAdapter[T]{s: s}
+}
+
+// errorServiceAdapter 把 Start() error + Stop() error 的对象包装为无返回值的 Service。
+type errorServiceAdapter[T interface {
+	Start() error
+	Stop() error
+}] struct {
+	s T
+}
+
+func (a errorServiceAdapter[T]) Start() {
+	if err := a.s.Start(); err != nil {
+		logger.Error("service: managed service start returned error",
+			logger.Err(err),
+			logger.String("type", fmt.Sprintf("%T", a.s)))
+	}
+}
+
+func (a errorServiceAdapter[T]) Stop() {
+	if err := a.s.Stop(); err != nil {
+		logger.Error("service: managed service stop returned error",
+			logger.Err(err),
+			logger.String("type", fmt.Sprintf("%T", a.s)))
+	}
 }

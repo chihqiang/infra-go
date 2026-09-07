@@ -59,9 +59,9 @@ func main() {
         },
     })
 
-    // 4. 生命周期编排：并发启停，支持 SIGINT/SIGTERM 优雅关闭
+    // 4. 生命周期编排：service.AsService 将 *httpx.Server 适配为 Service，并发启停
     sg := service.NewServiceGroup()
-    sg.Add(service.WithStart(func() { _ = srv.Start() }))
+    sg.Add(service.AsService(srv))
     sg.Start()
 }
 ```

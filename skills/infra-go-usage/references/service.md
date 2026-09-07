@@ -7,7 +7,7 @@
 - **并发启动**：所有 Service 并发调用 `Start`，阻塞直到全部退出
 - **并发停止**：所有 Service 并发调用 `Stop`，`sync.Once` 保证只执行一次
 - **Panic 恢复**：`Start` 和 `Stop` 中的 panic 都会被恢复，通过 `logger` 记录错误日志，不中断其他服务；`Start` 中 panic 自动触发 `Stop` 解除其他服务阻塞
-- **适配函数**：`WithStart` / `WithStarter` 将普通函数包装为 Service
+- **适配函数**：`WithStart` / `WithStarter` 包装普通函数；`AsService` 适配 `Start() error` + `Stop() error` 对象（如 `httpx.Server`）
 - **日志集成**：使用 `infra-go/logger` 全局日志记录错误
 
 ## 安装
@@ -42,7 +42,6 @@ type Service interface {
 package main
 
 import (
-    "fmt"
     "net/http"
 
     "github.com/chihqiang/infra-go/httpx"
@@ -64,12 +63,9 @@ func main() {
         },
     })
 
-    // 用 WithStart 包装为 Service（Start 阻塞；注意 WithStart 的 Stop 是空操作，
-    // 不会调用 server.Shutdown，需自行在信号处理中优雅关停）
-    sg.Add(service.WithStart(func() {
-        fmt.Println("HTTP server starting on :8080")
-        server.Start()
-    }))
+    // 用 service.AsService 将 *httpx.Server 适配为 Service 直接管理
+    // （AsService 适配 Start() error + Stop() error 的对象；Start 阻塞直到收到信号优雅关闭）
+    sg.Add(service.AsService(server))
 
     // 启动所有服务（阻塞）
     sg.Start()
@@ -81,11 +77,12 @@ func main() {
 ```go
 sg := service.NewServiceGroup()
 
-// 添加多个服务：需用 WithStart 包装（或实现 Service 接口）。
-// 注意：httpx.Server 不满足 Service 接口（Start 返回 error、无 Stop，仅有 Shutdown），不能直接 Add。
-sg.Add(service.WithStart(func() { _ = server.Start() }))  // HTTP 服务
-sg.Add(service.WithStart(func() { _ = consumer.Run() })) // Redis 消费者
-sg.Add(service.WithStart(func() { cronTick() }))          // 定时任务
+// 添加多个服务：
+// - 形如 *httpx.Server（Start() error + Stop() error）的对象用 service.AsService 直接适配
+// - 无停止能力/需自行处理退出信号的普通函数用 service.WithStart
+sg.Add(service.AsService(server))                  // HTTP 服务（httpx.Server）
+sg.Add(service.WithStart(func() { _ = consumer.Run() })) // Redis 消费者（asynq）
+sg.Add(service.WithStart(func() { cronTick() }))  // 定时任务
 
 // 并发启动，阻塞直到全部退出
 sg.Start()
@@ -138,6 +135,20 @@ func (s *MyStarter) Start() { ... }
 
 sg.Add(service.WithStarter(&MyStarter{}))
 ```
+
+### AsService
+
+将实现了 `Start() error` 与 `Stop() error` 的对象适配为 Service，可直接 `sg.Add`。
+典型对象如 `httpx.Server`（其 `Start` / `Stop` 均返回 error，签名与 `Service.Starter`/`Stopper` 不同，无法直接作为 Service）：
+
+```go
+server := httpx.NewServer(httpx.ServerConfig{Host: "0.0.0.0", Port: 8080})
+// ...注册路由...
+
+sg.Add(service.AsService(server)) // 纳入 ServiceGroup 统一管理
+```
+
+`Start` / `Stop` 返回的 error 均记录为日志（`Service` 接口无返回值，无法向上传递）；`Start` 中 panic 仍由 ServiceGroup 恢复并触发 `Stop`。
 
 ## Panic 处理
 
@@ -193,8 +204,9 @@ sg.Stop() // 正常返回，panic 被记录
 
 | 函数 | 说明 |
 | ------ | ------ |
-| `WithStart(fn)` | 将 `func()` 包装为 Service |
-| `WithStarter(s)` | 将 `Starter` 包装为 Service |
+| `WithStart(fn)` | 将 `func()` 包装为 Service（Stop 空操作） |
+| `WithStarter(s)` | 将 `Starter` 包装为 Service（Stop 空操作） |
+| `AsService(s)` | 将 `Start() error` + `Stop() error` 对象（如 `httpx.Server`）适配为 Service |
 
 ## 停止顺序
 
@@ -212,6 +224,6 @@ Stop 顺序: C → B → A（逆序，但并发执行，不保证精确顺序）
 
 ```text
 service/
-├── servicegroup.go      — ServiceGroup、Service 接口、WithStart/WithStarter
+├── servicegroup.go      — ServiceGroup、Service 接口、WithStart/WithStarter/AsService
 └── servicegroup_test.go — ServiceGroup 单元测试
 ```

@@ -174,8 +174,8 @@ server.Start()
 
 ```go
 sg := service.NewServiceGroup()
-sg.Add(service.WithStart(func() { _ = server.Start() }))
-sg.Add(service.WithStart(func() { _ = consumer.Run() }))
+sg.Add(service.AsService(server))               // *httpx.Server：AsService 适配 Start()/Stop() error
+sg.Add(service.WithStart(func() { _ = consumer.Run() })) // taskq 消费者：用 WithStart 包装
 sg.Start() // 阻塞，全部退出后返回；Stop 保证只执行一次
 ```
 

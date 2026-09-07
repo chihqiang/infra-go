@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -336,4 +337,81 @@ func TestServiceGroup_ConcurrentStop(t *testing.T) {
 	wg.Wait()
 
 	assert.Equal(t, int32(1), atomic.LoadInt32(&svc.stopCalled))
+}
+
+// --- AsService 测试（Start() error + Stop() error 对象适配）---
+
+// errStartService 模拟 Start() error + Stop() error 的对象（形如 *httpx.Server）。
+// block=true 时 Start 阻塞直到 Stop（贴近真实服务器语义）。
+type errStartService struct {
+	startCalled int32
+	stopCalled  int32
+	startErr    error
+	stopErr     error
+	block       bool
+	stopCh      chan struct{}
+	stopOnce    sync.Once
+}
+
+func newBlockingErrStartService() *errStartService {
+	return &errStartService{block: true, stopCh: make(chan struct{})}
+}
+
+func (m *errStartService) Start() error {
+	atomic.StoreInt32(&m.startCalled, 1)
+	if m.block {
+		<-m.stopCh
+	}
+	return m.startErr
+}
+
+func (m *errStartService) Stop() error {
+	atomic.StoreInt32(&m.stopCalled, 1)
+	if m.stopCh != nil {
+		m.stopOnce.Do(func() { close(m.stopCh) })
+	}
+	return m.stopErr
+}
+
+func TestAsService_StartStop(t *testing.T) {
+	s := &errStartService{}
+	svc := AsService(s)
+
+	svc.Start()
+	assert.Equal(t, int32(1), atomic.LoadInt32(&s.startCalled))
+
+	svc.Stop()
+	assert.Equal(t, int32(1), atomic.LoadInt32(&s.stopCalled))
+}
+
+func TestAsService_StartErrorDoesNotPanic(t *testing.T) {
+	s := &errStartService{startErr: errors.New("boom")}
+	svc := AsService(s)
+
+	assert.NotPanics(t, func() { svc.Start() }) // 错误仅记录日志，不 panic
+	assert.Equal(t, int32(1), atomic.LoadInt32(&s.startCalled))
+}
+
+func TestAsService_StopErrorDoesNotPanic(t *testing.T) {
+	s := &errStartService{stopErr: errors.New("stop boom")}
+	svc := AsService(s)
+
+	assert.NotPanics(t, func() { svc.Stop() }) // 错误仅记录日志，不 panic
+	assert.Equal(t, int32(1), atomic.LoadInt32(&s.stopCalled))
+}
+
+func TestAsService_InServiceGroup(t *testing.T) {
+	s := newBlockingErrStartService()
+
+	sg := NewServiceGroup()
+	sg.Add(AsService(s))
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		sg.Stop()
+	}()
+
+	sg.Start() // Start 阻塞，直到 10ms 后 Stop 解除
+	assert.Equal(t, int32(1), atomic.LoadInt32(&s.startCalled))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&s.stopCalled))
 }
