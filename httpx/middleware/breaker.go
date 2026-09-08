@@ -6,6 +6,7 @@ import (
 
 	"github.com/chihqiang/infra-go/breaker"
 	"github.com/chihqiang/infra-go/httpx/respw"
+	"github.com/chihqiang/infra-go/httpx/x"
 	"github.com/chihqiang/infra-go/logger"
 )
 
@@ -31,7 +32,7 @@ func (b *Breaker) Middleware() func(http.Handler) http.Handler {
 			if err != nil {
 				logger.WarnCtx(r.Context(), "http request dropped by breaker",
 					logger.String("path", r.URL.Path),
-					logger.String("remote", r.RemoteAddr),
+					logger.String("remote", x.ClientIP(r)),
 					logger.Err(err),
 				)
 				writeError(r.Context(), w, http.StatusServiceUnavailable, "service unavailable")

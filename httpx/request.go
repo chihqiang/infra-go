@@ -6,11 +6,13 @@ import (
 
 	"github.com/chihqiang/infra-go/cast"
 	"github.com/chihqiang/infra-go/httpx/binding"
+	"github.com/chihqiang/infra-go/httpx/x"
 )
 
 // 本文件汇集 HTTP 请求侧的便捷 API：
 //   - 结构体绑定：Bind*/MustBind*（将请求数据映射到结构体并校验）
 //   - 单值读取：QueryValue/PathValue/HeaderValue（按 key 读取并转换类型）
+//   - 客户端 IP：ClientIP / ClientIPWithTrustedProxies（真实客户端 IP，转发 httpx/x）
 
 // --- 绑定函数 ---
 
@@ -182,4 +184,33 @@ func HeaderValue[T any](r *http.Request, key string, def ...T) T {
 		raw = r.Header.Get(key)
 	}
 	return valueOf(raw, defValue(def))
+}
+
+// --- 客户端 IP ---
+
+// ClientIP 获取请求的真实客户端 IP（纯 IP，不含端口），默认规则下最常用的便捷入口：
+//
+//	ip := httpx.ClientIP(r)
+//
+// 底层复用 httpx/x 的 IPChecker 默认解析器（回环/私网视为可信代理），能识别
+// X-Forwarded-For / Forwarded(RFC 7239) / X-Real-IP 并抵御伪造前缀；
+// 直连公网客户端时回退 RemoteAddr。
+//
+// 返回 nil 或无法确定时返回空字符串。
+// 如需自定义可信代理网段（如流量经公网 CDN/WAF/云 LB 回源）或启用厂商头
+// （CF-Connecting-IP / True-Client-IP），请改用 ClientIPWithTrustedProxies 或
+// 直接构建 x.NewIPChecker 复用。
+func ClientIP(r *http.Request) string {
+	return x.ClientIP(r)
+}
+
+// ClientIPWithTrustedProxies 在默认可信网段基础上追加自定义可信代理网段后，
+// 获取请求的真实客户端 IP。适用于流量经公网 CDN/WAF/云 LB 回源的场景，
+// 例如其出口在 100.64.0.0/10（云厂商 LB/CGNAT）时：
+//
+//	ip := httpx.ClientIPWithTrustedProxies(r, "100.64.0.0/10")
+//
+// 如需高频复用解析器（避免每次重复解析网段），请用 x.NewIPChecker(WithTrustedProxies(...))。
+func ClientIPWithTrustedProxies(r *http.Request, trusted ...string) string {
+	return x.ClientIPWithTrustedProxies(r, trusted...)
 }

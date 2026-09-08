@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"runtime/debug"
 
+	"github.com/chihqiang/infra-go/httpx/x"
 	"github.com/chihqiang/infra-go/logger"
 )
 
@@ -27,7 +28,7 @@ func (r *Recovery) Middleware() func(http.Handler) http.Handler {
 						logger.Any("panic", rec),
 						logger.String("method", req.Method),
 						logger.String("path", req.URL.Path),
-						logger.String("remote", req.RemoteAddr),
+						logger.String("remote", x.ClientIP(req)),
 						logger.String("stack", string(debug.Stack())),
 					)
 					// 使用空 context 输出错误，避免依赖请求链路中的 request_id

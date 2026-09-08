@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/chihqiang/infra-go/httpx/match"
+	"github.com/chihqiang/infra-go/httpx/x"
 	"github.com/chihqiang/infra-go/logger"
 )
 
@@ -24,7 +24,7 @@ type RateLimiter interface {
 type RateLimit struct {
 	limiter  RateLimiter
 	disabled bool // limiter 为 nil 时降级为不限流（fail-open）
-	matcher  *match.PathMatcher
+	matcher  *x.PathMatcher
 }
 
 // NewRateLimit 创建 HTTP 限流中间件。
@@ -44,7 +44,7 @@ type RateLimit struct {
 func NewRateLimit(limiter RateLimiter, skipPaths ...string) *RateLimit {
 	rl := &RateLimit{
 		limiter: limiter,
-		matcher: match.NewPathMatcher(skipPaths),
+		matcher: x.NewPathMatcher(skipPaths),
 	}
 	if limiter == nil {
 		// limiter 缺失：不 panic，仅告警并降级为不限流（fail-open）。
@@ -90,7 +90,7 @@ func (rl *RateLimit) Middleware() func(http.Handler) http.Handler {
 			if !allowed {
 				logger.WarnCtx(r.Context(), "http request dropped by rate limiter",
 					logger.String("path", r.URL.Path),
-					logger.String("remote", r.RemoteAddr),
+					logger.String("remote", x.ClientIP(r)),
 				)
 				writeError(r.Context(), w, http.StatusTooManyRequests, http.StatusText(http.StatusTooManyRequests))
 				return

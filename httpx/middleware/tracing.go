@@ -4,8 +4,8 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/chihqiang/infra-go/httpx/match"
 	"github.com/chihqiang/infra-go/httpx/respw"
+	"github.com/chihqiang/infra-go/httpx/x"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -27,20 +27,20 @@ const defaultTracerName = "infra-go"
 // 默认使用全局 TracerProvider（经 trace.StartAgent 装配）；请求 context 中若
 // 已有有效 span，则沿用其 TracerProvider（支持链路内嵌套追踪）。
 type Tracing struct {
-	matcher *match.PathMatcher
+	matcher *x.PathMatcher
 	name    string
 }
 
 // NewTracing 创建 HTTP 服务端链路追踪中间件。
 // ignorePaths 用于指定不追踪的请求路径（如健康检查、探针、监控等），命中规则的
-// 请求直接放行、不创建 span。路径匹配由 match 包统一提供，支持三种形式（详见
-// match.NewPathMatcher）：
+// 请求直接放行、不创建 span。路径匹配由 x 包统一提供，支持三种形式（详见
+// x.NewPathMatcher）：
 //   - 精确匹配：如 "/health"
 //   - 前缀通配：以 "*" 结尾且可跨目录，如 "/health*" 命中 /health、/healthz、/health/live
 //   - glob 通配：* 不跨目录，如 "/api/*/x"
 func NewTracing(ignorePaths ...string) *Tracing {
 	return &Tracing{
-		matcher: match.NewPathMatcher(ignorePaths),
+		matcher: x.NewPathMatcher(ignorePaths),
 		name:    defaultTracerName,
 	}
 }

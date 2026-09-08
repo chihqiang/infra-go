@@ -16,8 +16,8 @@ httpx/
 ├── ctx.go                  — request_id context 工具（委托 httpx/middleware）
 ├── binding/                — 请求绑定实现（绑定器/映射引擎/校验器，见下）
 ├── middleware/             — 通用中间件实现（面向对象，一个中间件一个文件）
-├── match/                  — 路径匹配器（中间件 skip/ignore 规则，见 [match](./match.md)）
-└── respw/                  — ResponseWriter 增强包装（见 [respw](./respw.md)）
+├── respw/                  — ResponseWriter 增强包装（见 [httpx-respw](./httpx-respw.md)）
+└── x/                      — 通用 HTTP 小工具（路径匹配 + 客户端 IP 解析，见 [httpx-x](./httpx-x.md)）
 ```
 
 - `httpx/binding`：绑定器接口/实例、MIME 常量、反射映射引擎、校验器（`SetValidateFn`）。
@@ -420,7 +420,7 @@ server.Use(httpx.AsMiddleware(middleware.NewCORS("*").Middleware()))       // �
 
 ### skipPaths / ignorePaths 匹配
 
-`WithLogger` / `WithRateLimit` / `WithCryption` 的 `skipPaths`、`WithTracing` 的 `ignorePaths` 使用 `httpx/match` 子包的 `PathMatcher`，支持精确匹配（`/health`）、前缀通配（`/health*`，跨目录）、glob（`/api/*/x`，不跨目录），见 [match](./match.md)。
+`WithLogger` / `WithRateLimit` / `WithCryption` 的 `skipPaths`、`WithTracing` 的 `ignorePaths` 使用 `httpx/x` 子包的 `PathMatcher`，支持精确匹配（`/health`）、前缀通配（`/health*`，跨目录）、glob（`/api/*/x`，不跨目录），见 [httpx-x](./httpx-x.md)。
 
 ## 内置路由：PprofRoutes
 

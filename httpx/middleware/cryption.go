@@ -6,8 +6,8 @@ import (
 	"net/http"
 
 	"github.com/chihqiang/infra-go/hash"
-	"github.com/chihqiang/infra-go/httpx/match"
 	"github.com/chihqiang/infra-go/httpx/respw"
+	"github.com/chihqiang/infra-go/httpx/x"
 	"github.com/chihqiang/infra-go/logger"
 )
 
@@ -29,7 +29,7 @@ const defaultMaxBytes = 5 << 20 // 5 MB
 //   - 响应超过缓冲上限时回退为明文输出（不加密），避免大响应导致 OOM。
 type Cryption struct {
 	key              []byte
-	matcher          *match.PathMatcher
+	matcher          *x.PathMatcher
 	maxRequestBytes  int64 // 密文请求体上限
 	maxResponseBytes int   // 加密响应缓冲上限
 }
@@ -57,7 +57,7 @@ func NewCryptionWithLimit(key []byte, maxRequestBytes int64, maxResponseBytes in
 	}
 	return &Cryption{
 		key:              key,
-		matcher:          match.NewPathMatcher(skipPaths),
+		matcher:          x.NewPathMatcher(skipPaths),
 		maxRequestBytes:  maxRequestBytes,
 		maxResponseBytes: maxResponseBytes,
 	}

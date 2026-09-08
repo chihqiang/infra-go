@@ -109,16 +109,15 @@ http.ListenAndServe(":8080", handler)
 
 ### 按用户/IP 精细化限流
 
-`httpx.WithRateLimit` 为全局限流（整个服务共享同一实例）。需要按用户、IP、路由等维度独立计数时，按维度 key 构建限流器并自行封装：
+`httpx.WithRateLimit` 为全局限流（整个服务共享同一实例）。需要按用户、IP、路由等维度独立计数时，按维度 key 构建限流器并自行封装（取客户端 IP 直接用 `x.ClientIP`，已处理反代/XFF，勿手写 `net.SplitHostPort`）：
 
 ```go
+import "github.com/chihqiang/infra-go/httpx/x"
+
 func RateLimitByIP(rdb *redis.Client, rate, burst float64) func(http.Handler) http.Handler {
     return func(next http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-            ip, _, err := net.SplitHostPort(r.RemoteAddr)
-            if err != nil {
-                ip = r.RemoteAddr
-            }
+            ip := x.ClientIP(r) // 真实客户端 IP（含反代/可信代理解析）
             key := fmt.Sprintf("rate_limit:ip:%s", ip)
             limiter := ratelimit.NewRedisTokenBucket(rdb, key, rate, burst)
             if !limiter.Allow() {

@@ -1,9 +1,13 @@
-// Package match 提供轻量的模式匹配器。
+// Package x 汇集 httpx 下与中间件本体无关的通用 HTTP 小工具，供本库各模块复用。
 //
-// 目前提供 HTTP 请求路径匹配器，供 httpx/middleware 各中间件复用同一套
-// 路径忽略规则（如 WithLogger / WithCryption 的 skipPaths、WithTracing 的
-// ignorePaths），避免各自重复实现。
-package match
+// 目前包含：
+//   - 路径匹配器（PathMatcher）：httpx/middleware 各中间件的 skipPaths / ignorePaths
+//     忽略规则统一实现，避免各自重复造轮子；
+//   - 客户端 IP 解析（IPChecker / ClientIP）：获取经反向代理转发后的真实客户端 IP。
+//
+// 命名 x 表示这类零散工具按需收敛于此集合，避免为单一函数各自建包；
+// 后续新增同类的通用小工具时放入本包即可。
+package x
 
 import (
 	"path"
