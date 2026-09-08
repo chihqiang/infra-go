@@ -167,17 +167,17 @@ func TestCryption_RequestTooLarge(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/echo", strings.NewReader(encBody))
 	req.ContentLength = int64(len(encBody))
 
-	rec := perform(NewCryptionWithLimit(testKey, 16).Middleware(), ok, req)
+	rec := perform(NewCryptionWithLimit(testKey, 16, defaultMaxBytes).Middleware(), ok, req)
 	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 }
 
 func TestCryption_ResponseOverflowFallsBackPlaintext(t *testing.T) {
 	silenceLogger(t)
-	// 响应超过缓冲上限（1MB）应回退明文：分块写入，使前段进入缓冲、后续触发超限
-	const chunk = 256 * 1024
+	// 响应超过默认缓冲上限（5MB）应回退明文：分块写入，使前段进入缓冲、后续触发超限
+	const chunk = 512 * 1024
 	big := func(w http.ResponseWriter, r *http.Request) {
 		blob := bytes.Repeat([]byte("x"), chunk)
-		for i := 0; i < 6; i++ { // 共 1.5MB > 1MB 上限
+		for i := 0; i < 12; i++ { // 共 6MB > 5MB 上限
 			_, _ = w.Write(blob)
 		}
 	}
@@ -185,8 +185,26 @@ func TestCryption_ResponseOverflowFallsBackPlaintext(t *testing.T) {
 		httptest.NewRequest(http.MethodGet, "/big", nil))
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	// 明文回退：输出已缓冲的 1MB 明文，body 可直接读取（非密文）
-	assert.Len(t, rec.Body.Bytes(), maxEncryptedResponseBytes)
+	// 明文回退：输出已缓冲的 5MB 明文，body 可直接读取（非密文）
+	assert.Len(t, rec.Body.Bytes(), defaultMaxBytes)
+}
+
+func TestCryption_ResponseLimitConfigurable(t *testing.T) {
+	silenceLogger(t)
+	// 自定义较小响应上限（64KB），验证可配置生效
+	const customLimit = 64 * 1024
+	const chunk = 32 * 1024
+	big := func(w http.ResponseWriter, r *http.Request) {
+		blob := bytes.Repeat([]byte("y"), chunk)
+		for i := 0; i < 4; i++ { // 共 128KB > 64KB 上限
+			_, _ = w.Write(blob)
+		}
+	}
+	mw := NewCryptionWithLimit(testKey, defaultMaxBytes, customLimit)
+	rec := perform(mw.Middleware(), big, httptest.NewRequest(http.MethodGet, "/big", nil))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Len(t, rec.Body.Bytes(), customLimit) // 回退明文输出已缓冲的 64KB
 }
 
 func TestCryption_SuccessResponseEncryptedWithStatus(t *testing.T) {

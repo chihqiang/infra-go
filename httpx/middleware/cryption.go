@@ -11,13 +11,9 @@ import (
 	"github.com/chihqiang/infra-go/logger"
 )
 
-// maxEncryptedResponseBytes 限制加密响应的最大缓冲大小（默认 1MB）。
-// 超过此大小的响应将回退为明文输出，避免大响应导致内存暴涨。
-const maxEncryptedResponseBytes = 1 << 20 // 1 MB
-
-// defaultMaxRequestBytes 默认密文请求体上限（4MB）。
-// 解密前先限流读取，避免超大请求体导致内存暴涨。
-const defaultMaxRequestBytes int64 = 4 << 20 // 4 MB
+// defaultMaxBytes 默认密文请求体上限与加密响应缓冲上限（统一 5MB）。
+// 请求体超限返回 413；响应超限回退为明文输出，避免大响应导致内存暴涨。
+const defaultMaxBytes = 5 << 20 // 5 MB
 
 // Cryption 是请求/响应 AES-GCM 加解密中间件。
 // 请求体需为 base64 编码的 AES-GCM 密文（nonce || ciphertext），中间件解密后
@@ -30,11 +26,12 @@ const defaultMaxRequestBytes int64 = 4 << 20 // 4 MB
 //   - 仅 2xx（且非 204/205、非 HEAD）的成功响应体加密；
 //   - 错误响应（4xx/5xx）、重定向（3xx）、204/205 及 HEAD 请求保持明文透传，
 //     并保留原始状态码，便于客户端排查与 HTTP 语义正确（无 body 的状态码不输出密文 body）。
-//   - 响应超过 1MB 缓冲上限时回退为明文输出（不加密），避免大响应导致 OOM。
+//   - 响应超过缓冲上限时回退为明文输出（不加密），避免大响应导致 OOM。
 type Cryption struct {
-	key             []byte
-	matcher         *match.PathMatcher
-	maxRequestBytes int64
+	key              []byte
+	matcher          *match.PathMatcher
+	maxRequestBytes  int64 // 密文请求体上限
+	maxResponseBytes int   // 加密响应缓冲上限
 }
 
 // NewCryption 创建请求/响应加解密中间件。
@@ -42,21 +39,27 @@ type Cryption struct {
 // skipPaths 为不进行请求/响应加解密的路径列表，命中路径以明文透传（常用于回调、
 // 静态资源等无法加密的场景）。匹配方式：精确匹配（如 "/callback"）或以 "*" 结尾
 // 的前缀通配（如 "/public/*"）。
-// 密文请求体默认上限 4MB，超限返回 413；需要调整请用 NewCryptionWithLimit。
+// 密文请求体与加密响应默认上限均为 5MB，超限分别返回 413 / 回退明文；
+// 需要调整请用 NewCryptionWithLimit。
 func NewCryption(key []byte, skipPaths ...string) *Cryption {
-	return NewCryptionWithLimit(key, defaultMaxRequestBytes, skipPaths...)
+	return NewCryptionWithLimit(key, defaultMaxBytes, defaultMaxBytes, skipPaths...)
 }
 
-// NewCryptionWithLimit 创建加解密中间件，并指定密文请求体的最大字节数。
-// maxRequestBytes <= 0 时使用默认值 4MB。
-func NewCryptionWithLimit(key []byte, maxRequestBytes int64, skipPaths ...string) *Cryption {
+// NewCryptionWithLimit 创建加解密中间件，并指定密文请求体与加密响应的最大字节数。
+// maxRequestBytes 为密文请求体上限（超出返回 413）；maxResponseBytes 为加密响应缓冲上限
+// （超出回退明文输出，避免 OOM）。任一参数 <= 0 时使用默认值 5MB。
+func NewCryptionWithLimit(key []byte, maxRequestBytes int64, maxResponseBytes int, skipPaths ...string) *Cryption {
 	if maxRequestBytes <= 0 {
-		maxRequestBytes = defaultMaxRequestBytes
+		maxRequestBytes = defaultMaxBytes
+	}
+	if maxResponseBytes <= 0 {
+		maxResponseBytes = defaultMaxBytes
 	}
 	return &Cryption{
-		key:             key,
-		matcher:         match.NewPathMatcher(skipPaths),
-		maxRequestBytes: maxRequestBytes,
+		key:              key,
+		matcher:          match.NewPathMatcher(skipPaths),
+		maxRequestBytes:  maxRequestBytes,
+		maxResponseBytes: maxResponseBytes,
 	}
 }
 
@@ -102,7 +105,7 @@ func (c *Cryption) Middleware() func(http.Handler) http.Handler {
 			}
 
 			// 缓冲 handler 的响应，结束后统一决定"加密输出"还是"明文透传"。
-			cw := respw.NewCryptionWriter(w, maxEncryptedResponseBytes)
+			cw := respw.NewCryptionWriter(w, c.maxResponseBytes)
 			next.ServeHTTP(cw, r)
 
 			// handler 未显式 WriteHeader 时按 200 处理。
@@ -124,7 +127,7 @@ func (c *Cryption) Middleware() func(http.Handler) http.Handler {
 				if cw.Overflowed() {
 					logger.WarnCtx(r.Context(), "encrypted response exceeds max buffer, falling back to plaintext",
 						logger.String("path", r.URL.Path),
-						logger.Int("max_bytes", maxEncryptedResponseBytes),
+						logger.Int("max_bytes", c.maxResponseBytes),
 					)
 				}
 				// Content-Length 交由 net/http 按实际 body 自动计算，避免与透传内容不一致
