@@ -143,3 +143,115 @@ func TestKODO_DeleteCancelledCtx(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "delete KODO object")
 }
+
+// --- OSS Read/Exists ctx 快速失败 ---
+
+func TestOSS_ReadCancelledCtx(t *testing.T) {
+	s, err := NewOSS(&OSSConfig{
+		Endpoint:        "oss-cn-hangzhou.aliyuncs.com",
+		AccessKeyID:     "test-access-key-id",
+		AccessKeySecret: "test-access-key-secret",
+		Bucket:          "test-bucket",
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = s.Read(ctx, "a.txt")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "read OSS object")
+}
+
+func TestOSS_ExistsCancelledCtx(t *testing.T) {
+	s, err := NewOSS(&OSSConfig{
+		Endpoint:        "oss-cn-hangzhou.aliyuncs.com",
+		AccessKeyID:     "test-access-key-id",
+		AccessKeySecret: "test-access-key-secret",
+		Bucket:          "test-bucket",
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = s.Exists(ctx, "a.txt")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "check OSS object")
+}
+
+// --- COS Read/Exists ctx 快速失败 ---
+
+func TestCOS_ReadCancelledCtx(t *testing.T) {
+	s, err := NewCOS(&COSConfig{
+		BucketURL: "https://test-bucket.cos.ap-beijing.myqcloud.com",
+		SecretID:  "test-secret-id",
+		SecretKey: "test-secret-key",
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = s.Read(ctx, "a.txt")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "read COS object")
+}
+
+func TestCOS_ExistsCancelledCtx(t *testing.T) {
+	s, err := NewCOS(&COSConfig{
+		BucketURL: "https://test-bucket.cos.ap-beijing.myqcloud.com",
+		SecretID:  "test-secret-id",
+		SecretKey: "test-secret-key",
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = s.Exists(ctx, "a.txt")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "check COS object")
+}
+
+// --- KODO Read/Exists 本地分支 ---
+
+func TestKODO_ReadCancelledCtx(t *testing.T) {
+	s, err := NewKODO(&KODOConfig{
+		AccessKey: "test-access-key",
+		SecretKey: "test-secret-key",
+		Bucket:    "test-bucket",
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = s.Read(ctx, "a.txt")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "read KODO object")
+}
+
+func TestKODO_ExistsCancelledCtx(t *testing.T) {
+	s, err := NewKODO(&KODOConfig{
+		AccessKey: "test-access-key",
+		SecretKey: "test-secret-key",
+		Bucket:    "test-bucket",
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = s.Exists(ctx, "a.txt")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "check KODO object")
+}
+
+func TestKODO_ReadURLNotSet(t *testing.T) {
+	// 未配置公开访问域名 URL：Read 应在发起网络请求前返回错误
+	s, err := NewKODO(&KODOConfig{
+		AccessKey: "test-access-key",
+		SecretKey: "test-secret-key",
+		Bucket:    "test-bucket",
+	})
+	require.NoError(t, err)
+
+	_, err = s.Read(context.Background(), "a.txt")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "KODO URL is empty")
+}

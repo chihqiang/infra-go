@@ -10,13 +10,25 @@ import (
 // Storage 存储服务接口，定义了对象存储的基本操作。
 // 目前支持本地文件系统、阿里云 OSS、腾讯云 COS 和七牛云 KODO 四种实现。
 //
-// 注意：阿里云 OSS SDK 不支持 context 取消，传给 Write/Delete 的 context
-// 在 OSS 实现中仅用于超时检测（通过 context-aware reader），不会中断 SDK 调用。
+// 注意：阿里云 OSS SDK 不支持 context 取消，传给 Write/Delete/Read/Exists 的
+// context 在 OSS 实现中仅用于快速失败检测（发起 SDK 调用前检查 ctx 状态），
+// 不会中断已发起的 SDK 调用。
 type Storage interface {
 	// Write 将内容写入指定路径。
 	// ctx 用于控制请求超时和取消。
 	// path 为对象在存储桶中的路径（key），content 为文件内容。
 	Write(ctx context.Context, path string, content []byte) error
+
+	// Read 读取指定路径对象的完整内容。
+	// ctx 用于控制请求超时和取消。
+	// path 为对象在存储桶中的路径（key）。
+	// 对象不存在时返回错误（各驱动返回自身 SDK 的错误，可配合 Exists 先做判断）。
+	Read(ctx context.Context, path string) ([]byte, error)
+
+	// Exists 判断指定路径的对象是否存在。
+	// ctx 用于控制请求超时和取消。
+	// path 为对象在存储桶中的路径（key）。
+	Exists(ctx context.Context, path string) (bool, error)
 
 	// Delete 删除指定路径的对象，返回删除的对象数量。
 	// ctx 用于控制请求超时和取消。
@@ -74,6 +86,24 @@ func (s Storages) Write(ctx context.Context, name, path string, content []byte) 
 		return fmt.Errorf("storage: unknown storage %q", name)
 	}
 	return st.Write(ctx, path, content)
+}
+
+// Read 读取指定别名的存储实例中对象的完整内容。
+func (s Storages) Read(ctx context.Context, name, path string) ([]byte, error) {
+	st, ok := s[name]
+	if !ok {
+		return nil, fmt.Errorf("storage: unknown storage %q", name)
+	}
+	return st.Read(ctx, path)
+}
+
+// Exists 判断指定别名的存储实例中的对象是否存在。
+func (s Storages) Exists(ctx context.Context, name, path string) (bool, error) {
+	st, ok := s[name]
+	if !ok {
+		return false, fmt.Errorf("storage: unknown storage %q", name)
+	}
+	return st.Exists(ctx, path)
 }
 
 // Delete 删除指定别名的存储实例中的对象，返回删除的对象数量。

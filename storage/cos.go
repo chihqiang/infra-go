@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 
@@ -73,6 +74,35 @@ func (s *cosStorage) Write(ctx context.Context, path string, content []byte) err
 		return fmt.Errorf("storage: failed to write COS object %q: %w", path, err)
 	}
 	return nil
+}
+
+// Read 读取 COS 指定路径对象的完整内容。
+func (s *cosStorage) Read(ctx context.Context, path string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("storage: read COS object %q: %w", path, err)
+	}
+	resp, err := s.client.Object.Get(ctx, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("storage: failed to read COS object %q: %w", path, err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("storage: failed to read COS object %q body: %w", path, err)
+	}
+	return data, nil
+}
+
+// Exists 判断 COS 指定路径的对象是否存在。
+func (s *cosStorage) Exists(ctx context.Context, path string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, fmt.Errorf("storage: check COS object %q: %w", path, err)
+	}
+	found, err := s.client.Object.IsExist(ctx, path)
+	if err != nil {
+		return false, fmt.Errorf("storage: failed to check COS object %q: %w", path, err)
+	}
+	return found, nil
 }
 
 // Delete 删除 COS 指定路径的对象，返回删除的对象数量。

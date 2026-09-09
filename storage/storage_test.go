@@ -612,3 +612,34 @@ func TestStorages_CompileTimeCheck(t *testing.T) {
 	// Storages 本身不需要满足 Storage，但需保证类型定义可用
 	var _ map[string]Storage = Storages{}
 }
+
+func TestStorages_ReadExistsSuccess(t *testing.T) {
+	s, err := NewLocal(&LocalConfig{RootDir: t.TempDir()})
+	require.NoError(t, err)
+	storages := Storages(map[string]Storage{"files": s})
+	ctx := context.Background()
+
+	require.NoError(t, storages.Write(ctx, "files", "a.txt", []byte("data")))
+
+	ok, err := storages.Exists(ctx, "files", "a.txt")
+	require.NoError(t, err)
+	assert.True(t, ok)
+
+	data, err := storages.Read(ctx, "files", "a.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "data", string(data))
+}
+
+func TestStorages_ReadUnknownStorage(t *testing.T) {
+	storages := Storages(map[string]Storage{})
+	_, err := storages.Read(context.Background(), "unknown", "path")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unknown storage "unknown"`)
+}
+
+func TestStorages_ExistsUnknownStorage(t *testing.T) {
+	storages := Storages(map[string]Storage{})
+	_, err := storages.Exists(context.Background(), "unknown", "path")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unknown storage "unknown"`)
+}

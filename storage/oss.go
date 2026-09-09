@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 
@@ -83,6 +84,35 @@ func (s *ossStorage) Write(ctx context.Context, path string, content []byte) err
 		return fmt.Errorf("storage: failed to write OSS object %q: %w", path, err)
 	}
 	return nil
+}
+
+// Read 读取 OSS 指定路径对象的完整内容。
+func (s *ossStorage) Read(ctx context.Context, path string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("storage: read OSS object %q: %w", path, err)
+	}
+	body, err := s.bucket.GetObject(path)
+	if err != nil {
+		return nil, fmt.Errorf("storage: failed to read OSS object %q: %w", path, err)
+	}
+	defer body.Close()
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return nil, fmt.Errorf("storage: failed to read OSS object %q body: %w", path, err)
+	}
+	return data, nil
+}
+
+// Exists 判断 OSS 指定路径的对象是否存在。
+func (s *ossStorage) Exists(ctx context.Context, path string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, fmt.Errorf("storage: check OSS object %q: %w", path, err)
+	}
+	found, err := s.bucket.IsObjectExist(path)
+	if err != nil {
+		return false, fmt.Errorf("storage: failed to check OSS object %q: %w", path, err)
+	}
+	return found, nil
 }
 
 // Delete 删除 OSS 指定路径的对象，返回删除的对象数量。

@@ -96,7 +96,7 @@ port: 8080
 | [syncx](./skills/infra-go-usage/references/syncx.md) | 并发工具，SingleFlight/ConcurrentMap/Semaphore |
 | [service](./skills/infra-go-usage/references/service.md) | 服务组，并发启动/停止多个 Service，sync.Once 保证只停一次 |
 | [taskq](./skills/infra-go-usage/references/taskq.md) | 异步任务队列，基于 asynq，生产者/消费者模式 |
-| [storage](./skills/infra-go-usage/references/storage.md) | 统一对象存储接口，支持阿里云 OSS、腾讯云 COS 和七牛云 KODO。 |
+| [storage](./skills/infra-go-usage/references/storage.md) | 统一对象存储接口，支持本地文件、阿里云 OSS、腾讯云 COS 和七牛云 KODO；提供写入/读取/存在性判断/删除/URL 拼接。 |
 | [websocket](./skills/infra-go-usage/references/websocket.md) | WebSocket 服务封装，基于 gorilla/websocket，事件驱动、房间广播、心跳检测 |
 | [stringx](./skills/infra-go-usage/references/stringx.md) | 字符串工具包，随机生成、判断、转换、拆分连接等常用函数 |
 

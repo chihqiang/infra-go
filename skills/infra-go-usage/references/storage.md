@@ -9,15 +9,21 @@ Config.Driver ──▶ New() ──┬── "local" ──▶ NewLocal() ─�
                           ├── "oss"   ──▶ NewOSS()   ──▶ ossStorage
                           ├── "cos"   ──▶ NewCOS()   ──▶ cosStorage
                           └── "kodo"  ──▶ NewKODO()  ──▶ kodoStorage
-
-所有实现都满足 Storage 接口：
-    Write(ctx context.Context, path string, content []byte) error
-    Delete(ctx context.Context, path string) (int64, error)
-    URL(ctx context.Context, path string) (string, error)
 ```
 
-ctx 用于控制请求超时和取消。注意：阿里云 OSS SDK 不支持原生 context 取消，
-OSS 实现仅做快速失败检测；KODO 的 Delete 使用了不支持 context 的 Batch API，同样仅做快速失败检测。
+所有实现都满足 `Storage` 接口（5 个方法）：
+
+```go
+type Storage interface {
+    Write(ctx context.Context, path string, content []byte) error      // 写入对象
+    Read(ctx context.Context, path string) ([]byte, error)             // 读取对象完整内容
+    Exists(ctx context.Context, path string) (bool, error)             // 判断对象是否存在
+    Delete(ctx context.Context, path string) (int64, error)            // 删除对象，返回删除数量
+    URL(ctx context.Context, path string) (string, error)              // 拼接对象访问 URL
+}
+```
+
+ctx 用于控制请求超时和取消。注意：各云 SDK 的 context 支持程度不一，实现统一为**发起 SDK 调用前先检查 `ctx.Err()` 做快速失败**，不会中断已发起的 SDK 调用：阿里云 OSS SDK 不支持原生 context 取消；KODO 的 Delete 使用了不支持 context 的 Batch API、Exists 的 Stat 基于服务端查询；KODO 的 Read 走公开域名 HTTP GET，需配置 `URL`（私有空间暂不支持下载）。
 
 ## 快速开始
 
@@ -60,6 +66,20 @@ func main() {
     }
     logger.Infof("file URL: %s", u)
 
+    // 判断对象是否存在
+    exists, err := s.Exists(ctx, "test/hello.txt")
+    if err != nil {
+        logger.Fatal("failed to check file", logger.Err(err))
+    }
+    logger.Infof("file exists: %v", exists)
+
+    // 读取对象内容（读回做校验/处理等）
+    data, err := s.Read(ctx, "test/hello.txt")
+    if err != nil {
+        logger.Fatal("failed to read file", logger.Err(err))
+    }
+    logger.Infof("file content: %s", data)
+
     // 删除文件
     count, err := s.Delete(ctx, "test/hello.txt")
     if err != nil {
@@ -68,6 +88,37 @@ func main() {
     logger.Infof("deleted %d object(s)", count)
 }
 ```
+
+## 读取与存在性判断（Read / Exists）
+
+`Read` 读取对象完整内容并以 `[]byte` 返回，适合内容量不大的读回校验、图片处理、模板渲染等场景；对象不存在时返回错误。
+`Exists` 基于各驱动的元信息查询（Head/Stat）判断对象是否存在，适合上传前去重、资源可用性校验等场景。
+
+```go
+ctx := context.Background()
+
+// 先判断、再读取（不存在时不触发 Read 的错误）
+if ok, err := s.Exists(ctx, "img/a.png"); err != nil {
+    logger.Fatal("check failed", logger.Err(err))
+} else if !ok {
+    logger.Infof("object not exists")
+} else {
+    data, err := s.Read(ctx, "img/a.png")
+    if err != nil {
+        logger.Fatal("read failed", logger.Err(err))
+    }
+    logger.Infof("size=%d", len(data))
+}
+```
+
+各驱动实现要点：
+
+| 驱动 | Read | Exists |
+| ------ | ------ | ------ |
+| `local` | `os.ReadFile` 读取本地文件 | `os.Stat`，文件不存在返回 `(false, nil)` |
+| `oss` | `bucket.GetObject` → `io.ReadAll` | `bucket.IsObjectExist` |
+| `cos` | `Object.Get` → `resp.Body` | `Object.IsExist` |
+| `kodo` | 需配置公开访问域名 `URL`，否则报错；私有空间暂不支持 | `Stat`，HTTP 612（no such file）视为不存在 |
 
 ## 配置
 
@@ -245,7 +296,7 @@ s, err := storage.NewKODO(&storage.KODOConfig{
 出错时 panic，适合初始化场景：
 
 ```go
-// Storage 为无状态客户端（接口仅 Write/Delete/URL，无 Close，无需释放）
+// Storage 为无状态客户端（接口 5 方法：Write/Read/Exists/Delete/URL，无 Close，无需释放）
 s := storage.MustNew(storage.Config{
     Driver: storage.DriverOSS,
     OSS:    &storage.OSSConfig{...},
@@ -281,8 +332,10 @@ storages := storage.Storages(map[string]Storage{
 
 ctx := context.Background()
 
-// 按别名写入/删除/取 URL
+// 按别名写入 / 读取 / 判断存在 / 删除 / 取 URL
 err = storages.Write(ctx, "images", "a.png", []byte("..."))
+data, err := storages.Read(ctx, "images", "a.png")
+ok, err := storages.Exists(ctx, "images", "a.png")
 count, err := storages.Delete(ctx, "images", "a.png")
 u, err := storages.URL(ctx, "docs", "manual.pdf")
 

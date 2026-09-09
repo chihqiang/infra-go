@@ -1,6 +1,6 @@
 ---
 name: infra-go-usage
-description: '使用 infra-go Go 基础设施库在业务项目中搭建服务。覆盖 conf（配置加载）、logger（结构化日志）、orm（MySQL/PostgreSQL/SQLite）、redisx（Redis 与分布式锁）、cache（统一缓存：内存/Redis）、httpx（HTTP 服务、参数绑定、统一 Response[T] 响应、内置中间件：熔断/超时/限流/加密/降载/JWT 认证，核心在 httpx/middleware 子包）、jwt（JWT 封装与认证）、ratelimit（内存/Redis 限流器）、breaker（熔断器）、retry（重试）、taskq（异步任务队列）、storage（OSS/COS/KODO 对象存储）、websocket（实时通信）、trace（链路追踪：agent/span/传播）、hash（密码/摘要/加密/HMAC 签名）、cast（类型转换）、stringx（字符串）、syncx（并发原语）、service（ServiceGroup 服务编排）。Use when: 用 Go 写业务服务需要选型/初始化/组装 infra-go 模块，需要把 conf+logger+orm+redisx+httpx+jwt 组合起来，或需要统一响应、中间件、优雅关闭等基础设施。'
+description: '使用 infra-go Go 基础设施库在业务项目中搭建服务。覆盖 conf（配置加载）、logger（结构化日志）、orm（MySQL/PostgreSQL/SQLite）、redisx（Redis 与分布式锁）、cache（统一缓存：内存/Redis）、httpx（HTTP 服务、参数绑定、统一 Response[T] 响应、内置中间件：熔断/超时/限流/加密/降载/JWT 认证，核心在 httpx/middleware 子包）、jwt（JWT 封装与认证）、ratelimit（内存/Redis 限流器）、breaker（熔断器）、retry（重试）、taskq（异步任务队列）、storage（统一对象存储：本地文件/OSS/COS/KODO，写入/读取/存在判断/删除/URL）、websocket（实时通信）、trace（链路追踪：agent/span/传播）、hash（密码/摘要/加密/HMAC 签名）、cast（类型转换）、stringx（字符串）、syncx（并发原语）、service（ServiceGroup 服务编排）。Use when: 用 Go 写业务服务需要选型/初始化/组装 infra-go 模块，需要把 conf+logger+orm+redisx+httpx+jwt 组合起来，或需要统一响应、中间件、优雅关闭等基础设施。'
 ---
 
 # infra-go 使用指南

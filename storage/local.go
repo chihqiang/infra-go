@@ -56,6 +56,35 @@ func (s *localStorage) Write(ctx context.Context, path string, content []byte) e
 	return nil
 }
 
+// Read 读取本地文件系统指定路径的文件内容。
+// 文件不存在时返回错误（底层 os.ReadFile 的 *PathError）。
+func (s *localStorage) Read(ctx context.Context, path string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("storage: read local file %q: %w", path, err)
+	}
+	full := s.localPath(path)
+	data, err := os.ReadFile(full)
+	if err != nil {
+		return nil, fmt.Errorf("storage: failed to read local file %q: %w", path, err)
+	}
+	return data, nil
+}
+
+// Exists 判断本地文件系统指定路径的文件是否存在。
+func (s *localStorage) Exists(ctx context.Context, path string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, fmt.Errorf("storage: check local file %q: %w", path, err)
+	}
+	full := s.localPath(path)
+	if _, err := os.Stat(full); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("storage: failed to check local file %q: %w", path, err)
+	}
+	return true, nil
+}
+
 // Delete 删除本地文件系统指定路径的文件，返回删除的文件数量。
 // 文件不存在视为已删除（返回 0），不报错。
 func (s *localStorage) Delete(ctx context.Context, path string) (int64, error) {

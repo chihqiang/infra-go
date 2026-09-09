@@ -3,10 +3,13 @@ package storage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/qiniu/go-sdk/v7/auth/qbox"
+	"github.com/qiniu/go-sdk/v7/client"
 	qstorage "github.com/qiniu/go-sdk/v7/storage"
 )
 
@@ -89,6 +92,53 @@ func (s *kodoStorage) Write(ctx context.Context, path string, content []byte) er
 		return fmt.Errorf("storage: failed to write KODO object %q: %w", path, err)
 	}
 	return nil
+}
+
+// Read 下载 KODO 指定路径对象的完整内容。
+// 需要配置公开访问域名 URL（与 URL() 一致）；私有空间的下载需另行走签名 URL，当前不支持。
+func (s *kodoStorage) Read(ctx context.Context, path string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("storage: read KODO object %q: %w", path, err)
+	}
+	if s.url == "" {
+		return nil, fmt.Errorf("storage: KODO URL is empty, please set URL field in config")
+	}
+	u := qstorage.MakePublicURL(s.url, path)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("storage: failed to build KODO read request for %q: %w", path, err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("storage: failed to read KODO object %q: %w", path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("storage: failed to read KODO object %q, status code: %d", path, resp.StatusCode)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("storage: failed to read KODO object %q body: %w", path, err)
+	}
+	return data, nil
+}
+
+// Exists 判断 KODO 指定路径的对象是否存在。
+// 通过 Stat 获取对象元信息：HTTP 612（no such file）视为不存在。
+func (s *kodoStorage) Exists(ctx context.Context, path string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, fmt.Errorf("storage: check KODO object %q: %w", path, err)
+	}
+	bucketManager := qstorage.NewBucketManager(s.mac, s.storageConfig)
+	_, err := bucketManager.Stat(s.bucket, path)
+	if err == nil {
+		return true, nil
+	}
+	var qerr *client.ErrorInfo
+	if errors.As(err, &qerr) && qerr.Code == 612 {
+		return false, nil
+	}
+	return false, fmt.Errorf("storage: failed to check KODO object %q: %w", path, err)
 }
 
 // Delete 删除 KODO 指定路径的对象，返回删除的对象数量。

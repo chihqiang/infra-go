@@ -143,3 +143,65 @@ func TestLocal_DeleteDirectory(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to delete local file")
 }
+
+// --- Read / Exists ---
+
+func TestLocal_ReadExists(t *testing.T) {
+	root := t.TempDir()
+	s, err := NewLocal(&LocalConfig{RootDir: root})
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	// 未写入前：不存在
+	ok, err := s.Exists(ctx, "docs/a.txt")
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	// 写入后：存在且内容可读回
+	require.NoError(t, s.Write(ctx, "docs/a.txt", []byte("hello")))
+	ok, err = s.Exists(ctx, "docs/a.txt")
+	require.NoError(t, err)
+	assert.True(t, ok)
+
+	data, err := s.Read(ctx, "docs/a.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "hello", string(data))
+
+	// 删除后：恢复为不存在，读取报错
+	_, err = s.Delete(ctx, "docs/a.txt")
+	require.NoError(t, err)
+	ok, err = s.Exists(ctx, "docs/a.txt")
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestLocal_ReadNotExist(t *testing.T) {
+	s, err := NewLocal(&LocalConfig{RootDir: t.TempDir()})
+	require.NoError(t, err)
+
+	_, err = s.Read(context.Background(), "not/exist.txt")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read local file")
+}
+
+func TestLocal_ReadCancelledCtx(t *testing.T) {
+	s, err := NewLocal(&LocalConfig{RootDir: t.TempDir()})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = s.Read(ctx, "a.txt")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "read local file")
+}
+
+func TestLocal_ExistsCancelledCtx(t *testing.T) {
+	s, err := NewLocal(&LocalConfig{RootDir: t.TempDir()})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = s.Exists(ctx, "a.txt")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "check local file")
+}
