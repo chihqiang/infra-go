@@ -132,13 +132,3 @@ consumer.HandleFunc("my:task", handler)
 log := logger.New(logger.Config{Encoding: logger.JSONEncoding})
 consumer := taskq.NewConsumer(cfg, log) // asynq 内部日志走项目 logger
 ```
-
-## 文件说明
-
-| 文件 | 说明 |
-| ------ | ------ |
-| `config.go` | 配置结构与默认值填充 |
-| `logger.go` | 项目 `logger` → `asynq.Logger` 适配 |
-| `payload.go` | Payload JSON 编解码辅助 |
-| `producer.go` | 生产者（`Producer`） |
-| `consumer.go` | 消费者（`Consumer`） |

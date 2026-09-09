@@ -12,7 +12,8 @@ type (
 )
 
 // UseEnv 设置在解析配置文件内容时展开环境变量引用。
-// 配置文件中可以使用 ${VAR} 或 $VAR 来引用环境变量。
+// 配置文件中可以使用 ${VAR} 或 $VAR 来引用环境变量；
+// 也支持 ${VAR:-default} 语法：当 VAR 未设置或为空时回退到 default。
 func UseEnv() Option {
 	return func(opt *options) {
 		opt.env = true

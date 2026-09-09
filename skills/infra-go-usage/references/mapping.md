@@ -317,20 +317,6 @@ m := map[string]any{"HOST": "localhost", "PORT": json.Number("8080")}
 err := mapping.UnmarshalJsonMap(m, &cfg, mapping.WithCanonicalKeyFunc(strings.ToLower))
 ```
 
-## 目录结构
-
-```text
-mapping/
-├── unmarshaler.go       — 核心反序列化器、Unmarshal、UnmarshalJsonMap、UnmarshalKey
-├── override.go          — FillAndOverride / MustFillAndOverride（填充默认值 + 非零字段覆盖）
-├── fieldoptions.go      — 结构体标签解析（default/env/optional/options/range/string/inherit）
-├── utils.go             — 反射工具函数（Deref/SetValue/类型转换/范围验证等）
-├── unmarshaler_test.go  — 反序列化测试（UnmarshalJsonMap/FillDefault）
-├── override_test.go     — FillAndOverride / MustFillAndOverride 覆盖语义测试
-├── fieldoptions_test.go — 标签解析与范围校验测试
-└── utils_test.go        — 反射工具/类型转换测试
-```
-
 ## 在项目中的角色
 
 `mapping` 是一个底层工具包，被以下包共用：

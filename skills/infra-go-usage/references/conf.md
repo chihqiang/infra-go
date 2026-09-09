@@ -12,7 +12,7 @@
   - `options` — 枚举值校验
   - `optional` — 标记字段为可选
 - **自定义验证**：实现 `Validator` 接口，加载后自动调用
-- **环境变量展开**：配置文件中可使用 `${VAR}` 引用环境变量
+- **环境变量展开**：配置文件中可使用 `${VAR}` / `$VAR` 引用环境变量，支持 `${VAR:-default}` 默认值语法
 - **大小写不敏感**：配置文件中的键名与结构体字段名大小写不敏感匹配
 - **嵌套结构体**：支持嵌套结构体、匿名嵌入字段、切片、Map 等复杂类型
 - **大整数精度**：使用 `json.Number` 保持数值精度，避免大整数丢失精度
@@ -152,6 +152,7 @@ if err := conf.FillDefault(&cfg); err != nil {
 ### UseEnv
 
 `Option` 选项，展开配置文件中的环境变量引用（`${VAR}` 或 `$VAR`）。
+同时支持 `${VAR:-default}` 语法：当 `VAR` 未设置或为空字符串时，回退到 `default`（字面值）。
 
 ```go
 func UseEnv() Option
@@ -164,6 +165,37 @@ os.Setenv("DB_HOST", "db.example.com")
 var cfg Config
 conf.MustLoad("config.json", &cfg, conf.UseEnv())
 // cfg.Host == "db.example.com"
+```
+
+```yaml
+# config.yaml — 未设置 JWT_SECRET 时 secret 回退 dev-secret
+jwt:
+  secret: ${JWT_SECRET:-dev-secret}
+  issuer: ${JWT_ISSUER:-my-app}
+```
+
+```go
+var cfg ServerConfig
+conf.MustLoad("config.yaml", &cfg, conf.UseEnv())
+```
+
+注意：`:-` 默认值按 shell 语义处理（变量未设置**或为空**均回退默认值），
+且 `default` 为字面值，不会二次展开其中的 `${...}`。
+
+### ExpandEnv
+
+公开的环境变量展开函数，`UseEnv` 内部即调用它（对整份配置文本展开后交给解析器）。
+若需在加载配置之外复用同一展开语义，可直接调用：
+
+```go
+func ExpandEnv(s string) string
+```
+
+```go
+// 展开任意文本（含 ${VAR} / $VAR / ${VAR:-default}）
+os.Setenv("MODE", "prod")
+conf.ExpandEnv("host=${DB_HOST:-localhost} mode=$MODE")
+// -> "host=localhost mode=prod"
 ```
 
 ## 标签指令

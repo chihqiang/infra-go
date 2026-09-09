@@ -344,15 +344,3 @@ s, ok := storages.Get("images")
 ```
 
 `Storages` 也支持多种驱动共存（OSS + COS + KODO 混用）。
-
-## 文件说明
-
-| 文件 | 说明 |
-| ------ | ------ |
-| `storage.go` | `Storage` 接口定义、驱动类型常量与 `Storages` 多实例集合 |
-| `config.go` | `Config`、`LocalConfig`、`OSSConfig`、`COSConfig`、`KODOConfig` 配置结构 |
-| `local.go` | 本地文件系统存储实现 |
-| `oss.go` | 阿里云 OSS 存储实现 |
-| `cos.go` | 腾讯云 COS 存储实现 |
-| `kodo.go` | 七牛云 KODO 存储实现 |
-| `factory.go` | 工厂方法 `New`/`MustNew`，根据配置选择存储实现 |

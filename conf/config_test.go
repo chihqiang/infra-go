@@ -2,10 +2,12 @@ package conf
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // createTempFile 创建临时配置文件用于测试。
@@ -197,6 +199,99 @@ func TestLoad_UseEnvExpansion(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "db.example.com", cfg.Host)
 	assert.Equal(t, 3306, cfg.Port)
+}
+
+func TestExpandEnv(t *testing.T) {
+	t.Setenv("EXP_ENV_SET", "world")
+	t.Setenv("EXP_ENV_EMPTY", "")
+
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain text unchanged", "hello", "hello"},
+		{"dollar syntax", "$EXP_ENV_SET", "world"},
+		{"braced syntax", "${EXP_ENV_SET}", "world"},
+		{"var not set -> empty", "x=${EXP_NOT_SET}y", "x=y"},
+		{"var empty -> empty", "[${EXP_ENV_EMPTY}]", "[]"},
+		// ${VAR:-default}
+		{"default var not set", "${EXP_NOT_SET:-fallback}", "fallback"},
+		{"default var empty", "${EXP_ENV_EMPTY:-fallback}", "fallback"}, // shell :- 语义：空也回退
+		{"default var set", "${EXP_ENV_SET:-fallback}", "world"},
+		{"default mixed with text", "hi ${EXP_NOT_SET:-you}! ${EXP_ENV_SET}", "hi you! world"},
+		{"no default -> empty", "${EXP_NOT_SET}", ""},
+		{"nested literal not re-expanded", "${EXP_NOT_SET:-${EXP_ENV_SET}}", "${EXP_ENV_SET}"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, ExpandEnv(tt.in))
+		})
+	}
+}
+
+func TestLoad_UseEnvExpansionDefaultValue(t *testing.T) {
+	// 未设置环境变量时回退到 :- 默认值
+	text := `{
+		"host": "${DB_HOST:-fallback.example.com}",
+		"port": "${DB_PORT:-3306}"
+	}`
+
+	type EnvExpConfig struct {
+		Host string `json:"host"`
+		Port string `json:"port"`
+	}
+
+	file := createTempFile(t, ".json", text)
+	var cfg EnvExpConfig
+	err := Load(file, &cfg, UseEnv())
+	assert.NoError(t, err)
+	assert.Equal(t, "fallback.example.com", cfg.Host) // 未设置 → 默认值
+	assert.Equal(t, "3306", cfg.Port)
+
+	// 设置了环境变量 → 优先使用环境变量
+	t.Setenv("DB_HOST", "db.example.com")
+	var cfg2 EnvExpConfig
+	err = Load(file, &cfg2, UseEnv())
+	assert.NoError(t, err)
+	assert.Equal(t, "db.example.com", cfg2.Host)
+	assert.Equal(t, "3306", cfg2.Port)
+}
+
+func TestLoad_UseEnvExpansionYAMLDefault(t *testing.T) {
+	// 用户场景：YAML 嵌套结构 + 密钥/签发者默认值
+	text := "jwt:\n  secret: ${JWT_SECRET:-dev-secret}\n  issuer: ${JWT_ISSUER:-my-app}\n"
+
+	type JWT struct {
+		Secret string `json:"secret"`
+		Issuer string `json:"issuer"`
+	}
+	type AppConfig struct {
+		JWT JWT `json:"jwt"`
+	}
+
+	file := createTempFile(t, ".yaml", text)
+	var cfg AppConfig
+	err := Load(file, &cfg, UseEnv())
+	assert.NoError(t, err)
+	assert.Equal(t, "dev-secret", cfg.JWT.Secret) // 未设置 → 默认值
+	assert.Equal(t, "my-app", cfg.JWT.Issuer)
+
+	// 环境变量为空字符串时也应回退默认值（shell :- 语义）
+	t.Setenv("JWT_SECRET", "")
+	var cfg2 AppConfig
+	err = Load(file, &cfg2, UseEnv())
+	assert.NoError(t, err)
+	assert.Equal(t, "dev-secret", cfg2.JWT.Secret)
+
+	// 设置了非空环境变量 → 覆盖默认值
+	t.Setenv("JWT_SECRET", "real-secret")
+	t.Setenv("JWT_ISSUER", "prod")
+	var cfg3 AppConfig
+	err = Load(file, &cfg3, UseEnv())
+	assert.NoError(t, err)
+	assert.Equal(t, "real-secret", cfg3.JWT.Secret)
+	assert.Equal(t, "prod", cfg3.JWT.Issuer)
 }
 
 // validatorTestConfig 实现 Validator 接口
@@ -441,4 +536,132 @@ func TestLoad_LargeIntegers(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1234567890123456789), cfg.ID)
 	assert.Equal(t, int64(9223372036854775807), cfg.Timestamp)
+}
+
+// --- 解析错误分支 ---
+
+func TestLoad_ParseJSONError(t *testing.T) {
+	file := createTempFile(t, ".json", `{invalid json`)
+	var cfg TestConfig
+	err := Load(file, &cfg)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse")
+}
+
+func TestLoad_ParseYAMLError(t *testing.T) {
+	file := createTempFile(t, ".yaml", "a: [unclosed")
+	var cfg TestConfig
+	err := Load(file, &cfg)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse")
+}
+
+func TestLoadFromJSONBytes_Invalid(t *testing.T) {
+	var cfg TestConfig
+	err := LoadFromJSONBytes([]byte(`{oops`), &cfg)
+	assert.Error(t, err)
+}
+
+func TestLoadFromJSONBytes_TypeMismatch(t *testing.T) {
+	// port 字段期望 int，但传入嵌套对象 → unmarshal 失败
+	var cfg struct {
+		Port int `json:"port"`
+	}
+	err := LoadFromJSONBytes([]byte(`{"port":{}}`), &cfg)
+	assert.Error(t, err)
+}
+
+func TestLoadFromYAMLBytes_Invalid(t *testing.T) {
+	var cfg TestConfig
+	err := LoadFromYAMLBytes([]byte("a: [1,2"), &cfg)
+	assert.Error(t, err)
+}
+
+func TestLoadFromYAMLBytes_TypeMismatch(t *testing.T) {
+	var cfg struct {
+		Port int `json:"port"`
+	}
+	err := LoadFromYAMLBytes([]byte("port: [x]"), &cfg)
+	assert.Error(t, err)
+}
+
+// --- 端到端：YAML 复合结构触发 normalizeValue 全链路 ---
+
+func TestLoad_YAML_Composite(t *testing.T) {
+	text := `
+db:
+  host: localhost
+  port: 5432
+nums:
+  - 1
+  - 2
+rate: 1.5
+enabled: true
+`
+	type Nested struct {
+		DB struct {
+			Host string `json:"host"`
+			Port int    `json:"port"`
+		} `json:"db"`
+		Nums    []int   `json:"nums"`
+		Rate    float64 `json:"rate"`
+		Enabled bool    `json:"enabled"`
+	}
+
+	file := createTempFile(t, ".yaml", text)
+	var cfg Nested
+	err := Load(file, &cfg)
+	require.NoError(t, err)
+	assert.Equal(t, "localhost", cfg.DB.Host)
+	assert.Equal(t, 5432, cfg.DB.Port)
+	assert.Equal(t, []int{1, 2}, cfg.Nums)
+	assert.Equal(t, 1.5, cfg.Rate)
+	assert.True(t, cfg.Enabled)
+}
+
+// YAML 整数 key 触发 map[any]any 规范化路径。
+func TestLoad_YAML_IntKeys(t *testing.T) {
+	text := `
+m:
+  1: a
+  2: b
+`
+	var cfg struct {
+		M map[string]string `json:"m"`
+	}
+	file := createTempFile(t, ".yaml", text)
+	err := Load(file, &cfg)
+	require.NoError(t, err)
+	assert.Equal(t, "a", cfg.M["1"])
+	assert.Equal(t, "b", cfg.M["2"])
+}
+
+func TestLoad_YAML_SnakeCaseNested(t *testing.T) {
+	text := `
+server:
+  port: 9090
+name: app
+`
+	var cfg struct {
+		Server struct {
+			Port int `json:"port"`
+		} `json:"server"`
+		Name string `json:"name"`
+	}
+	file := createTempFile(t, ".yaml", text)
+	err := Load(file, &cfg)
+	require.NoError(t, err)
+	assert.Equal(t, 9090, cfg.Server.Port)
+	assert.Equal(t, "app", cfg.Name)
+}
+
+func TestLoad_EnvExpansion_EmptyVar(t *testing.T) {
+	// 未设置的环境变量展开为空串
+	file := createTempFile(t, ".json", `{"host": "${NOT_SET_VAR}"}`)
+	var cfg struct {
+		Host string `json:"host"`
+	}
+	err := Load(file, &cfg, UseEnv())
+	require.NoError(t, err)
+	assert.True(t, strings.Contains(cfg.Host, ""))
 }

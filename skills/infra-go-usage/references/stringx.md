@@ -137,13 +137,3 @@ stringx.Split("a,,b,c", ',')          // ["a" "b" "c"]
 | ------ | ------ |
 | `IndexOf(s, substr string) int` | 返回子串首次出现的位置，未找到返回 -1 |
 | `Count(s, substr string) int` | 计算子串出现次数 |
-
-## 目录结构
-
-```text
-stringx/
-├── random.go         — 随机字符串生成（Rand/Randn/RandId）
-├── strings.go        — 字符串工具函数
-├── random_test.go    — 随机生成单元测试
-└── strings_test.go   — 字符串工具单元测试
-```

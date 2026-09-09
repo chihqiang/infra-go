@@ -219,11 +219,3 @@ Add(C)  → services: [A, B, C]
 
 Stop 顺序: C → B → A（逆序，但并发执行，不保证精确顺序）
 ```
-
-## 目录结构
-
-```text
-service/
-├── servicegroup.go      — ServiceGroup、Service 接口、WithStart/WithStarter/AsService
-└── servicegroup_test.go — ServiceGroup 单元测试
-```
