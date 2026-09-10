@@ -60,10 +60,14 @@ func TestContentSecurity_Expired(t *testing.T) {
 	silenceLogger(t)
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 
-	// 时间戳在 10 分钟前（超出 5 分钟容差）→ 403 防重放
+	// 时间戳在 10 分钟前（超出 5 分钟容差）→ 401 防重放。
+	//
+	// 用 401 而非 403：凭据失效（这里指时间戳过期）属于 RFC 9110 §15.5.2
+	// 定义的 "lacks valid authentication credentials"，403 表达的是
+	// "已认证但权限不足"，语义不同。同中间件的其它失败路径也都是 401。
 	req := signedRequest(t, testKey, http.MethodPost, "/data", "x", time.Now().Add(-10*time.Minute).Unix())
 	rec := perform(NewContentSecurity(testKey, 5*time.Minute).Middleware(), ok, req)
-	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 
 func TestContentSecurity_MissingHeader(t *testing.T) {

@@ -114,7 +114,9 @@ func (s *cosStorage) Delete(ctx context.Context, path string) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("storage: failed to delete COS object %q: %w", path, err)
 	}
-	if resp.StatusCode != http.StatusOK {
+	// COS 删除成功返回 204 No Content（SDK 已把 >=300 视为错误），
+	// 因此这里必须是 2xx 语义，不能只认 200，否则删除成功会被误报为失败。
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return 0, fmt.Errorf("storage: failed to delete COS object %q, status code: %d", path, resp.StatusCode)
 	}
 	return 1, nil

@@ -1,8 +1,10 @@
 package mapping
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -150,6 +152,81 @@ func lookupWithChainedKeys(m map[string]any, keys []string) (any, bool) {
 	}
 }
 
+// errAmbiguousKey 表示同一层级存在多个经 canonical 规范化后同名的候选键。
+var errAmbiguousKey = errors.New("ambiguous key")
+
+// lookupKeyCanonical 按链式键查找值，未精确命中时按 canonical 形式做不敏感匹配。
+//
+// 大小写不敏感匹配由此函数完成，而不是由调用方预先改写输入 map 的键：
+// map 的键同时也是 map 类型字段的数据，预先小写化会破坏用户数据
+// （例如 labels: {AppName: x} 会被静默写成 appname）。
+//
+// 逐层匹配规则：
+//  1. 键段的原始形式精确命中；
+//  2. 键段的 canonical 形式精确命中；
+//  3. 在候选键中查找满足 canonical(k) == canonical(段) 的键，唯一时返回；
+//  4. 多个候选键（仅大小写/形式不同）时返回 errAmbiguousKey，
+//     而不是依赖 map 遍历顺序任选其一。
+func lookupKeyCanonical(m map[string]any, key string, canonical func(string) string) (any, bool, error) {
+	if m == nil {
+		return nil, false, nil
+	}
+
+	keys := readKeys(key)
+	if len(keys) == 0 {
+		return nil, false, nil
+	}
+
+	current := m
+	for i, segment := range keys {
+		// 1. 原始键精确匹配（canonicalKey 不会改变键段语义时最常见）
+		v, ok := current[segment]
+		if !ok {
+			want := canonical(segment)
+			// 2. canonical 形式精确匹配
+			v, ok = current[want]
+			if !ok {
+				// 3. 按 canonical 形式不敏感扫描
+				matched := false
+				for k, cv := range current {
+					if canonical(k) != want {
+						continue
+					}
+					if matched {
+						return nil, false, fmt.Errorf("%w: %q matches multiple keys (%s)", errAmbiguousKey, want, describeKeys(current))
+					}
+					v, matched = cv, true
+				}
+				if !matched {
+					return nil, false, nil
+				}
+			}
+		}
+
+		if i == len(keys)-1 {
+			return v, true, nil
+		}
+
+		nested, ok := v.(map[string]any)
+		if !ok {
+			return nil, false, nil
+		}
+		current = nested
+	}
+
+	return nil, false, nil
+}
+
+// describeKeys 返回排序后的键列表，用于生成稳定的错误信息。
+func describeKeys(m map[string]any) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
+}
+
 // convertTypeFromString 将字符串转为指定类型的基本值。
 // 布尔类型使用 cast.ToBoolE，浮点类型使用 cast.ToFloat64E，
 // 整数类型保留 strconv 以支持位宽溢出检查。
@@ -248,6 +325,33 @@ func validateValueRange(mapValue any, opts *fieldOptions, fullName string) error
 	}
 
 	return nil
+}
+
+// validateRangeForType 按目标类型校验值是否满足 range 约束。
+//
+// 相比 validateValueRange，它会先按目标类型归一化值：time.Duration 的
+// range 以纳秒为单位比较（与其底层 int64 表示一致），因此 "5s" 这类
+// duration 文本会先解析为 time.Duration 再比较。
+//
+// 所有写入字段的路径都必须调用本函数（或 validateValueRange），
+// 否则 range 约束会因值的来源或表示形式不同而被静默绕过。
+func validateRangeForType(derefedType reflect.Type, mapValue any, opts *fieldOptions, fullName string) error {
+	if opts == nil || opts.Range == nil {
+		return nil
+	}
+
+	if derefedType == durationType {
+		d, err := cast.ToDurationE(mapValue)
+		if err != nil {
+			return fmt.Errorf("value of field %q cannot be used for range validation: %w", fullName, err)
+		}
+		if !opts.isInRange(float64(d)) {
+			return fmt.Errorf("value %v of field %q is out of range", mapValue, fullName)
+		}
+		return nil
+	}
+
+	return validateValueRange(mapValue, opts, fullName)
 }
 
 // structValueRequired 检查结构体类型是否包含必填字段。

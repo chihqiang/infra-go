@@ -150,6 +150,8 @@ defer lock.Unlock(ctx)
 // 续期 goroutine 监听 ctx.Done()，即使调用方忘记 Unlock 也不会泄漏
 ```
 
+> **TTL 必须大于 0**：`Locker` 的 TTL（或其被 `WithTTL` 覆盖后的值）小于 `1ms` 时，`TryLock`/`Lock` 会直接返回 `redisx.ErrInvalidLockTTL`，不会写入 Redis。这是因为 TTL <= 0 会被 Redis 视为**永不过期**（持有者崩溃即永久死锁），且启用 `WithAutoRenew` 时会在续期 goroutine 内触发 `time.NewTicker(0)` panic（无法被 recover，直接终止进程）；TTL < 1ms 则会被续期脚本的毫秒取整截断为 0，执行 `PEXPIRE key 0` 立即删除锁。
+
 ### 便捷方法
 
 ```go

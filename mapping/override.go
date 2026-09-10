@@ -31,6 +31,9 @@ const (
 // 对于 string 和 slice 类型，空值（""/"nil）也视为"未设置"，不覆盖默认值。
 // 如果需要将 string 显式设为空，请在 overrides 中使用 *string 指针类型。
 //
+// overrides 为 nil（含类型化 nil 指针，如 (*Config)(nil)）时视为"不提供覆盖"，
+// 此时仅填充默认值，不会报错也不会 panic。
+//
 // 此函数是各模块 fillDefault 的统一替代方案，消除重复的逐字段覆盖代码。
 //
 // 用法：
@@ -56,15 +59,29 @@ func MustFillAndOverride(defaults any, overrides any) {
 
 // overrideNonZeroFields 遍历 overrides 结构体的所有字段，
 // 将非零字段覆盖到 target（两者须为同一类型）。
+//
+// overrides 为 nil（含类型化 nil 指针）时视为"无覆盖"，直接返回 nil。
 func overrideNonZeroFields(target any, overrides any) error {
 	targetVal := reflect.ValueOf(target)
 	if err := ValidatePtr(targetVal); err != nil {
 		return err
 	}
 
+	// overrides 为 nil 时 reflect.ValueOf 返回无效值，
+	// 若直接取 Type() 会 panic（reflect: zero Value has no Type）。
+	if overrides == nil {
+		return nil
+	}
+
 	targetVal = targetVal.Elem()
+
 	overrideVal := reflect.ValueOf(overrides)
 	if overrideVal.Kind() == reflect.Ptr {
+		// 类型化 nil 指针（如 (*Config)(nil)）视为"无覆盖"：
+		// 否则 Elem() 得到无效值，下面取 Type() 会 panic。
+		if overrideVal.IsNil() {
+			return nil
+		}
 		overrideVal = overrideVal.Elem()
 	}
 
@@ -79,6 +96,14 @@ func overrideNonZeroFields(target any, overrides any) error {
 
 // overrideStructFields 递归遍历结构体字段，用 overrides 的非零值覆盖 target。
 func overrideStructFields(target, overrides reflect.Value, structType reflect.Type) error {
+	// 防御性检查：target/overrides 必须是结构体值。
+	// 缺此检查时，若误传入指针值，Field(i) 会 panic
+	// （reflect: call of reflect.Value.Field on ptr Value）。
+	if target.Kind() != reflect.Struct || overrides.Kind() != reflect.Struct {
+		return fmt.Errorf("override: expects struct values, got target=%s, overrides=%s",
+			target.Kind(), overrides.Kind())
+	}
+
 	for i := 0; i < structType.NumField(); i++ {
 		field := structType.Field(i)
 		if !field.IsExported() {
@@ -91,10 +116,27 @@ func overrideStructFields(target, overrides reflect.Value, structType reflect.Ty
 		// 处理匿名嵌入字段
 		if field.Anonymous {
 			derefedType := Deref(field.Type)
-			if derefedType.Kind() == reflect.Struct {
-				if err := overrideStructFields(targetField, overrideField, derefedType); err != nil {
+			if derefedType.Kind() != reflect.Struct {
+				continue
+			}
+			// 匿名嵌入指针（struct{ *Base }）需要先解引用：
+			// 否则下面的 Field(i) 会在 Ptr 值上 panic
+			// （reflect: call of reflect.Value.Field on ptr Value）。
+			if field.Type.Kind() == reflect.Ptr {
+				if overrideField.IsNil() {
+					// 没有覆盖来源，保持 target 现状（含"本就为 nil"）
+					continue
+				}
+				if err := ensureNonNilPtr(targetField); err != nil {
 					return err
 				}
+				if err := overrideStructFields(targetField.Elem(), overrideField.Elem(), derefedType); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := overrideStructFields(targetField, overrideField, derefedType); err != nil {
+				return err
 			}
 			continue
 		}
@@ -119,6 +161,19 @@ func overrideStructFields(target, overrides reflect.Value, structType reflect.Ty
 		if shouldOverride(targetField, overrideField, opts) {
 			targetField.Set(overrideField)
 		}
+	}
+	return nil
+}
+
+// ensureNonNilPtr 保证 v 指向一个已分配的值；v 为 nil 时按元素类型分配。
+// 用于匿名嵌入指针字段（struct{ *Base }）的递归覆盖，
+// 使默认值能被完整保留而不是整体替换指针。
+func ensureNonNilPtr(v reflect.Value) error {
+	if !v.CanSet() {
+		return fmt.Errorf("override: cannot set embedded pointer field of type %s", v.Type())
+	}
+	if v.IsNil() {
+		v.Set(reflect.New(v.Type().Elem()))
 	}
 	return nil
 }

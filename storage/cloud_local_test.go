@@ -2,6 +2,9 @@ package storage
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -254,4 +257,69 @@ func TestKODO_ReadURLNotSet(t *testing.T) {
 	_, err = s.Read(context.Background(), "a.txt")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "KODO URL is empty")
+}
+
+// --- 云驱动 HTTP 状态码语义（用 httptest 替代真实云服务） ---
+
+// TestCOS_DeleteAccepts204 验证 COS 删除的 204 No Content 被视为成功，
+// 而不是被误判为失败（历史缺陷：只判断 == 200）。
+func TestCOS_DeleteAccepts204(t *testing.T) {
+	var gotMethod, gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(ts.Close)
+
+	s, err := NewCOS(&COSConfig{BucketURL: ts.URL, SecretID: "test-id", SecretKey: "test-key"})
+	require.NoError(t, err)
+
+	n, err := s.Delete(context.Background(), "dir/a.txt")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n)
+	assert.Equal(t, http.MethodDelete, gotMethod)
+	assert.True(t, strings.HasSuffix(gotPath, "dir/a.txt"), "unexpected path: %q", gotPath)
+}
+
+// TestCOS_DeletePropagatesServerError 验证 5xx 仍会被报错。
+func TestCOS_DeletePropagatesServerError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(ts.Close)
+
+	s, err := NewCOS(&COSConfig{BucketURL: ts.URL, SecretID: "test-id", SecretKey: "test-key"})
+	require.NoError(t, err)
+
+	_, err = s.Delete(context.Background(), "a.txt")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delete COS object")
+}
+
+// TestKODO_ReadAcceptsAny2xx 验证 KODO 读取接受任意 2xx（如 CDN 返回 206）。
+func TestKODO_ReadAcceptsAny2xx(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("partial"))
+	}))
+	t.Cleanup(ts.Close)
+
+	s := &kodoStorage{url: ts.URL}
+	data, err := s.Read(context.Background(), "a.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "partial", string(data))
+}
+
+// TestKODO_ReadRejects4xx 验证 KODO 读取仍然拒绝 4xx。
+func TestKODO_ReadRejects4xx(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(ts.Close)
+
+	s := &kodoStorage{url: ts.URL}
+	_, err := s.Read(context.Background(), "a.txt")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read KODO object")
 }

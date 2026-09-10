@@ -20,6 +20,7 @@ type TimeoutWriter struct {
 	mu          sync.Mutex
 	timedOut    bool
 	wroteHeader bool
+	headerSent  bool // 状态码/响应头是否已写入底层 ResponseWriter
 	code        int
 }
 
@@ -59,14 +60,9 @@ func (tw *TimeoutWriter) WriteHeader(code int) {
 func (tw *TimeoutWriter) Done() {
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
-	dst := tw.w.Header()
-	for k, vv := range tw.h {
-		dst[k] = vv
-	}
-	if tw.code != http.StatusOK {
-		tw.w.WriteHeader(tw.code)
-	}
+	tw.writeHeaderToUnderlyingLocked()
 	_, _ = tw.w.Write(tw.wbuf.Bytes())
+	tw.wbuf.Reset()
 }
 
 // Timeout 标记请求已超时，使此后的 Write/WriteHeader 失效
@@ -88,10 +84,10 @@ func (tw *TimeoutWriter) Flush() {
 	if tw.timedOut {
 		return
 	}
-	header := tw.w.Header()
-	for k, v := range tw.h {
-		header[k] = v
-	}
+	// 必须先把响应头与状态码写到底层：net/http 在首次 Write 时会隐式写入
+	// 200 OK，若此处不写出 handler 显式设置的状态码（如 201/206/500），
+	// 客户端将永远看到 200，且后续 Done 再写状态码会被忽略。
+	tw.writeHeaderToUnderlyingLocked()
 	_, _ = tw.w.Write(tw.wbuf.Bytes())
 	tw.wbuf.Reset()
 	flusher.Flush()
@@ -105,7 +101,26 @@ func (tw *TimeoutWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, errors.New("respw: server doesn't support hijacking")
 }
 
-// writeHeaderLocked 在持锁状态下写入状态码。
+// writeHeaderToUnderlyingLocked 在持锁状态下把缓冲的响应头与状态码写入底层 ResponseWriter。
+//
+// 仅首次调用生效：Flush 之后再调用 Done 不会重复 WriteHeader
+// （避免 "superfluous WriteHeader" 且不会覆盖已发送的状态码）。
+// 状态码为 200 时不显式调用 WriteHeader，交由 net/http 在首次 Write 时隐式写入。
+func (tw *TimeoutWriter) writeHeaderToUnderlyingLocked() {
+	if tw.headerSent {
+		return
+	}
+	tw.headerSent = true
+	dst := tw.w.Header()
+	for k, vv := range tw.h {
+		dst[k] = vv
+	}
+	if tw.code != http.StatusOK {
+		tw.w.WriteHeader(tw.code)
+	}
+}
+
+// writeHeaderLocked 在持锁状态下记录状态码。
 func (tw *TimeoutWriter) writeHeaderLocked(code int) {
 	tw.code = code
 	tw.wroteHeader = true

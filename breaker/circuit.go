@@ -142,12 +142,21 @@ func newLoggedThrottle(name string, t internalThrottle) *loggedThrottle {
 	}
 }
 
+// allow 判断请求是否允许通过，返回内部 Promise 用于上报结果。
+//
+// 拒绝时底层返回 nil promise，此处必须同样返回 nil Promise：
+// 若包装成非 nil 的 promiseWithReason（内部 promise 为 nil），
+// 调用方忽略 err 直接使用返回值时会 nil 解引用 panic，
+// 也与 Breaker.Allow 的契约（"允许时返回 Promise"）不符。
 func (lt *loggedThrottle) allow() (Promise, error) {
 	promise, err := lt.internalThrottle.allow()
+	if err != nil {
+		return nil, lt.logError(err)
+	}
 	return promiseWithReason{
 		promise: promise,
 		errWin:  lt.errWin,
-	}, lt.logError(err)
+	}, nil
 }
 
 func (lt *loggedThrottle) doReq(req func() error, fallback Fallback, acceptable Acceptable) error {
@@ -189,14 +198,16 @@ func (ew *errorWindow) add(reason string) {
 }
 
 func (ew *errorWindow) String() string {
-	reasons := make([]string, 0, ew.count)
-
 	ew.lock.Lock()
+	defer ew.lock.Unlock()
+
+	// 容量必须在锁内读取：count 由 add 在锁内更新，
+	// 在加锁之前读它来 make 切片会构成数据竞争。
+	reasons := make([]string, 0, ew.count)
 	// 倒序输出：最近的失败原因在前
 	for i := ew.index - 1; i >= ew.index-ew.count; i-- {
 		reasons = append(reasons, ew.reasons[(i+numHistoryReasons)%numHistoryReasons])
 	}
-	ew.lock.Unlock()
 
 	return strings.Join(reasons, "\n")
 }

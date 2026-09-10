@@ -150,7 +150,7 @@ func (u *Unmarshaler) fillDefaultStruct(structType reflect.Type, structValue ref
 
 		// 填充默认值
 		if defaultValue, ok := opts.hasDefault(); ok {
-			if err := u.setDefaultValue(field.Type, fieldValue, defaultValue, fn); err != nil {
+			if err := u.setDefaultValue(field.Type, fieldValue, defaultValue, opts, fn); err != nil {
 				return err
 			}
 			continue
@@ -169,6 +169,11 @@ func (u *Unmarshaler) fillDefaultStruct(structType reflect.Type, structValue ref
 
 // processStruct 处理结构体的所有字段。
 func (u *Unmarshaler) processStruct(structType reflect.Type, structValue reflect.Value, m map[string]any, fullName string) error {
+	// 先校验 optional 依赖名有效，避免依赖写错导致条件可选静默失效
+	if err := u.validateOptionalDeps(structType, fullName); err != nil {
+		return err
+	}
+
 	for i := 0; i < structType.NumField(); i++ {
 		field := structType.Field(i)
 		if !field.IsExported() {
@@ -268,17 +273,134 @@ func (u *Unmarshaler) processField(field reflect.StructField, value reflect.Valu
 	}
 
 	// 从配置 map 中查找值
-	lookupMapKey := key
+	// 设置 canonicalKey 时使用不敏感匹配，而不是要求调用方预先改写 map 的键
+	// （map 的键可能同时是 map 字段的数据，改写会破坏用户数据）。
+	var (
+		mapValue any
+		hasValue bool
+	)
 	if u.canonicalKey != nil {
-		lookupMapKey = u.canonicalKey(key)
+		mapValue, hasValue, err = lookupKeyCanonical(m, key, u.canonicalKey)
+		if err != nil {
+			return fmt.Errorf("field %q: %w", fn, err)
+		}
+	} else {
+		mapValue, hasValue = lookupKey(m, key)
 	}
-	mapValue, hasValue := lookupKey(m, lookupMapKey)
 
 	if !hasValue {
+		// 条件可选：optional=Dep / optional=!Dep。
+		// 依赖不满足时按"必填"处理，满足时按"可选"处理。
+		//
+		// 有 default 时跳过依赖检查：字段总能被填上，依赖与之无关
+		// （否则 `default` + `optional=dep` 会在依赖未满足时误报必填）。
+		if opts != nil && opts.OptionalDep != "" {
+			if _, hasDefault := opts.hasDefault(); !hasDefault {
+				depMet, err := u.optionalDepMet(opts, m)
+				if err != nil {
+					return fmt.Errorf("field %q: %w", fn, err)
+				}
+				if !depMet {
+					return fmt.Errorf("field %q not set: required because %q is %s",
+						fn, opts.OptionalDep, optionalDepStateDesc(opts.OptionalDepNegate))
+				}
+			}
+		}
 		return u.processFieldWithoutValue(field.Type, value, opts, fn)
 	}
 
 	return u.processFieldWithValue(field.Type, value, mapValue, opts, fn)
+}
+
+// optionalDepMet 判断条件可选的依赖是否满足。
+//
+// 语义（与文档一致）：
+//   - `optional=Other`  ：Other **已设置** 时此字段可选
+//   - `optional=!Other` ：Other **未设置** 时此字段可选
+//
+// 依赖名按**配置键**解析（即依赖字段的 json/yaml 标签键，如 `other`），
+// 与字段取值的查找路径一致；依赖是否指向真实字段由 processStruct 预先校验。
+func (u *Unmarshaler) optionalDepMet(opts *fieldOptions, m map[string]any) (bool, error) {
+	var present bool
+	var err error
+	if u.canonicalKey != nil {
+		_, present, err = lookupKeyCanonical(m, opts.OptionalDep, u.canonicalKey)
+		if err != nil {
+			return false, err
+		}
+	} else {
+		_, present = lookupKey(m, opts.OptionalDep)
+	}
+
+	// Dep：依赖存在 → 可选；!Dep：依赖不存在 → 可选
+	if opts.OptionalDepNegate {
+		return !present, nil
+	}
+	return present, nil
+}
+
+// buildDependencyKeys 收集结构体所有字段的配置键，用于校验 optional 依赖是否有效。
+func (u *Unmarshaler) buildDependencyKeys(structType reflect.Type) map[string]struct{} {
+	keys := make(map[string]struct{}, structType.NumField())
+	for i := 0; i < structType.NumField(); i++ {
+		field := structType.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		if field.Anonymous {
+			// 匿名嵌入字段的子字段也在同一命名空间内
+			for k := range u.buildDependencyKeys(Deref(field.Type)) {
+				keys[k] = struct{}{}
+			}
+			continue
+		}
+		key, _, err := parseKeyAndOptions(u.key, field)
+		if err != nil || key == ignoreKey {
+			continue
+		}
+		keys[key] = struct{}{}
+	}
+	return keys
+}
+
+// validateOptionalDeps 校验结构体内所有 optional 依赖都指向真实存在的配置键。
+//
+// 不校验的话，依赖名写错会让字段**永久变为必填**（依赖永远找不到），
+// 属于难以定位的静默行为偏差。
+func (u *Unmarshaler) validateOptionalDeps(structType reflect.Type, fullName string) error {
+	var validKeys map[string]struct{}
+
+	for i := 0; i < structType.NumField(); i++ {
+		field := structType.Field(i)
+		if !field.IsExported() || field.Anonymous {
+			continue
+		}
+		key, opts, err := parseKeyAndOptions(u.key, field)
+		if err != nil || key == ignoreKey {
+			continue
+		}
+		if opts == nil || opts.OptionalDep == "" {
+			continue
+		}
+
+		if validKeys == nil {
+			validKeys = u.buildDependencyKeys(structType)
+		}
+		if _, ok := validKeys[opts.OptionalDep]; !ok {
+			return fmt.Errorf(
+				"field %q: optional dependency %q does not match any field key in %s",
+				joinName(fullName, key), opts.OptionalDep, structType.Name())
+		}
+	}
+	return nil
+}
+
+// optionalDepStateDesc 生成错误信息中的依赖状态描述。
+func optionalDepStateDesc(negate bool) string {
+	if negate {
+		return "set"
+	}
+	return "not set"
 }
 
 // processFieldWithValue 当配置中存在值时处理字段。
@@ -300,6 +422,10 @@ func (u *Unmarshaler) processFieldWithValue(fieldType reflect.Type, value reflec
 
 	// time.Duration 底层类型是 int64，需要优先处理
 	if derefedType == durationType {
+		// duration 字段此前完全跳过校验，导致 range 约束形同虚设。
+		if err := validateRangeForType(derefedType, mapValue, opts, fullName); err != nil {
+			return err
+		}
 		return u.setDurationValue(fieldType, value, mapValue, fullName)
 	}
 
@@ -321,7 +447,7 @@ func (u *Unmarshaler) processFieldWithValue(fieldType reflect.Type, value reflec
 func (u *Unmarshaler) processFieldWithoutValue(fieldType reflect.Type, value reflect.Value, opts *fieldOptions, fullName string) error {
 	// 优先使用默认值
 	if defaultValue, ok := opts.hasDefault(); ok {
-		return u.setDefaultValue(fieldType, value, defaultValue, fullName)
+		return u.setDefaultValue(fieldType, value, defaultValue, opts, fullName)
 	}
 
 	derefedType := Deref(fieldType)
@@ -444,6 +570,11 @@ func (u *Unmarshaler) setConvertedValue(fieldType reflect.Type, value reflect.Va
 	}
 
 	if err := validateOptions(strVal, opts.allowedOptions(), fullName); err != nil {
+		return err
+	}
+	// 值类型与字段类型不一致时（如 YAML 中的 port: "9090" 对应 int 字段）
+	// 此前会绕过 range 校验，使同一语义值因表示形式不同而校验结果不同。
+	if err := validateRangeForType(derefedType, strVal, opts, fullName); err != nil {
 		return err
 	}
 
@@ -706,6 +837,7 @@ func (u *Unmarshaler) setDurationValue(fieldType reflect.Type, value reflect.Val
 }
 
 // setEnvValue 从环境变量值设置字段。
+// 与配置值路径一致，环境变量同样需要满足 options 与 range 约束。
 func (u *Unmarshaler) setEnvValue(fieldType reflect.Type, value reflect.Value, envVal string, opts *fieldOptions, fullName string) error {
 	if err := validateOptions(envVal, opts.allowedOptions(), fullName); err != nil {
 		return err
@@ -713,6 +845,12 @@ func (u *Unmarshaler) setEnvValue(fieldType reflect.Type, value reflect.Value, e
 
 	derefType := Deref(fieldType)
 	derefKind := derefType.Kind()
+
+	// 环境变量此前只校验 options，不校验 range，导致用环境变量覆盖配置时
+	// 越界值被接受（如 range=[1:65535] 的端口被 PORT=99999 绕过）。
+	if err := validateRangeForType(derefType, envVal, opts, fullName); err != nil {
+		return err
+	}
 
 	switch {
 	case derefKind == reflect.String:
@@ -736,8 +874,14 @@ func (u *Unmarshaler) setEnvValue(fieldType reflect.Type, value reflect.Value, e
 }
 
 // setDefaultValue 设置字段的默认值。
-func (u *Unmarshaler) setDefaultValue(fieldType reflect.Type, value reflect.Value, defaultValue string, fullName string) error {
+// 默认值同样需要满足 range 约束：标签里声明了越界的 default 属于配置错误，
+// 应在加载期暴露，而不是把一个越界值静默写进配置对象。
+func (u *Unmarshaler) setDefaultValue(fieldType reflect.Type, value reflect.Value, defaultValue string, opts *fieldOptions, fullName string) error {
 	derefedType := Deref(fieldType)
+
+	if err := validateRangeForType(derefedType, defaultValue, opts, fullName); err != nil {
+		return err
+	}
 
 	if derefedType == durationType {
 		d, err := cast.ToDurationE(defaultValue)
@@ -821,6 +965,12 @@ func (u *Unmarshaler) hasAnySubField(structType reflect.Type, m map[string]any) 
 			continue
 		}
 		if key == ignoreKey {
+			continue
+		}
+		if u.canonicalKey != nil {
+			if _, ok, err := lookupKeyCanonical(m, key, u.canonicalKey); err == nil && ok {
+				return true
+			}
 			continue
 		}
 		if _, ok := lookupKey(m, key); ok {

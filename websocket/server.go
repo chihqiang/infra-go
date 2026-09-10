@@ -395,11 +395,22 @@ func (s *Server) BroadcastEvent(event string, data any) error {
 // --- 关闭 ---
 
 // Close 关闭服务器，断开所有连接并清理资源。
+//
+// 房间清理**仅针对本实例的连接**：RedisRoom 的房间键由所有实例共享，
+// 若在此清空整批键，会抹掉其他节点的房间成员关系，
+// 导致其他节点后续的广播静默失效（对象已不在房间内）。
+// 需要整体清空房间（例如运维重置）时请显式调用 RedisRoom.Clear。
 func (s *Server) Close() error {
 	// 停止集群监听
 	if s.cluster != nil {
 		s.cluster.Stop()
 	}
+
+	// 先将本实例的连接移出所有房间（需在关闭 Redis 客户端之前完成）
+	s.conns.Range(func(_, v any) bool {
+		s.room.Delete(v.(*Conn).ID())
+		return true
+	})
 
 	// 关闭所有连接
 	s.conns.Range(func(_, v any) bool {
@@ -407,9 +418,6 @@ func (s *Server) Close() error {
 		conn.Close()
 		return true
 	})
-
-	// 清理房间
-	s.room.Clear()
 
 	// 关闭由 Server 创建的 Redis 客户端
 	if s.ownRedis && s.redisClient != nil {

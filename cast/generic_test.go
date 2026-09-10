@@ -129,3 +129,80 @@ func TestToE_JsonNumberInput(t *testing.T) {
 	_, err = ToE[int](json.Number("1.5"))
 	assert.Error(t, err)
 }
+
+// --- 窄类型溢出防护（此前会静默回绕）---
+
+// TestToE_NarrowIntOverflow 回归测试：目标类型位宽不足时必须报错。
+// 历史行为：ToE[int8]("200") 静默回绕为 -56 且 err 为 nil。
+func TestToE_NarrowIntOverflow(t *testing.T) {
+	// int8: [-128, 127]
+	v, err := ToE[int8]("127")
+	require.NoError(t, err)
+	assert.Equal(t, int8(127), v)
+
+	_, err = ToE[int8]("128")
+	assert.Error(t, err)
+	_, err = ToE[int8]("200")
+	assert.Error(t, err)
+	_, err = ToE[int8]("-129")
+	assert.Error(t, err)
+
+	n, err := ToE[int8]("-128")
+	require.NoError(t, err)
+	assert.Equal(t, int8(-128), n)
+
+	// int16: [-32768, 32767]
+	_, err = ToE[int16]("32768")
+	assert.Error(t, err)
+	_, err = ToE[int16]("32767")
+	require.NoError(t, err)
+	_, err = ToE[int16]("-32769")
+	assert.Error(t, err)
+
+	// int32: [-2147483648, 2147483647]
+	_, err = ToE[int32]("2147483648")
+	assert.Error(t, err)
+	_, err = ToE[int32]("2147483647")
+	require.NoError(t, err)
+
+	// 原生整数越界同样报错（此前 ToIntE 后窄化转换静默回绕）
+	_, err = ToE[int8](200)
+	assert.Error(t, err)
+	_, err = ToE[int16](40000)
+	assert.Error(t, err)
+
+	// 超范围浮点不会先变成垃圾输入
+	_, err = ToE[int8](1e30)
+	assert.Error(t, err)
+}
+
+// TestToE_NarrowUintOverflow 回归测试：无符号窄类型溢出必须报错。
+// 历史行为：ToE[uint8]("300") 静默回绕为 44 且 err 为 nil。
+func TestToE_NarrowUintOverflow(t *testing.T) {
+	v, err := ToE[uint8]("255")
+	require.NoError(t, err)
+	assert.Equal(t, uint8(255), v)
+
+	_, err = ToE[uint8]("256")
+	assert.Error(t, err)
+	_, err = ToE[uint8]("300")
+	assert.Error(t, err)
+
+	// uint16: 上界 65535
+	_, err = ToE[uint16]("65536")
+	assert.Error(t, err)
+	_, err = ToE[uint16]("65535")
+	require.NoError(t, err)
+
+	// uint32: 上界 4294967295
+	_, err = ToE[uint32]("4294967296")
+	assert.Error(t, err)
+	_, err = ToE[uint32]("4294967295")
+	require.NoError(t, err)
+
+	// 负数与原生越界
+	_, err = ToE[uint8]("-1")
+	assert.Error(t, err)
+	_, err = ToE[uint8](300)
+	assert.Error(t, err)
+}

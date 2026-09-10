@@ -98,9 +98,14 @@ stringx.Randn(10, stringx.RandTypeDigit)   // "1234567890"
 
 ```go
 stringx.ToCamelCase("Hello")    // "hello"
+stringx.ToCamelCase("Äbc")      // "äbc"（多字节首字符正确处理）
 stringx.ToSnakeCase("HTTPServer") // "http_server"
 stringx.Capitalize("hello")     // "Hello"
 ```
+
+> `ToCamelCase` / `Capitalize` 使用 `utf8.DecodeRuneInString` 定位首字符边界，
+> 支持多字节 UTF-8（中文、拉丁扩展、Emoji 等），不会产生字节截断。
+> 输入为非法 UTF-8 时原样返回。
 
 ### 字符串操作
 
@@ -118,6 +123,9 @@ stringx.Substr("hello", -3, 5)        // "llo"
 stringx.Repeat("ab", 3)              // "ababab"
 stringx.Chunk("abcdef", 2)           // ["ab" "cd" "ef"]
 ```
+
+> `Repeat` 不会 panic：`n <= 0`、`s` 为空，或结果长度超过 1 GiB 上限时返回空字符串。
+> 需要生成超过该上限的内容时请自行拼接。
 
 ### 拆分与连接
 

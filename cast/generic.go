@@ -22,6 +22,32 @@ func To[T any](v any) T {
 	return val
 }
 
+// narrowInt64E 将 v 转为 int64，并校验其能无损放入 bitSize 位的有符号整数。
+// 供 ToE 的 int8/int16/int32 分支使用：直接用 int8(n) 这类窄化转换会静默回绕
+// （如 int8(200) == -56），必须在转换前判断范围。
+func narrowInt64E(v any, bitSize int, name string) (int64, error) {
+	n, err := ToInt64E(v)
+	if err != nil {
+		return 0, err
+	}
+	if err := checkIntBitSize(n, bitSize, name); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// narrowUint64E 将 v 转为 uint64，并校验其能无损放入 bitSize 位的无符号整数。
+func narrowUint64E(v any, bitSize int, name string) (uint64, error) {
+	n, err := ToUint64E(v)
+	if err != nil {
+		return 0, err
+	}
+	if err := checkUintBitSize(n, bitSize, name); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // ToE 将 any 转换为目标类型 T，返回转换结果与错误。
 // 与 To 相比保留错误信息，便于调用方判断是否成功并回退默认值。
 func ToE[T any](v any) (T, error) {
@@ -34,19 +60,19 @@ func ToE[T any](v any) (T, error) {
 		}
 		return any(n).(T), nil
 	case int8:
-		n, err := ToIntE(v)
+		n, err := narrowInt64E(v, 8, "int8")
 		if err != nil {
 			return zero, err
 		}
 		return any(int8(n)).(T), nil
 	case int16:
-		n, err := ToIntE(v)
+		n, err := narrowInt64E(v, 16, "int16")
 		if err != nil {
 			return zero, err
 		}
 		return any(int16(n)).(T), nil
 	case int32:
-		n, err := ToIntE(v)
+		n, err := narrowInt64E(v, 32, "int32")
 		if err != nil {
 			return zero, err
 		}
@@ -64,19 +90,19 @@ func ToE[T any](v any) (T, error) {
 		}
 		return any(n).(T), nil
 	case uint8:
-		n, err := ToUint64E(v)
+		n, err := narrowUint64E(v, 8, "uint8")
 		if err != nil {
 			return zero, err
 		}
 		return any(uint8(n)).(T), nil
 	case uint16:
-		n, err := ToUint64E(v)
+		n, err := narrowUint64E(v, 16, "uint16")
 		if err != nil {
 			return zero, err
 		}
 		return any(uint16(n)).(T), nil
 	case uint32:
-		n, err := ToUint64E(v)
+		n, err := narrowUint64E(v, 32, "uint32")
 		if err != nil {
 			return zero, err
 		}

@@ -27,6 +27,13 @@ type Config struct {
 	ReadBufferSize int `json:",default=4096"`
 	// WriteBufferSize 写缓冲区大小（字节），默认 4096。
 	WriteBufferSize int `json:",default=4096"`
+	// WriteTimeout 单次写操作的超时时间，默认 10 秒。
+	//
+	// 每次写入前会设置写截止时间。缺少该限制时，一个写缓冲区已满且不读数据的
+	// 客户端会让 WriteMessage 无限阻塞，且期间持有连接的写锁，
+	// 连带阻塞广播、Conn.Close、心跳 goroutine 与 Server.Close。
+	// 设为负值可禁用写超时（不推荐，仅用于兼容极端场景）。
+	WriteTimeout time.Duration `json:",default=10s"`
 	// MaxMessageSize 单条消息最大大小（字节），默认 4096。
 	// 超过此大小的消息会被拒绝。
 	MaxMessageSize int64 `json:",default=4096"`
@@ -71,6 +78,9 @@ func fillDefault(cfg Config) Config {
 	}
 	if cfg.WriteBufferSize != 0 {
 		c.WriteBufferSize = cfg.WriteBufferSize
+	}
+	if cfg.WriteTimeout != 0 {
+		c.WriteTimeout = cfg.WriteTimeout
 	}
 	if cfg.MaxMessageSize != 0 {
 		c.MaxMessageSize = cfg.MaxMessageSize

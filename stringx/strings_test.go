@@ -1,8 +1,14 @@
 package stringx
 
 import (
+	"math"
 	"reflect"
+	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIsEmpty(t *testing.T) {
@@ -167,6 +173,45 @@ func TestRepeat(t *testing.T) {
 	}
 }
 
+// TestRepeat_OverflowDoesNotPanic 回归测试：溢出或超大结果返回空串而不是 panic。
+// 历史缺陷：len(s)*n 溢出为负会使 strings.Builder.Grow 抛出
+// "negative count"；巨大的 n 会触发 "makeslice: len out of range"。
+// 两者都是不可恢复的运行时 panic，n 来自外部输入时可终止进程。
+func TestRepeat_OverflowDoesNotPanic(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		n     int
+	}{
+		{"max int with 1-byte input", "a", math.MaxInt},
+		{"max int with 2-byte input", "ab", math.MaxInt},
+		{"large n", "abc", math.MaxInt / 2},
+		{"overflow boundary", "ab", math.MaxInt/2 + 1},
+		{"exceeds cap", "a", maxRepeatBytes + 1},
+		{"exactly at cap boundary", "ab", maxRepeatBytes/2 + 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got string
+			require.NotPanics(t, func() {
+				got = Repeat(tt.input, tt.n)
+			})
+			assert.Equal(t, "", got, "overflow/oversize must yield an empty string")
+		})
+	}
+}
+
+// TestRepeat_WithinCap 验证上限之内的正常用法不受影响。
+func TestRepeat_WithinCap(t *testing.T) {
+	assert.Equal(t, "ababab", Repeat("ab", 3))
+	assert.Equal(t, strings.Repeat("xy", 1000), Repeat("xy", 1000))
+
+	// 边界判定：上限以内通过，超过上限返回空串。
+	// 注意此处只验证判定逻辑，不实际分配 1GiB。
+	assert.LessOrEqual(t, len("ab")*3, maxRepeatBytes)
+	assert.Greater(t, len("a")*(maxRepeatBytes+1), maxRepeatBytes)
+}
+
 func TestSubstr(t *testing.T) {
 	tests := []struct {
 		input      string
@@ -290,4 +335,45 @@ func TestToCamelCase(t *testing.T) {
 			t.Errorf("ToCamelCase(%q) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
+}
+
+// TestToCamelCase_MultibyteFirstRune 回归测试：首字符为多字节 UTF-8 时
+// 必须正确处理，不能按字节截断。
+// 历史缺陷：实现用 s[i+1:] 拼接（i 恒为 0），首字符占多字节时
+// 会丢掉续字节，返回非法 UTF-8（如 "Äbc" → "ä\x84bc"）。
+func TestToCamelCase_MultibyteFirstRune(t *testing.T) {
+	tests := []struct {
+		input, want string
+	}{
+		// 拉丁文扩展：Ä 占 2 字节
+		{"Äbc", "äbc"},
+		{"École", "école"},
+		// 中文首字符（本身无大小写，应保持不变）
+		{"中文A", "中文A"},
+		// 中文 + 后续大写字母
+		{"中文ABC", "中文ABC"},
+		// 希腊文
+		{"Σigma", "σigma"},
+		// 西里尔文
+		{"Дом", "дом"},
+		// Emoji 首字符（无大小写概念，应保持不变）
+		{"😀Test", "😀Test"},
+		// 多字节首字符 + 多字节后续，验证整体完整
+		{"Ä中文", "ä中文"},
+	}
+	for _, tt := range tests {
+		got := ToCamelCase(tt.input)
+		assert.Equal(t, tt.want, got)
+		assert.True(t, utf8.ValidString(got),
+			"ToCamelCase(%q) produced invalid UTF-8: %q", tt.input, got)
+		assert.Equal(t, len([]rune(tt.input)), len([]rune(got)),
+			"ToCamelCase(%q) must not change the rune count", tt.input)
+	}
+}
+
+// TestToCamelCase_InvalidUTF8 验证非法 UTF-8 输入原样返回，不被进一步破坏
+// （与 Capitalize 的行为一致）。
+func TestToCamelCase_InvalidUTF8(t *testing.T) {
+	invalid := string([]byte{0xff, 0xfe, 'a'})
+	assert.Equal(t, invalid, ToCamelCase(invalid))
 }

@@ -340,6 +340,13 @@ server.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
 })
 ```
 
+说明：
+
+- 仅对**路由未匹配**的请求生效；业务路由内部主动返回的 404（如「资源不存在」）不会被劫持，原样返回给客户端。
+- 路径匹配但方法不允许（405）不会被接管，仍返回 `405 Method Not Allowed` 与 `Allow` 头。
+- 处理器需自行写出状态码；未调用 `WriteHeader` 时由 net/http 隐式写 200（`OkJSON` 系列即为此约定：HTTP 200 + 响应体中的业务错误码）。
+- 设置该处理器后，正常路由的 handler 仍能拿到完整的 `http.Flusher` / `http.Hijacker` / `http.Pusher` / `Unwrap` 能力（SSE、WebSocket、HTTP/2 Push 不受影响）。
+
 ### panic 恢复
 
 `WithRecovery` 捕获 handler panic，记录堆栈并返回 500。
@@ -363,21 +370,163 @@ httpx 中间件分两层：
 
 | 中间件 | 用途 |
 |--------|------|
-| `WithCors(origins...)` | CORS；`"*"` 全放行；同源不设头；未授权 403；OPTIONS 204 |
+| `WithCors(origins...)` | CORS；`"*"` 允许所有来源（**回显具体 Origin**，不发送通配符）；同源不设头；**未授权来源默认透传**（不下发 CORS 头）；OPTIONS 预检 204 |
 | `WithRecovery()` | panic 恢复 → 500 + 堆栈日志 |
 | `WithRequestID()` | request_id 注入 context / 回写响应头 |
 | `WithTracing(ignorePaths...)` | 链路追踪（服务端 span，默认全局 TracerProvider） |
 | `WithLogger(skipPaths...)` | 访问日志（method/path/status/bytes/latency） |
-| `WithBreaker()` | 全局限流熔断（全局单一熔断器） |
-| `WithRouteBreaker()` | 按路由 `METHOD:path` 隔离熔断 |
+| `WithBreaker()` | 全局限流熔断（全局单一熔断器；打开时 503 + `Retry-After`） |
+| `WithRouteBreaker()` | 按路由隔离熔断（以**路由模板**为键，见下；打开时 503 + `Retry-After`） |
 | `WithTimeout(d)` | 请求超时（WS/SSE 豁免；客户端断开 499） |
 | `WithMaxBytes(n)` | 请求体大小限制（413） |
-| `WithGunzip()` | gzip 请求体自动解压 |
-| `WithMaxConns(n)` | 并发连接数限制（503） |
-| `WithRateLimit(limiter, skipPaths...)` | 限流（429；limiter 来自 ratelimit 包，见 [ratelimit](./ratelimit.md)） |
+| `WithGunzip()` | gzip 请求体自动解压（**解压后上限 5MB**，防解压炸弹） |
+| `WithMaxConns(n)` | 并发连接数限制（503 + `Retry-After`） |
+| `WithRateLimit(limiter, skipPaths...)` | 限流（429 + `Retry-After`；limiter 来自 ratelimit 包，见 [ratelimit](./ratelimit.md)） |
 | `WithJWT(j, getToken)` | JWT 认证（转发 `jwt.AuthMiddleware`，见 [jwt](./jwt.md)） |
-| `WithCryption(key, skipPaths...)` | 请求/响应 AES-GCM 加解密：解密请求体（密文上限默认 5MB，超限 413）；响应体**仅 2xx（且非 204/205/HEAD）加密**，错误/重定向等非 2xx 明文透传并保留状态码；响应超缓冲上限（默认 5MB）自动回退明文。请求/响应上限可用 `middleware.NewCryptionWithLimit(key, reqBytes, respBytes, skipPaths...)` 调整 |
-| `WithContentSecurity(key, tolerance)` | 内容安全校验（防篡改 + 防重放） |
+| `WithCryption(key, skipPaths...)` | 请求/响应 AES-GCM 加解密：解密请求体（密文上限默认 5MB，超限 413）；响应体**仅 2xx（且非 204/205/HEAD）加密**，错误/重定向等非 2xx 明文透传并保留状态码；响应超缓冲上限（默认 5MB）自动回退明文，且**完整输出全部正文**（不会被截断）。请求/响应上限可用 `middleware.NewCryptionWithLimit(key, reqBytes, respBytes, skipPaths...)` 调整 |
+| `WithContentSecurity(key, tolerance)` | 内容安全校验（防篡改 + 防重放）；**请求体上限 5MB**（超限 413，读失败 400）；认证失败 401 + `WWW-Authenticate` |
+
+### 状态码与响应头符合 HTTP 规范
+
+中间件产生的错误响应遵从以下 RFC 要求：
+
+| 状态码 | 场景（中间件） | 规范性响应头 | RFC 依据 |
+|--------|--------------|-------------|---------|
+| 401 | `WithJWT`、`WithContentSecurity` | `WWW-Authenticate`（**MUST**） | RFC 9110 §15.5.2 |
+| 429 | `WithRateLimit` | `Retry-After`（MAY，尽量给出） | RFC 6585 §4；RFC 9110 §10.2.3 |
+| 503 | `WithBreaker`、`WithRouteBreaker`、`WithMaxConns` | `Retry-After`（**SHOULD**） | RFC 9110 §15.6.4 |
+| 413 | `WithMaxBytes`、`WithCryption`、`WithContentSecurity` | — | RFC 9110 §15.5.14 |
+| 405 | 路由层（ServeMux） | `Allow`（MUST） | RFC 9110 §15.5.6 |
+
+**401 的质询格式**：
+
+- JWT 使用 Bearer 方案（RFC 6750 §3），`error` 参数区分失败原因：
+
+  ```text
+  WWW-Authenticate: Bearer error="invalid_request"   # 未提供令牌
+  WWW-Authenticate: Bearer error="invalid_token"     # 令牌无效/过期
+  ```
+
+- `ContentSecurity` 是自定义 HMAC 签名方案（不属于 Basic/Bearer），
+  使用自定义 scheme 名：
+
+  ```text
+  WWW-Authenticate: ContentSecurity
+  ```
+
+**Retry-After 取值规则**（RFC 9110 §10.2.3）：
+
+- 使用 `delay-seconds`（非负十进制整数），**向上取整**。
+- 不足 1 秒也输出 `1`，避免 `Retry-After: 0`（会被解读为可立即重试）。
+- **无法估计时省略该头**（而不是编造数值）——错误的等待提示会让客户端
+  过久不重试。例如自定义限流器未实现 `RetryAfterProvider` 时。
+
+限流中间件优先向限流器索取精确值（`RetryAfterProvider` 可选接口），
+`ratelimit` 内置实现均已支持：
+
+| 限流器 | `RetryAfter()` 含义 |
+|--------|------------------|
+| `TokenBucket` | 距下一个令牌可用（由实时令牌数与 rate 算出） |
+| `SlidingWindow` | 最早一次记录滑出窗口 |
+| `RedisTokenBucket` | 生成一个令牌所需时长（按 rate 估计） |
+| `RedisSlidingWindow` | 整个窗口时长（避免限流路径上再访问 Redis） |
+| `Concurrency` | 不实现（占用时长不可预测，不应编造） |
+
+自定义限流器不实现该接口时，可用 `WithRetryAfter(d)` 给出固定值：
+
+```go
+mw := middleware.NewRateLimit(myLimiter).WithRetryAfter(2 * time.Second)
+// 熔断 / 并发限制同理
+mb := middleware.NewBreaker().WithRetryAfter(time.Second)
+mc := middleware.NewMaxConns(100).WithRetryAfter(500 * time.Millisecond)
+```
+
+> **`499`（客户端主动断开）**：由 `WithTimeout` 在检测到请求 context 被取消时写入。
+> 它不是 RFC 定义的状态码，而是 nginx 约定。保留它是因为此时响应写不到已断开的
+> 客户端，该状态码仅用于服务端日志可观测性。RFC 9110 §15 允许定义新的状态码，
+> 499 属于 4xx 类，因此作为扩展是合规的；若你的日志管道不识别它，
+> 可在自己的访问日志中间件中把它映射为其它值。
+
+### 安全相关的默认限额
+
+以下中间件会读入或展开请求体，均带默认上限以避免内存被耗尽：
+
+| 中间件 | 限额 | 超限行为 | 调整方式 |
+|--------|------|---------|---------|
+| `WithCryption` | 密文请求体 5MB | 413 | `middleware.NewCryptionWithLimit(key, req, resp, ...)` |
+| `WithContentSecurity` | 签名的请求体 5MB | 413（读失败 400） | `middleware.NewContentSecurity(key, tol).WithMaxBodyBytes(n)` |
+| `WithGunzip` | **解压后** 5MB | 下游读取返回错误 | `middleware.NewGunzip().WithMaxDecompressedBytes(n)` |
+| `WithMaxBytes` | 由调用方指定 | 413 | `WithMaxBytes(n)` |
+
+> `WithMaxBytes` 依赖 `Content-Length` 只限制**压缩体**大小，无法防解压炸弹；
+> 与 `WithGunzip` 组合使用时请让 `WithGunzip` 位于更内层，两者互补。
+
+### CORS 与凭证、未授权来源
+
+**未授权来源默认透传（不下发 CORS 头，请求继续交给下游），而不是返回 403。**
+
+CORS 是**浏览器侧**的响应读取限制，而非服务端的请求准入控制：缺少
+`Access-Control-Allow-Origin` 时，浏览器已会阻止跨域脚本读取响应。若改成 403：
+
+- **误伤非浏览器客户端**：curl、移动端、服务间调用、部分 HTTP 库会无条件带上
+  `Origin` 头，它们不受 CORS 约束，却会被 403 挡在业务逻辑之外。
+- **概念混淆**：把“该来源不能读响应”表达成了“该请求被禁止”。
+- 无额外安全收益：预检本就无法通过（浏览器不会发真实请求）；
+  真实请求即使放行，其响应也不可被跨域脚本读取。
+
+需要“只服务白名单来源”语义时，可显式开启严格模式：
+
+```go
+// 默认：透传（推荐）
+server.Use(httpx.WithCors("https://app.example.com"))
+
+// 严格：未授权来源 → 403（适用于确定只面向白名单客户端的后端）
+mw := middleware.NewCORS("https://app.example.com").WithRejectUnauthorizedOrigin(true)
+server.Use(httpx.AsMiddleware(mw.Middleware()))
+```
+
+> ⚠️ **不要用 CORS 当 CSRF 防护**。简单请求（表单 POST、img GET）本就不受 CORS 阻止，
+> 跨站请求仍会到达服务端（只是响应不可读）。状态变更接口请使用 CSRF token
+> 或 `SameSite` Cookie。
+
+按 Fetch 规范，携带凭证时不允许使用通配来源。因此 `WithCors("*")`
+**回显请求的具体 Origin**（并附 `Vary: Origin`）而不是发送 `*` ——
+否则浏览器会拒绝整个响应，带 `withCredentials` 的跨域请求必然失败。
+
+> ⚠️ 允许所有来源 + 凭证意味着**任意站点**都能发起带凭证的跨域请求并读取响应。
+> 生产环境请改用显式来源列表；确实不需要 cookie/Authorization 时，
+> 可用 `middleware.NewCORS("*").WithCredentials(false)` 关闭凭证下发。
+
+### 按路由聚合的中间件与路由模板
+
+`WithRouteBreaker` 这类”按路由隔离”的中间件需要一个**路由模板**作为键，
+而不能用具体路径：`/users/1` 与 `/users/2` 若各建一个熔断器，
+“按路由隔离”会退化为“按请求隔离”（统计割裂、永远达不到熔断阈值），
+且熔断器注册表会随路径参数无界增长。
+
+httpx 在进入中间件链之前解析出模板并写入 context，可用
+`middleware.PatternFromContext(ctx)` 读取：
+
+```go
+import "github.com/chihqiang/infra-go/httpx/middleware"
+
+pattern := middleware.PatternFromContext(r.Context())
+// 命中 /users/{id} 时为 "GET /users/{id}"，未匹配路由时为空字符串
+```
+
+> **为什么不在中间件里直接读 `r.Pattern`**：全局中间件包在 `ServeMux` 外层，
+> 而 `net/http` 只在把请求分发到命中 handler 时才填充 `r.Pattern`，
+> 因此全局中间件中 `r.Pattern` 恒为空。httpx 用 `mux.Handler(r)` 预先解析并代为传递。
+>
+> 其它框架可自行调用 `middleware.ContextWithPattern(ctx, pattern)` 提供同等信息。
+
+`RouteBreaker` 的键解析优先级：`r.Pattern` → context 中的模板 → 归一化路径
+（把形如 ID 的段换成 `{}`，如 `/users/123` → `/users/{}`），
+保证非 ServeMux 场景下基数仍有界。
+
+熔断器注册表（`breaker.GetBreaker`）按名称**永久缓存、不会自动淘汰**，
+因此务必保证名称基数有界。`breaker.RegistrySize()` 可用于观测，
+`breaker.RemoveBreaker(name)` 可释放不再使用的名称。
 
 用法：
 

@@ -56,15 +56,9 @@ func ToIntE(v any) (int, error) {
 		}
 		return int(val), nil
 	case float32:
-		if isNonFinite(float64(val)) {
-			return 0, castErr("float32", "int")
-		}
-		return int(val), nil
+		return floatToIntE(float64(val), "float32")
 	case float64:
-		if isNonFinite(val) {
-			return 0, castErr("float64", "int")
-		}
-		return int(val), nil
+		return floatToIntE(val, "float64")
 	case bool:
 		if val {
 			return 1, nil
@@ -120,15 +114,9 @@ func ToInt64E(v any) (int64, error) {
 		}
 		return int64(val), nil
 	case float32:
-		if isNonFinite(float64(val)) {
-			return 0, castErr("float32", "int64")
-		}
-		return int64(val), nil
+		return floatToInt64E(float64(val), "float32")
 	case float64:
-		if isNonFinite(val) {
-			return 0, castErr("float64", "int64")
-		}
-		return int64(val), nil
+		return floatToInt64E(val, "float64")
 	case bool:
 		if val {
 			return 1, nil
@@ -170,6 +158,10 @@ func ToUintE(v any) (uint, error) {
 	n, err := ToUint64E(v)
 	if err != nil {
 		return 0, err
+	}
+	// 32 位平台上 uint 窄于 uint64，需要判断溢出（64 位平台恒为假）。
+	if n > math.MaxUint {
+		return 0, castErr("uint64", "uint")
 	}
 	return uint(n), nil
 }
@@ -215,21 +207,9 @@ func ToUint64E(v any) (uint64, error) {
 	case uint64:
 		return val, nil
 	case float32:
-		if isNonFinite(float64(val)) {
-			return 0, castErr("float32(negative)", "uint64")
-		}
-		if val < 0 {
-			return 0, castErr("float32(negative)", "uint64")
-		}
-		return uint64(val), nil
+		return floatToUint64E(float64(val), "float32")
 	case float64:
-		if isNonFinite(val) {
-			return 0, castErr("float64(negative)", "uint64")
-		}
-		if val < 0 {
-			return 0, castErr("float64(negative)", "uint64")
-		}
-		return uint64(val), nil
+		return floatToUint64E(val, "float64")
 	case bool:
 		if val {
 			return 1, nil
@@ -272,7 +252,13 @@ func ToFloat32E(v any) (float32, error) {
 	if err != nil {
 		return 0, err
 	}
-	return float32(f), nil
+	f32 := float32(f)
+	// float64 → float32 窄化溢出会静默产生 ±Inf（如 1e300），需显式报错。
+	// 输入本身就是 ±Inf 时保持透传，不算窄化溢出。
+	if isNonFinite(float64(f32)) && !isNonFinite(f) {
+		return 0, castErr("float64", "float32")
+	}
+	return f32, nil
 }
 
 // ToFloat64E 将 any 转换为 float64，返回转换结果和错误。

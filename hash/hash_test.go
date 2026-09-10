@@ -1,7 +1,9 @@
 package hash
 
 import (
+	"crypto/md5"
 	"crypto/sha256"
+	"crypto/sha512"
 	"os"
 	"path/filepath"
 	"testing"
@@ -157,6 +159,31 @@ func TestFileMD5_NotExist(t *testing.T) {
 func TestHash(t *testing.T) {
 	got := Hash([]byte("hello"), sha256.New())
 	assert.Equal(t, SHA256String("hello"), got)
+}
+
+// TestHash_ReusedInstance 验证复用同一个 hash.Hash 实例时结果仍然正确。
+// 历史缺陷：未调用 h.Reset()，第二次调用会对累积数据求值，得到错误摘要且不报错。
+func TestHash_ReusedInstance(t *testing.T) {
+	h := sha256.New()
+
+	assert.Equal(t, SHA256String("hello"), Hash([]byte("hello"), h))
+	assert.Equal(t, SHA256String("world"), Hash([]byte("world"), h))
+	assert.Equal(t, SHA256String("hello"), Hash([]byte("hello"), h))
+
+	// 同一输入重复调用必须稳定
+	assert.Equal(t, SHA256String("abc"), Hash([]byte("abc"), h))
+	assert.Equal(t, SHA256String("abc"), Hash([]byte("abc"), h))
+}
+
+// TestHash_ReusedInstanceAcrossAlgorithms 验证不同算法的实例同样被正确重置。
+func TestHash_ReusedInstanceAcrossAlgorithms(t *testing.T) {
+	md5h := md5.New()
+	assert.Equal(t, MD5String("a"), Hash([]byte("a"), md5h))
+	assert.Equal(t, MD5String("ab"), Hash([]byte("ab"), md5h))
+
+	sha512h := sha512.New()
+	assert.Equal(t, SHA512String("a"), Hash([]byte("a"), sha512h))
+	assert.Equal(t, SHA512String("ab"), Hash([]byte("ab"), sha512h))
 }
 
 // --- 编码辅助测试 ---

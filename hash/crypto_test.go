@@ -27,10 +27,23 @@ func TestAESGCMEncrypt_RandomNonce(t *testing.T) {
 }
 
 func TestAESGCMDecrypt_Tampered(t *testing.T) {
-	enc, _ := AESGCMEncrypt(testAESKey, []byte("secret"))
-	// 篡改密文（翻转中间一个字符）
-	tampered := enc[:len(enc)/2] + "X" + enc[len(enc)/2+1:]
-	_, err := AESGCMDecrypt(testAESKey, tampered)
+	enc, err := AESGCMEncrypt(testAESKey, []byte("secret"))
+	require.NoError(t, err)
+
+	// 篡改密文（翻转中间一个字符）。
+	// 替换字符必须与原文不同：base64 字母表包含 'X'，
+	// 若该位置恰好就是 'X'，替换会成为空操作，解密成功导致测试偶发失败。
+	i := len(enc) / 2
+	replacement := byte('X')
+	if enc[i] == replacement {
+		replacement = 'Y'
+	}
+	require.NotEqual(t, enc[i], replacement)
+
+	tampered := enc[:i] + string(replacement) + enc[i+1:]
+	require.NotEqual(t, enc, tampered, "tampering must actually change the ciphertext")
+
+	_, err = AESGCMDecrypt(testAESKey, tampered)
 	assert.Error(t, err, "篡改后的密文应校验失败")
 }
 

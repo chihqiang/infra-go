@@ -29,9 +29,25 @@ func DoWithConfig(ctx context.Context, fn func(ctx context.Context) error, opts 
 }
 
 // DoWithRetryConfig 执行函数，失败时根据指定配置自动重试。
+//
+// 字段式配置无法区分"未设置"与"显式设为 0"，因此 MaxRetries/Delay/MaxDelay
+// 为 0 时一律视为未设置并填充默认值（见 normalize）。
+// 需要显式表示"不重试"或"零延迟"时，请使用 Option 形式：
+//
+//	retry.DoWithConfig(ctx, fn, retry.WithMaxRetries(0), retry.WithDelay(0))
 func DoWithRetryConfig(ctx context.Context, fn func(ctx context.Context) error, c Config) error {
+	return doRetry(ctx, fn, normalize(c))
+}
+
+// normalize 为未显式设置的字段填充默认值。
+// DoWithRetryConfig 与 Attempts 共用本函数，保证"实际执行次数"与声明一致。
+//
+// 局限：无法区分"未设置"与"显式设为 0"，0 值一律按未设置处理。
+// 这与 Option 路径不同：defaultConfig 先写入默认值再应用 opts，
+// 因此 WithMaxRetries(0) / WithDelay(0) 能生效。
+func normalize(c Config) Config {
 	if c.RetryIf == nil {
-		c.RetryIf = func(err error) bool { return true }
+		c.RetryIf = func(error) bool { return true }
 	}
 	if c.MaxRetries == 0 {
 		c.MaxRetries = defaultMaxRetries
@@ -42,7 +58,7 @@ func DoWithRetryConfig(ctx context.Context, fn func(ctx context.Context) error, 
 	if c.MaxDelay == 0 {
 		c.MaxDelay = defaultMaxDelay
 	}
-	return doRetry(ctx, fn, c)
+	return c
 }
 
 // doRetry 重试核心逻辑。
@@ -70,7 +86,9 @@ func doRetry(ctx context.Context, fn func(ctx context.Context) error, c Config) 
 
 		// 检查是否需要重试
 		if !c.RetryIf(err) {
-			return fmt.Errorf("%w: %s", ErrNoRetry, err.Error())
+			// 用 %w 同时包装哨兵与原始错误，使 errors.Is/As 能识别原始错误类型
+			// （旧实现用 %s 拼接，错误链在此断掉，上层无法区分超时/业务错误）。
+			return fmt.Errorf("%w: %w", ErrNoRetry, err)
 		}
 
 		// 计算延迟
@@ -91,7 +109,8 @@ func doRetry(ctx context.Context, fn func(ctx context.Context) error, c Config) 
 		}
 	}
 
-	return fmt.Errorf("%w: last error: %s", ErrMaxRetries, lastErr.Error())
+	// 保留原始错误链（多重 %w），既有信息不变且 errors.Is/As 可用。
+	return fmt.Errorf("%w: last error: %w", ErrMaxRetries, lastErr)
 }
 
 // --- 辅助函数 ---
@@ -106,7 +125,11 @@ func IsNoRetry(err error) bool {
 	return errors.Is(err, ErrNoRetry)
 }
 
-// Attempts 返回重试配置中的总执行次数（首次 + 重试）。
+// Attempts 返回重试配置生效后的总执行次数（首次 + 重试）。
+//
+// 与 DoWithRetryConfig 使用同一套默认值规则（normalize），
+// 因此返回值就是 fn 的最大实际执行次数。
+// 旧实现直接返回 c.MaxRetries+1，对零值配置会声称 1 次而实际执行 4 次。
 func Attempts(c Config) int {
-	return c.MaxRetries + 1
+	return normalize(c).MaxRetries + 1
 }

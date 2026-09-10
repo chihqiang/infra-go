@@ -43,11 +43,23 @@ func ClaimsFromContext(ctx context.Context) Claims {
 	return claims
 }
 
+// bearerChallenge 返回 401 响应的 WWW-Authenticate 质询。
+//
+// RFC 9110 §15.5.2 要求 401 MUST 携带 WWW-Authenticate；
+// JWT 采用 Bearer 方案，因此按 RFC 6750 §3 产出质询，
+// error 参数区分"缺凭证"与"凭证无效"，便于客户端决定是跳登录还是刷新令牌。
+func bearerChallenge(errCode string) middleware.Challenge {
+	return middleware.Challenge{Scheme: "Bearer", Error: errCode}
+}
+
 // AuthMiddleware 返回 JWT 认证中间件。
 //
 // getToken 由调用方提供，从请求中提取 token（如从 Header/Cookie/Query），
 // 中间件只负责解析验证和注入 claims，不关心 token 来源。
-// 验证失败返回 401 Unauthorized，错误响应经 httpx/middleware 的统一错误机制输出
+//
+// 验证失败返回 401 Unauthorized，并携带符合 RFC 6750 §3 的
+// `WWW-Authenticate: Bearer error="..."` 质询；
+// 错误响应经 httpx/middleware 的统一错误机制输出
 // （import httpx 主包时为其统一 JSON 响应，否则为 http.Error 纯文本）。
 //
 // 返回类型为 func(http.HandlerFunc) http.HandlerFunc，兼容 httpx.Middleware，
@@ -57,16 +69,21 @@ func (j *JWT) AuthMiddleware(getToken func(*http.Request) string) func(http.Hand
 		return func(w http.ResponseWriter, r *http.Request) {
 			token := getToken(r)
 			if token == "" {
-				middleware.WriteError(r.Context(), w, http.StatusUnauthorized, msgTokenMissing)
+				middleware.WriteUnauthorized(r.Context(), w,
+					bearerChallenge(middleware.BearerErrorInvalidRequest), msgTokenMissing)
 				return
 			}
 
 			claims, err := j.ParseAccessToken(token)
 			if err != nil {
 				if errors.Is(err, ErrExpiredToken) {
-					middleware.WriteError(r.Context(), w, http.StatusUnauthorized, msgTokenExpired)
+					// 过期令牌仍是"无效令牌"，RFC 6750 无独立取值；
+					// 保留可读消息以便客户端区分（提示刷新而非重新登录）。
+					middleware.WriteUnauthorized(r.Context(), w,
+						bearerChallenge(middleware.BearerErrorInvalidToken), msgTokenExpired)
 				} else {
-					middleware.WriteError(r.Context(), w, http.StatusUnauthorized, msgInvalidToken)
+					middleware.WriteUnauthorized(r.Context(), w,
+						bearerChallenge(middleware.BearerErrorInvalidToken), msgInvalidToken)
 				}
 				return
 			}

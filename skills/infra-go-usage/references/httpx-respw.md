@@ -35,7 +35,9 @@ tw.Timeout()
 
 ## CryptionWriter — 响应加密缓冲
 
-缓冲 handler 写入的响应，便于结束后统一加密输出（`cryption_writer.go`），`maxBufBytes` 限制缓冲上限避免 OOM，供 `middleware.Cryption` 使用。`Flush` 为空操作——加密需整体缓冲后输出，不支持流式，避免在数据未就绪时向底层透传造成“半发送”状态：
+缓冲 handler 写入的响应，便于结束后统一加密输出（`cryption_writer.go`），`maxBufBytes` 限制缓冲上限避免 OOM，供 `middleware.Cryption` 使用。
+
+一旦缓冲超过 `maxBufBytes`，会**切换为明文透传模式**：先把已缓冲内容原样写到底层，之后所有写入直接透传（此时 `Flush` 也透传底层，支持大响应流式输出），保证客户端拿到完整响应、不会被截断。缓冲模式下 `Flush` 为空操作——加密需整体缓冲后输出，避免在数据未就绪时向底层透传造成"半发送"状态：
 
 ```go
 cw := respw.NewCryptionWriter(w, maxBytes)
@@ -46,7 +48,12 @@ if code == 0 {
     code = http.StatusOK
 }
 
-// 超限 / 非加密场景（非 2xx、204/205、HEAD）：明文透传，保留状态码
+// 缓冲超限：writer 已进入明文透传并写完全部内容，此处必须直接返回，不可再写
+if cw.Overflowed() {
+    return
+}
+
+// 非加密场景（非 2xx、204/205、HEAD）：明文透传，保留状态码
 w.Header().Del("Content-Length")
 w.WriteHeader(code)
 _, _ = w.Write(cw.Buffered())
@@ -58,20 +65,24 @@ w.WriteHeader(code)
 _, _ = w.Write([]byte(encrypted))
 ```
 
-## NotFoundResponseWriter — 自定义 404
+## NotFoundResponseWriter — 404 拦截
 
-拦截未命中路由的响应写入，转发给自定义 404 handler（`notfound_writer.go`），由 httpx 服务器 `SetNotFoundHandler` 内部使用，业务侧一般无需直接接触。
+拦截底层 `ResponseWriter` 写入的 404，转发给自定义 404 handler（`notfound_writer.go`），并透传 `Flush` / `Hijack` / `Push` / `Unwrap`。
+
+> 注意：它无法区分「路由未匹配」与「业务主动返回 404」，会一并劫持业务 404。`httpx.Server` 的 `SetNotFoundHandler` 因此**不再使用该包装器**，而是通过 `ServeMux.Handler(r)` 预判路由是否命中（同时排除 405），只对真正未匹配的请求生效。业务侧如需同样的语义，推荐直接使用 `SetNotFoundHandler`。
 
 ## 可选接口透传
 
-包装器对不同可选接口的透传能力如下（仅 `RecorderWriter` 完整透传全部四种；`TimeoutWriter` 与 `CryptionWriter` 因缓冲/加密语义受限）：
+包装器对不同可选接口的透传能力如下（`RecorderWriter` 与 `NotFoundResponseWriter` 完整透传全部四种；`TimeoutWriter` 与 `CryptionWriter` 因缓冲/加密语义受限）：
 
-| 接口 | 方法 | `RecorderWriter` | `TimeoutWriter` | `CryptionWriter` | 场景 |
-|------|------|:---:|:---:|:---:|------|
-| `http.ResponseController` | `Unwrap()` | ✅ | ❌ | ❌ | 运行时能力协商 |
-| `http.Flusher` | `Flush()` | ✅ | ✅ | ❌ | SSE 等流式响应（底层不支持时静默忽略；`CryptionWriter` 为空操作） |
-| `http.Hijacker` | `Hijack()` | ✅ | ✅ | ❌ | WebSocket 升级等连接接管（不支持时返回错误） |
-| `http.Pusher` | `Push()` | ✅ | ❌ | ❌ | HTTP/2 Server Push（不支持时返回错误） |
+| 接口 | 方法 | `RecorderWriter` | `TimeoutWriter` | `CryptionWriter` | `NotFoundResponseWriter` | 场景 |
+|------|------|:---:|:---:|:---:|:---:|------|
+| `http.ResponseController` | `Unwrap()` | ✅ | ❌ | ❌ | ✅ | 运行时能力协商 |
+| `http.Flusher` | `Flush()` | ✅ | ✅ | ⚠️ 仅透传模式 | ✅ | SSE 等流式响应（底层不支持时静默忽略） |
+| `http.Hijacker` | `Hijack()` | ✅ | ✅ | ❌ | ✅ | WebSocket 升级等连接接管（不支持时返回错误） |
+| `http.Pusher` | `Push()` | ✅ | ❌ | ❌ | ✅ | HTTP/2 Server Push（不支持时返回错误） |
+
+> `CryptionWriter` 在缓冲未超限时 `Flush` 为空操作——加密需拿到完整响应体；缓冲超限后进入明文透传模式，此时 `Flush` 会透传底层。
 
 > 若需在超时/加密包装（`TimeoutWriter`/`CryptionWriter`）之上使用 WebSocket(`Hijack`)、HTTP/2 Push 或 `http.ResponseController`，应避免经这两类中间件包装或在其外层自行处理，防止能力静默失效。
 

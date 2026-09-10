@@ -21,6 +21,10 @@ const (
 	defaultTokenLen = 16
 	// defaultRetryInterval 阻塞获取锁的默认重试间隔。
 	defaultRetryInterval = 50 * time.Millisecond
+	// minLockTTL 锁 TTL 的下限。
+	// 续期脚本使用 l.ttl.Milliseconds()，若 TTL 小于 1ms 会被截断为 0，
+	// 执行 PEXPIRE key 0 会立即删除锁，使临界区失去互斥保护。
+	minLockTTL = time.Millisecond
 )
 
 // Lock 分布式锁。
@@ -85,11 +89,18 @@ func (c *Client) Locker(key string, ttl time.Duration, opts ...LockOption) *Lock
 // TryLock 尝试获取锁，如果锁已被持有则立即返回错误。
 // 传入的 ctx 用于控制自动续期 goroutine 的生命周期：
 // 当 ctx 取消时，续期 goroutine 会自动停止，防止泄漏。
+//
+// TTL 非法（<= 0，或经 WithTTL 覆盖后小于 1ms）时返回 ErrInvalidLockTTL，
+// 不会写入 Redis，避免出现永不过期的锁或续期时的进程级 panic。
 func (la *LockAcquirer) TryLock(ctx context.Context) (*Lock, error) {
 	// 应用选项
 	lc := &lockConfig{ttl: la.ttl}
 	for _, opt := range la.opts {
 		opt(lc)
+	}
+
+	if err := validateLockTTL(lc.ttl); err != nil {
+		return nil, err
 	}
 
 	token, err := generateToken()
@@ -187,12 +198,27 @@ func (l *Lock) Unlock(ctx context.Context) error {
 	return nil
 }
 
+// validateLockTTL 校验锁 TTL 是否可用。
+// TTL <= 0 会被 Redis 视为"永不过期"，且 time.NewTicker(ttl/3) 会 panic；
+// TTL < 1ms 会被续期脚本的毫秒取整截断为 0，进而立即删除锁。
+func validateLockTTL(ttl time.Duration) error {
+	if ttl < minLockTTL {
+		return fmt.Errorf("%w: %v (must be >= %v)", ErrInvalidLockTTL, ttl, minLockTTL)
+	}
+	return nil
+}
+
 // renewLoop 后台自动续期循环。
 // 续期失败时记录日志并继续尝试：瞬时故障不应直接放弃续期，
 // 否则锁会在 TTL 到期后提前释放，导致临界区失去互斥保护。
 // 当 ctx 取消时（如调用方忘记 Unlock），续期 goroutine 也会自动退出，防止泄漏。
 func (l *Lock) renewLoop() {
-	ticker := time.NewTicker(l.ttl / 3)
+	// TryLock 已校验 TTL，此处再兜底一次，确保 NewTicker 不会收到非正值而 panic。
+	interval := l.ttl / 3
+	if interval < minLockTTL {
+		interval = minLockTTL
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	const renewScript = `

@@ -113,7 +113,9 @@ func (s *kodoStorage) Read(ctx context.Context, path string) ([]byte, error) {
 		return nil, fmt.Errorf("storage: failed to read KODO object %q: %w", path, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	// 只接受 2xx：CDN / 反代可能返回 206 等其它成功状态码，
+	// 若只认 200 会把成功的读取误判为失败。
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("storage: failed to read KODO object %q, status code: %d", path, resp.StatusCode)
 	}
 	data, err := io.ReadAll(resp.Body)

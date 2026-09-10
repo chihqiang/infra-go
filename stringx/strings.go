@@ -89,9 +89,25 @@ func Chunk(s string, size int) []string {
 	return chunks
 }
 
+// maxRepeatBytes Repeat 允许生成的结果长度上限（1 GiB）。
+// 超过该上限时返回空串而不是尝试分配：分配失败会以
+// "runtime error: makeslice: len out of range" 终止，调用方无法转为普通错误。
+const maxRepeatBytes = 1 << 30
+
 // Repeat 将字符串重复 n 次。
+// n <= 0、s 为空，或结果长度超过 maxRepeatBytes 时返回空字符串。
+//
+// 该函数不会 panic：旧实现下 len(s)*n 溢出为负会使
+// strings.Builder.Grow 抛出 "negative count"，而巨大的 n 会触发
+// makeslice 运行时 panic；两者在参数来自外部输入时都可被用来终止进程。
 func Repeat(s string, n int) string {
 	if n <= 0 || len(s) == 0 {
+		return ""
+	}
+	// 单一比较同时完成溢出与上限保护：
+	// len(s) > maxRepeatBytes/n 等价于 len(s)*n > maxRepeatBytes，
+	// 且此处 n > 0，除法本身不会溢出。
+	if len(s) > maxRepeatBytes/n {
 		return ""
 	}
 	var buf strings.Builder
@@ -176,11 +192,20 @@ func Split(s string, sep byte) []string {
 	return result
 }
 
-// ToCamelCase 将字符串首字母转为小写，其余字符保持不变。
+// ToCamelCase 将字符串首字符转为小写（lowerCamelCase），其余字符保持不变。
+// 例：UserName → userName、École → école、中文A → 中文A。
+//
+// 使用 utf8.DecodeRuneInString 定位首字符边界，正确支持多字节 UTF-8 字符。
+// 旧实现用 s[i+1:] 拼接（i 恒为首字符的字节偏移 0），
+// 首字符为多字节时会丢掉续字节、产生非法 UTF-8（如 "Äbc" → "ä\x84bc"）。
 func ToCamelCase(s string) string {
-	for i, v := range s {
-		return string(unicode.ToLower(v)) + s[i+1:]
+	if s == "" {
+		return ""
 	}
-
-	return ""
+	r, size := utf8.DecodeRuneInString(s)
+	// 无效 UTF-8 编码时原样返回，避免破坏原字符串。
+	if r == utf8.RuneError && size == 1 {
+		return s
+	}
+	return string(unicode.ToLower(r)) + s[size:]
 }

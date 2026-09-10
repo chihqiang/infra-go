@@ -3,6 +3,7 @@ package middleware
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/chihqiang/infra-go/breaker"
 	"github.com/chihqiang/infra-go/httpx/respw"
@@ -15,16 +16,35 @@ import (
 // 所有请求共享该实例（如需按路由隔离请使用 RouteBreaker）。
 type Breaker struct {
 	brk breaker.Breaker
+	// retryAfter 为熔断打开时提示客户端的重试间隔，默认 breakerRetryAfter。
+	retryAfter time.Duration
 }
+
+// breakerRetryAfter 是熔断打开时的默认重试提示间隔。
+//
+// 与熔断算法的半开探测周期对齐（breaker 内部 forcePassDuration 为 1 秒）：
+// 熔断打开后最多等待该时长就会放行一个探测请求，
+// 因此这是客户端最早可能成功的时间点（RFC 9110 §15.6.4 建议 503 给出该提示）。
+const breakerRetryAfter = time.Second
 
 // NewBreaker 创建熔断中间件。
 func NewBreaker() *Breaker {
-	return &Breaker{brk: breaker.NewBreaker(breaker.WithName("http"))}
+	return &Breaker{
+		brk:        breaker.NewBreaker(breaker.WithName("http")),
+		retryAfter: breakerRetryAfter,
+	}
+}
+
+// WithRetryAfter 设置熔断打开时的 Retry-After 提示间隔（RFC 9110 §10.2.3）。
+// d <= 0 表示不发送该头。
+func (b *Breaker) WithRetryAfter(d time.Duration) *Breaker {
+	b.retryAfter = d
+	return b
 }
 
 // Middleware 返回标准形式 func(http.Handler) http.Handler 的熔断中间件。
-// 熔断打开时返回 503 Service Unavailable；请求成功（<500）上报 Accept，
-// 请求失败（>=500）上报 Reject，用于驱动熔断状态。
+// 熔断打开时返回 503 Service Unavailable（并带 Retry-After）；
+// 请求成功（<500）上报 Accept，请求失败（>=500）上报 Reject，用于驱动熔断状态。
 func (b *Breaker) Middleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +55,9 @@ func (b *Breaker) Middleware() func(http.Handler) http.Handler {
 					logger.String("remote", x.ClientIP(r)),
 					logger.Err(err),
 				)
-				writeError(r.Context(), w, http.StatusServiceUnavailable, "service unavailable")
+				// RFC 9110 §15.6.4：经历负载/故障的服务器 SHOULD 发送 Retry-After
+				WriteRetryAfter(r.Context(), w, http.StatusServiceUnavailable,
+					b.retryAfter, "service unavailable")
 				return
 			}
 

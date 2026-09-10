@@ -227,17 +227,42 @@ func TestRedisInvalidCacheData(t *testing.T) {
 	rds, _ := newMiniRedis(t)
 	c := NewRedisCache(rds, WithCacheName("test"))
 
-	// 直接写入非法 JSON
+	// 直接写入非法 JSON（模拟其他组件以非 JSON 格式写入了同一个 key）
 	assert.NoError(t, rds.Set(ctx, "bad", "not-json", 0))
 
-	// Get 应返回未命中并删除无效缓存
+	// Get 应返回未命中，让上层重新加载
 	_, err := c.Get(ctx, "bad")
 	assert.ErrorIs(t, err, ErrNotFound)
 
-	// 无效缓存已被删除
+	// 但**不得**删除该 key：它可能属于其他以非 JSON 格式使用同一 key 的组件，
+	// 自动删除会造成"对方刚写入就被本缓存删掉"的隐蔽故障。
+	// 详见 TestRedisInvalidCacheData_MustNotDeleteKey。
 	exists, err := rds.Exists(ctx, "bad")
 	assert.NoError(t, err)
-	assert.Equal(t, int64(0), exists)
+	assert.Equal(t, int64(1), exists, "invalid data must be left alone, not deleted")
+}
+
+// TestRedisInvalidCacheData_MustNotDeleteKey 回归测试：反序列化失败不得删除 key。
+//
+// 历史缺陷：doGet 在 json.Unmarshal 失败时调用 Del(key)，
+// 导致与其他组件共用 key 时互相删数据 —— 表现为"写入即被删"的隐蔽故障。
+func TestRedisInvalidCacheData_MustNotDeleteKey(t *testing.T) {
+	ctx := context.Background()
+	rds, _ := newMiniRedis(t)
+	c := NewRedisCache(rds, WithCacheName("test"))
+
+	// 模拟另一个组件用 redisx 直接写入原始字符串
+	const raw = "some-plain-value"
+	require.NoError(t, rds.Set(ctx, "shared", raw, 0))
+
+	// 本缓存读取失败，返回未命中
+	_, err := c.Get(ctx, "shared")
+	require.ErrorIs(t, err, ErrNotFound)
+
+	// 原始数据必须原样保留
+	got, err := rds.Get(ctx, "shared")
+	require.NoError(t, err)
+	assert.Equal(t, raw, got, "another component's data must not be deleted")
 }
 
 func TestRedisStoredAsJSON(t *testing.T) {

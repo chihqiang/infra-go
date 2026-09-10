@@ -83,7 +83,7 @@ db, err := orm.New(orm.Config{
 | `Port` | `int` | 驱动默认端口 | MySQL 3306，Postgres 5432，SQLite 0 |
 | `Username` | `string` | `root` | 数据库用户名 |
 | `Password` | `string` | `""` | 数据库密码 |
-| `Database` | `string` | `""` | 数据库名称（SQLite 为文件路径） |
+| `Database` | `string` | `""` | 数据库名称（SQLite 为文件路径；留空时 SQLite 使用实例独占的内存库） |
 | `SSLMode` | `string` | `disable` | PostgreSQL SSL 模式：`disable`、`allow`、`prefer`、`require`、`verify-ca`、`verify-full`，生产环境建议 `require` |
 | `TimeZone` | `string` | `Asia/Shanghai` | 数据库会话时区，影响连接到 PostgreSQL 时的时间戳解释。常见值：`UTC`、`Asia/Shanghai`、`America/New_York` 等 |
 | `MaxIdleConns` | `int` | `10` | 最大空闲连接数 |
@@ -195,9 +195,19 @@ db, err := orm.NewSQLite(orm.Config{
     Database: "/var/data/app.db",
 })
 
-// 不指定 Database 时自动使用内存数据库
+// 不指定 Database 时自动使用内存数据库（每个实例独占一个库）
 db, err := orm.NewSQLite(orm.Config{})
 ```
+
+> **关于内存数据库**：不指定 `Database` 时，每次 `New`/`NewSQLite` 都会生成一个
+> **本实例独占**的内存库（DSN 形如 `file:orm_mem_<pid>_<seq>?mode=memory&cache=shared`）。
+>
+> 两个实例互不可见 —— 这一点很重要：SQLite 的 `cache=shared` 是按 DSN 名称在
+> **整个进程内**共享的，若固定使用同名 DSN，一个组件建的表/写入的数据会被另一个
+> 组件看到，且进程退出即丢数据（容易被误认为"数据莫名消失"）。
+>
+> 同时保留 `cache=shared` 是必需的：匿名 `:memory:` 会让连接池中**每个连接**
+> 各持有一个独立的内存库，建表后其他连接看不到，这是更常见的坑。
 
 ## 日志集成
 

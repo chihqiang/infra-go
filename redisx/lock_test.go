@@ -258,3 +258,94 @@ func TestLock_NoAutoRenew_Expires(t *testing.T) {
 	mr.FastForward(300 * time.Millisecond)
 	assert.False(t, c.client.Exists(ctx, "lock").Val() > 0, "lock should expire without renewal")
 }
+
+// --- TTL 校验（防永不过期的锁 / 续期 panic / 续期时删锁） ---
+
+func TestTryLock_InvalidTTLRejected(t *testing.T) {
+	ctx := context.Background()
+	c, mr := newMiniRedisClient(t)
+
+	cases := []struct {
+		name string
+		ttl  time.Duration
+	}{
+		{"zero", 0},
+		{"negative", -time.Second},
+		{"sub_millisecond", time.Microsecond},
+		{"500us", 500 * time.Microsecond},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := c.Locker("lock", tc.ttl).TryLock(ctx)
+			require.ErrorIs(t, err, ErrInvalidLockTTL)
+
+			// 非法 TTL 不应写入任何 Redis key（尤其是"永不过期"的锁）
+			assert.False(t, c.client.Exists(ctx, "lock").Val() > 0,
+				"no lock key should be created for invalid ttl %v", tc.ttl)
+		})
+	}
+	assert.Empty(t, mr.Keys(), "no key should be created for invalid ttls")
+}
+
+func TestTryLock_InvalidTTLViaOption(t *testing.T) {
+	ctx := context.Background()
+	c, _ := newMiniRedisClient(t)
+
+	// Locker 传入合法 TTL，但被 WithTTL 覆盖为非法值 → 同样必须被拒绝
+	_, err := c.Locker("lock", time.Second, WithTTL(0)).TryLock(ctx)
+	require.ErrorIs(t, err, ErrInvalidLockTTL)
+
+	_, err = c.Locker("lock", time.Second, WithTTL(-time.Millisecond)).TryLock(ctx)
+	require.ErrorIs(t, err, ErrInvalidLockTTL)
+}
+
+// TestTryLock_InvalidTTLWithAutoRenewDoesNotPanic 验证非法 TTL + 自动续期
+// 不会再触发 time.NewTicker(0) 的 goroutine panic（历史缺陷会导致进程退出）。
+func TestTryLock_InvalidTTLWithAutoRenewDoesNotPanic(t *testing.T) {
+	ctx := context.Background()
+	c, _ := newMiniRedisClient(t)
+
+	require.NotPanics(t, func() {
+		_, err := c.Locker("lock", 0, WithAutoRenew()).TryLock(ctx)
+		require.ErrorIs(t, err, ErrInvalidLockTTL)
+	})
+
+	// 留出时间窗口：若旧实现真的启动了 renewLoop，panic 会在此刻发生
+	time.Sleep(50 * time.Millisecond)
+}
+
+// TestLock_InvalidTTLPropagatesThroughLock 验证阻塞式 Lock 也会快速失败，
+// 而不是自旋重试到 ctx 超时。
+func TestLock_InvalidTTLPropagatesThroughLock(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	c, _ := newMiniRedisClient(t)
+
+	start := time.Now()
+	_, err := c.Locker("lock", 0).Lock(ctx, 10*time.Millisecond)
+	require.ErrorIs(t, err, ErrInvalidLockTTL)
+	assert.Less(t, time.Since(start), time.Second, "should fail fast, not spin until ctx timeout")
+}
+
+// TestSetNXWithLock_InvalidTTL 验证便捷方法同样受 TTL 校验保护。
+func TestSetNXWithLock_InvalidTTL(t *testing.T) {
+	ctx := context.Background()
+	c, _ := newMiniRedisClient(t)
+
+	executed := false
+	err := c.SetNXWithLock(ctx, "lock", 0, func(context.Context) error {
+		executed = true
+		return nil
+	})
+	require.ErrorIs(t, err, ErrInvalidLockTTL)
+	assert.False(t, executed, "critical section must not run when lock ttl is invalid")
+}
+
+func TestValidateLockTTL(t *testing.T) {
+	assert.NoError(t, validateLockTTL(minLockTTL))
+	assert.NoError(t, validateLockTTL(time.Second))
+
+	assert.ErrorIs(t, validateLockTTL(0), ErrInvalidLockTTL)
+	assert.ErrorIs(t, validateLockTTL(-time.Second), ErrInvalidLockTTL)
+	assert.ErrorIs(t, validateLockTTL(minLockTTL-time.Nanosecond), ErrInvalidLockTTL)
+}

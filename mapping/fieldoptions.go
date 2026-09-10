@@ -22,6 +22,9 @@ const (
 	equalToken      = "="
 	escapeChar      = '\\'
 
+	// optionalNegatePrefix 是 optional 依赖的取反前缀，如 `optional=!Other`。
+	optionalNegatePrefix = "!"
+
 	leftBracket        = '('
 	rightBracket       = ')'
 	leftSquareBracket  = '['
@@ -42,16 +45,17 @@ type fieldOptions struct {
 	// Optional 字段是否可选。
 	Optional bool
 	// OptionalDep 可选依赖，用于条件可选。
-	// 例如 optional=!other 表示当 other 未设置时此字段可选。
+	// 标签 `optional=Other` 表示只有在 Other 已设置时此字段才可选；
+	// `optional=!Other` 表示只有在 Other 未设置时此字段才可选。
 	OptionalDep string
+	// OptionalDepNegate 表示 OptionalDep 是否带 "!" 前缀（取反）。
+	OptionalDepNegate bool
 	// Options 允许的值列表。
 	Options []string
 	// Range 数值范围。
 	Range *numberRange
 	// FromString 是否从字符串解析值。
 	FromString bool
-	// Inherit 是否从父级继承值。
-	Inherit bool
 }
 
 // numberRange 表示一个数值范围。
@@ -178,53 +182,98 @@ func doParseKeyAndOptions(fieldName, value string) (string, *fieldOptions, error
 }
 
 // parseOption 解析单个选项。
+//
+// 支持 `key` 与 `key=value` 两种形式（value 中不允许再出现 `=`）。
+//
+// 未知选项一律返回错误：旧实现用 strings.HasPrefix 逐个匹配且没有 default 分支，导致
+//   - 拼写错误被静默忽略（`optinal` 不报错，字段按必填处理，直到运行期才以
+//     "field not set" 暴露，错误信息也不指向真实原因）；
+//   - 前缀误匹配（`defaultFoo=bar` 被当成 `default=bar` 生效）。
 func parseOption(opts *fieldOptions, fieldName, option string) error {
-	switch {
-	case option == optionInherit:
-		opts.Inherit = true
-	case option == optionString:
+	name, value, hasValue := strings.Cut(option, equalToken)
+	name = strings.TrimSpace(name)
+
+	// 校验 value 形状：不允许出现第二个 "="，也不允许空值
+	if hasValue {
+		if strings.Contains(value, equalToken) {
+			return fmt.Errorf("invalid %q option for field %q", name, fieldName)
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return fmt.Errorf("invalid %q option for field %q: empty value", name, fieldName)
+		}
+	}
+
+	switch name {
+	case optionOptional:
+		opts.Optional = true
+		if !hasValue {
+			return nil
+		}
+		// `optional=!Other` → 依赖取反
+		dep := value
+		if strings.HasPrefix(dep, optionalNegatePrefix) {
+			opts.OptionalDepNegate = true
+			dep = strings.TrimPrefix(dep, optionalNegatePrefix)
+			if dep == "" {
+				return fmt.Errorf("invalid optional option for field %q: empty dependency after %q",
+					fieldName, optionalNegatePrefix)
+			}
+		}
+		opts.OptionalDep = dep
+		return nil
+
+	case optionString:
+		if hasValue {
+			return fmt.Errorf("option %q of field %q does not take a value", name, fieldName)
+		}
 		opts.FromString = true
-	case strings.HasPrefix(option, optionOptional):
-		segs := strings.Split(option, equalToken)
-		switch len(segs) {
-		case 1:
-			opts.Optional = true
-		case 2:
-			opts.Optional = true
-			opts.OptionalDep = segs[1]
-		default:
-			return fmt.Errorf("invalid optional option for field %q", fieldName)
+		return nil
+
+	case optionOptions:
+		if !hasValue {
+			return fmt.Errorf("invalid %q option for field %q", name, fieldName)
 		}
-	case strings.HasPrefix(option, optionOptions):
-		val, err := parseProperty(fieldName, optionOptions, option)
-		if err != nil {
-			return err
+		opts.Options = parseOptionsValue(value)
+		return nil
+
+	case optionDefault:
+		if !hasValue {
+			return fmt.Errorf("invalid %q option for field %q", name, fieldName)
 		}
-		opts.Options = parseOptionsValue(val)
-	case strings.HasPrefix(option, optionDefault):
-		val, err := parseProperty(fieldName, optionDefault, option)
-		if err != nil {
-			return err
+		opts.Default = value
+		return nil
+
+	case optionEnv:
+		if !hasValue {
+			return fmt.Errorf("invalid %q option for field %q", name, fieldName)
 		}
-		opts.Default = val
-	case strings.HasPrefix(option, optionEnv):
-		val, err := parseProperty(fieldName, optionEnv, option)
-		if err != nil {
-			return err
+		opts.EnvVar = value
+		return nil
+
+	case optionRange:
+		if !hasValue {
+			return fmt.Errorf("invalid %q option for field %q", name, fieldName)
 		}
-		opts.EnvVar = val
-	case strings.HasPrefix(option, optionRange):
-		val, err := parseProperty(fieldName, optionRange, option)
-		if err != nil {
-			return err
-		}
-		nr, err := parseNumberRange(val)
+		nr, err := parseNumberRange(value)
 		if err != nil {
 			return err
 		}
 		opts.Range = nr
+		return nil
+
+	case optionInherit:
+		// inherit 曾在此解析并置位，但从未被 unmarshaler 读取，
+		// 属于"文档承诺了却什么都没做"的选项。该语义在本设计中没有定义
+		// （标签驱动的反序列化没有"父级"概念），因此明确拒绝而不是静默忽略。
+		return fmt.Errorf(
+			"option %q of field %q is not supported: "+
+				"define the value explicitly or give it a default instead",
+			optionInherit, fieldName)
+
+	default:
+		return fmt.Errorf("unknown option %q for field %q", name, fieldName)
 	}
-	return nil
 }
 
 // parseProperty 解析 key=value 格式的选项。

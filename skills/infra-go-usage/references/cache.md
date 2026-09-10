@@ -35,7 +35,32 @@ go get github.com/chihqiang/infra-go/cache
 | `Expire(ctx, key, ttl)` | 为 key 设置存活时间 `ttl`，到期后自动失效；`ttl <= 0` 立即失效；key 不存在返回 `ErrNotFound` |
 
 > 内存实现忽略 `ctx`；Redis 实现通过 `ctx` 传递超时与取消。
-> 接口使用非泛型 `any`：调用方无需为每种值类型实例化缓存，取值后按需类型断言即可。
+> 接口使用非泛型 `any`：调用方无需为每种值类型实例化缓存。
+
+### ⚠️ Get 的返回类型随后端而不同
+
+`Get` / `Take` 返回 `any`，但两个后端对同一个值给出的 Go 类型不同：
+
+| 写入 | MemCache 读回 | RedisCache 读回 |
+|------|--------------|----------------|
+| `Set(ctx, "k", 5)` | `int(5)` | `float64(5)` |
+| `Set(ctx, "k", u)`（结构体） | `u` 本身 | `map[string]any` |
+| `Set(ctx, "k", int64(2^53+1))` | 精确保留 | **精度丢失**（先变 `float64`） |
+
+因此**直接对 `Get` 的返回值做类型断言**（如 `v.(int)`）的代码在切换后端后会 panic，
+且 `int64` 大整数在 Redis 后端会丢精度。
+
+需要后端无关的读取时，使用 `GetAs[T]`（统一经 JSON 往返解码到具体类型）：
+
+```go
+n, err := cache.GetAs[int64](ctx, c, "counter")   // 两个后端行为一致
+var u User
+u, err = cache.GetAs[User](ctx, c, "user:1")
+```
+
+> `GetAs[T]` 的已知限制：Redis 后端在 `Get` 阶段就把 JSON 数字解码为 `float64`，
+> 超过 2^53 的整数精度已丢失，`GetAs` 无法补救。需要在 Redis 后端精确保存大整数时，
+> 请以字符串形式存储，或改用 `MemCache`。
 
 ## 计数与过期
 
@@ -132,6 +157,19 @@ if err != nil {
 - **内存缓存（MemCache）**：`Set` 存入的就是原对象，`Get/Take` 返回值类型与存入时一致，可直接断言，例如 `v.(*User)`。
 - **Redis 缓存（RedisCache）**：值以 JSON 序列化存储，`Get` 时因无法得知目标类型，统一反序列化为 `map[string]any`（数字为 `float64`）；取回具体结构体时可用 `json.Marshal(got)` 后 `json.Unmarshal` 到目标类型，或自行按字段断言。
 - 标量（string/int/bool 等）可直接使用返回值，无需额外处理。
+
+> 上述差异意味着**按类型断言使用 `Get` 的代码不具备后端可移植性**。
+> 若同一份业务代码需要在两种后端间切换，请统一使用 `GetAs[T]`：
+
+```go
+// 后端无关：两个后端返回一致的 Go 类型
+n, err := cache.GetAs[int](ctx, c, "count")
+u, err := cache.GetAs[User](ctx, c, "user:1")
+tags, err := cache.GetAs[[]string](ctx, c, "tags")
+
+// 未命中返回 (零值, cache.ErrNotFound)
+// 类型不匹配返回错误，而不是静默零值
+```
 
 > 若希望 Redis 缓存取回时直接得到具体类型，可考虑改用填充式 API（如 `Get(ctx, key, &user)`），本包暂未提供，可按需扩展。
 

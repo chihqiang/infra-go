@@ -154,17 +154,46 @@ func (j *JWT) GenerateTokenPair(claims Claims) (*TokenPair, error) {
 
 // --- 令牌验证 ---
 
+// parserOptions 根据配置构造解析期校验选项。
+//
+// 关键：iss/aud 必须在此校验，而不是只在签发时写入。
+// 旧实现只把 Issuer/Audience 写进令牌却从不校验，导致共享同一密钥的不同应用
+// （或多租户场景）可以互相接受对方签发的令牌 —— 例如 iss=app-a/aud=tenant-a
+// 的令牌会被配置为 app-b/tenant-b 的实例接受（实测确认），形成跨租户越权。
+func (j *JWT) parserOptions() []stdjwt.ParserOption {
+	opts := []stdjwt.ParserOption{
+		// 限定允许的签名算法，双重防护 alg 混淆攻击
+		// （keyfunc 中另有 token.Method.Alg() 校验）
+		stdjwt.WithValidMethods([]string{string(j.config.Algorithm)}),
+	}
+	if j.config.Issuer != "" {
+		opts = append(opts, stdjwt.WithIssuer(j.config.Issuer))
+	}
+	if len(j.config.Audience) > 0 {
+		// WithAudience：令牌的 aud 必须包含其中至少一个配置值
+		opts = append(opts, stdjwt.WithAudience(j.config.Audience...))
+	}
+	return opts
+}
+
 // ParseToken 解析并验证令牌，返回 claims。
+//
+// 校验内容：签名与算法、exp/nbf、以及**配置了才启用**的 iss/aud。
+// 若 Config 未设置 Issuer/Audience，则对应声明不做校验
+// （为兼容"仅用密钥校验"的既有用法）。
 func (j *JWT) ParseToken(tokenString string) (Claims, error) {
 	claims := Claims{}
 
 	token, err := stdjwt.ParseWithClaims(tokenString, claims, func(token *stdjwt.Token) (any, error) {
 		// 严格校验签名算法与配置一致，防止 alg 混淆攻击。
-		if token.Method != j.method {
-			return nil, fmt.Errorf("%w: unexpected signing method: %v", ErrInvalidToken, token.Header["alg"])
+		// 比较 Alg() 字符串而非方法指针：方法指针依赖 golang-jwt 的内部单例，
+		// 若有人 RegisterSigningMethod 注册自定义实现（或未来 SDK 返回新实例），
+		// 指针比较会失效。
+		if alg := token.Method.Alg(); alg != string(j.config.Algorithm) {
+			return nil, fmt.Errorf("%w: unexpected signing method: %v", ErrInvalidToken, alg)
 		}
 		return []byte(j.config.Secret), nil
-	})
+	}, j.parserOptions()...)
 
 	if err != nil {
 		if errors.Is(err, stdjwt.ErrTokenExpired) {

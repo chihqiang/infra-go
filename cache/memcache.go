@@ -371,17 +371,31 @@ func (c *MemCache) scanExpired() {
 }
 
 // scanLoop 周期性地执行全局过期扫描，与 cacheStat 共用 stop channel。
+// 同时监听构造时传入的 ctx：调用方未（或忘记）调用 Close 时，
+// 取消 ctx 同样能回收该 goroutine，避免后台 goroutine 泄漏。
 func (c *MemCache) scanLoop() {
 	ticker := time.NewTicker(c.scanInterval)
 	defer ticker.Stop()
+
+	ctxDone := c.ctxDone()
 	for {
 		select {
 		case <-ticker.C:
 			c.scanExpired()
 		case <-c.stop:
 			return
+		case <-ctxDone:
+			return
 		}
 	}
+}
+
+// ctxDone 返回构造时 ctx 的 Done channel；ctx 为 nil 时返回 nil（永久阻塞，即不监听）。
+func (c *MemCache) ctxDone() <-chan struct{} {
+	if c.ctx == nil {
+		return nil
+	}
+	return c.ctx.Done()
 }
 
 // scanIntervalFor 根据默认过期时间推导全局扫描间隔。
@@ -544,6 +558,12 @@ func (cs *cacheStat) statLoop() {
 	ticker := time.NewTicker(cs.interval)
 	defer ticker.Stop()
 
+	// 同时监听 ctx：调用方未调用 Close 时，取消 ctx 也能回收该 goroutine。
+	var ctxDone <-chan struct{}
+	if cs.ctx != nil {
+		ctxDone = cs.ctx.Done()
+	}
+
 	for {
 		select {
 		case <-ticker.C:
@@ -557,6 +577,8 @@ func (cs *cacheStat) statLoop() {
 			logger.InfofCtx(cs.ctx, "cache(%s) - qpm: %d, hit_ratio: %.1f%%, elements: %d, hit: %d, miss: %d",
 				cs.name, total, percent, cs.sizeCallback(), hit, miss)
 		case <-cs.stop:
+			return
+		case <-ctxDone:
 			return
 		}
 	}

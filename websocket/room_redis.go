@@ -106,6 +106,11 @@ func (r *RedisRoom) GetRooms(fd ConnID) []string {
 // Clear 清空所有房间和连接映射。
 // 仅删除房间和连接映射相关的键（rooms: 和 fds: 前缀），
 // 不会误删同前缀下的其他业务键。
+//
+// ⚠️ 这些键由**所有实例共享**：清空会影响集群中的其他节点
+// （它们的连接会从房间中消失，后续广播静默失效）。
+// 因此本方法只应用于运维/测试场景，Server.Close 不会调用它，
+// 后者仅移除本实例的连接（见 Server.Close）。
 func (r *RedisRoom) Clear() {
 	ctx := context.Background()
 

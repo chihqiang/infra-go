@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/chihqiang/infra-go/httpx/respw"
+	"github.com/chihqiang/infra-go/httpx/middleware"
 	"github.com/chihqiang/infra-go/logger"
 	mp "github.com/chihqiang/infra-go/mapping"
 )
@@ -108,17 +108,42 @@ func fillDefault(cfg ServerConfig) ServerConfig {
 //   - 通配路径（/files/{path...}），通过 r.PathValue("path") 获取
 //   - 自动 404 Not Found
 type Server struct {
-	conf       ServerConfig
-	mux        *http.ServeMux
-	gmw        []Middleware
-	gh         http.Handler // 缓存应用全局中间件后的根 handler，nil 表示需要重建
-	handlerLk  sync.Mutex   // 保护 gh 懒加载与重建（Use / SetNotFoundHandler 并发安全）
+	conf      ServerConfig
+	mux       *http.ServeMux
+	gmw       []Middleware
+	gh        http.Handler // 缓存应用全局中间件后的根 handler，nil 表示需要重建
+	handlerLk sync.Mutex   // 保护 gh 懒加载与重建（Use / SetNotFoundHandler 并发安全）
+	tlsConfig *tls.Config
+
+	// stateLk 保护以下可变状态：
+	//   - routes：AddRoutes 写入，Routes/PrintRoutes 读取
+	//   - httpServer：Start 写入，Shutdown/Stop 读取
+	//
+	// 二者都可能被多个 goroutine 并发访问（例如 service.ServiceGroup 在一个
+	// goroutine 中启动、另一个中停止），无保护会构成数据竞争。
+	stateLk    sync.RWMutex
 	routes     []Route
 	httpServer *http.Server
-	tlsConfig  *tls.Config
 
 	// notFoundHandler 自定义 404 响应处理器（可选），通过 SetNotFoundHandler 设置。
 	notFoundHandler http.HandlerFunc
+}
+
+// routesSnapshot 返回路由列表副本（调用方不得假设其后续不变）。
+func (s *Server) routesSnapshot() []Route {
+	s.stateLk.RLock()
+	defer s.stateLk.RUnlock()
+	out := make([]Route, len(s.routes))
+	copy(out, s.routes)
+	return out
+}
+
+// currentHTTPServer 返回当前正在运行的 http.Server；未启动时返回 nil。
+// 用于 Shutdown/Stop 以避免与 Start 的写入竞争。
+func (s *Server) currentHTTPServer() *http.Server {
+	s.stateLk.RLock()
+	defer s.stateLk.RUnlock()
+	return s.httpServer
 }
 
 // --- Server 构造与路由注册 ---
@@ -170,11 +195,14 @@ func (s *Server) AddRoutes(rs []Route, opts ...RouteOption) {
 
 		pattern := buildPattern(r.Method, r.Path)
 		s.mux.HandleFunc(pattern, handler)
+
+		s.stateLk.Lock()
 		s.routes = append(s.routes, Route{
 			Method:  strings.ToUpper(r.Method),
 			Path:    r.Path,
 			Handler: r.Handler, // 存原始 handler，便于 PrintRoutes 反射获取函数名
 		})
+		s.stateLk.Unlock()
 	}
 }
 
@@ -191,12 +219,10 @@ func (s *Server) Use(mws ...Middleware) {
 	s.handlerLk.Unlock()
 }
 
-// Routes 返回已注册的所有路由（已应用中间件）。
-// 返回的是副本，修改不会影响 Server 内部状态。
+// Routes 返回已注册的所有路由（未应用中间件的原始 handler）。
+// 返回的是副本，修改不会影响 Server 内部状态；并发安全。
 func (s *Server) Routes() []Route {
-	routes := make([]Route, len(s.routes))
-	copy(routes, s.routes)
-	return routes
+	return s.routesSnapshot()
 }
 
 // PrintRoutes 打印已注册的路由列表。
@@ -211,14 +237,15 @@ func (s *Server) Routes() []Route {
 //	//
 //	// 5 routes registered
 func (s *Server) PrintRoutes() {
-	if len(s.routes) == 0 {
+	routes := s.routesSnapshot()
+	if len(routes) == 0 {
 		fmt.Println("no routes registered")
 		return
 	}
 
 	type routeEntry struct{ method, path, handler string }
-	entries := make([]routeEntry, 0, len(s.routes))
-	for _, r := range s.routes {
+	entries := make([]routeEntry, 0, len(routes))
+	for _, r := range routes {
 		entries = append(entries, routeEntry{
 			method:  r.Method,
 			path:    r.Path,
@@ -282,28 +309,91 @@ func (s *Server) Handler() http.Handler {
 //
 // handler 链（从内到外）：
 //
-//	mux → 404 拦截 → 全局中间件
+//	mux（含自定义 404 判定）→ 全局中间件
 func (s *Server) buildGlobalHandler() {
 	if len(s.gmw) == 0 && s.notFoundHandler == nil {
 		s.gh = s.mux
 		return
 	}
-	// 404 拦截紧贴 mux，只对真正未匹配的路由生效
 	handler := http.HandlerFunc(s.mux.ServeHTTP)
+	// 自定义 404 紧贴 mux，只对真正未匹配的路由生效。
+	// 通过路由预判而非包装 ResponseWriter 判定"未匹配"，原因是后者无法区分
+	// "路由未命中"与"业务主动返回 404"，会把业务 404 一并劫持；
+	// 且包装 writer 会丢失 Flush/Hijack/Push/Unwrap 等可选能力，
+	// 导致 SSE、WebSocket、HTTP/2 Push 静默失效。
 	if s.notFoundHandler != nil {
-		handler = s.wrapNotFound(handler)
+		mux, notFound := s.mux, s.notFoundHandler
+		handler = func(w http.ResponseWriter, r *http.Request) {
+			if isMuxNotFound(mux, r) {
+				notFound(w, r)
+				return
+			}
+			mux.ServeHTTP(w, r)
+		}
 	}
+
 	// 全局中间件（逆序包装，使先添加的中间件先执行）
 	for i := len(s.gmw) - 1; i >= 0; i-- {
 		handler = s.gmw[i](handler)
 	}
-	s.gh = handler
+
+	// 路由模板注入必须包在**中间件链最外层**：
+	// 全局中间件位于 mux 外层，此时 net/http 还没有把匹配到的路由模板写入
+	// r.Pattern（ServeMux 只在分发到命中 handler 时才填充）。
+	// 需要"按路由聚合"的中间件（熔断、指标）因此拿不到稳定模板。
+	// 这里先做一次路由预判、把模板放进 context，再进入中间件链，
+	// 供 middleware.PatternFromContext 读取。
+	//
+	// 顺序很关键：若包在内层，中间件执行时 context 里还没有模板。
+	mux := s.mux
+	inner := handler
+	s.gh = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if pattern := matchedPattern(mux, r); pattern != "" {
+			r = r.WithContext(middleware.ContextWithPattern(r.Context(), pattern))
+		}
+		inner(w, r)
+	})
+}
+
+// matchedPattern 返回该请求将被 mux 分发到的路由模板（如 "GET /users/{id}"）。
+// 未匹配（含 405）时返回空字符串。
+//
+// 注意：只用 mux.Handler 查询，不调用 mux.ServeHTTP，
+// 因此不会影响 ServeMux 后续对 r.Pattern 的填充。
+func matchedPattern(mux *http.ServeMux, r *http.Request) string {
+	_, pattern := mux.Handler(r)
+	return pattern
+}
+
+// notFoundHandlerPtr 是 net/http 内置 404 处理器（http.NotFoundHandler()）的代码指针。
+var notFoundHandlerPtr = reflect.ValueOf(http.NotFoundHandler()).Pointer()
+
+// isMuxNotFound 判断该请求是否会被 mux 交给内置的 404 处理器。
+//
+// 不能只看 ServeMux.Handler 返回的 pattern：Go 1.22+ 在「无匹配」与
+// 「路径匹配但方法不允许(405)」两种情况下都返回空 pattern，仅凭 pattern
+// 判定会把 405 误判为 404（丢失 Allow 响应头）。因此需要同时满足：
+// 空 pattern 且返回的 handler 正是内置 NotFoundHandler。
+func isMuxNotFound(mux *http.ServeMux, r *http.Request) bool {
+	h, pattern := mux.Handler(r)
+	if pattern != "" {
+		return false
+	}
+	v := reflect.ValueOf(h)
+	// 命中的可能是任意实现了 http.Handler 的类型（非函数），此时不可能是内置 404。
+	if v.Kind() != reflect.Func {
+		return false
+	}
+	return v.Pointer() == notFoundHandlerPtr
 }
 
 // --- 自定义错误响应 ---
 
 // SetNotFoundHandler 设置路由未找到（404）时的自定义响应处理器。
 // 所有未被任何路由匹配的请求都会交给该处理器，替代默认的 "404 page not found"。
+// 注意：处理器需自行写出状态码；若未调用 WriteHeader，将由 net/http 隐式写 200
+// （httpx.OkJSON 系列即为此约定：HTTP 200 + 响应体中的业务错误码）。
+// 业务路由内部主动返回的 404 不会被劫持，仍会原样返回给客户端。
 //
 //	server.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
 //	    httpx.OkJSON(w, httpx.NewCodeError(httpx.CodeNotFound, "resource not found"))
@@ -315,13 +405,6 @@ func (s *Server) SetNotFoundHandler(h http.HandlerFunc) {
 	s.handlerLk.Unlock()
 }
 
-// wrapNotFound 包装 mux，将 404 响应拦截并转交给自定义处理器。
-func (s *Server) wrapNotFound(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		next(respw.NewNotFoundResponseWriter(w, r, s.notFoundHandler), r)
-	}
-}
-
 // --- 启动与关闭 ---
 
 // Start 启动 HTTP 服务器，支持优雅关闭。
@@ -330,8 +413,12 @@ func (s *Server) wrapNotFound(next http.HandlerFunc) http.HandlerFunc {
 // 收到 SIGINT（Ctrl+C）、SIGTERM 或 SIGHUP 时执行优雅关闭。
 //
 // 如果配置了 CertFile 和 KeyFile，则启动 HTTPS 服务。
+//
+// 并发语义：Start 会先登记 http.Server 再开始监听，登记过程受锁保护，
+// 因此另一 goroutine 调用 Stop/Shutdown 不会与登记过程竞争；
+// 但若 Stop 在 Start 之前完成，则本次 Stop 是空操作（彼时服务器尚未启动）。
 func (s *Server) Start() error {
-	s.httpServer = &http.Server{
+	srv := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", s.conf.Host, s.conf.Port),
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: s.conf.ReadTimeout,
@@ -342,18 +429,28 @@ func (s *Server) Start() error {
 		TLSConfig:         s.tlsConfig,
 	}
 
+	// 登记后再启动监听：Stop/Shutdown 通过 currentHTTPServer() 读取，
+	// 无锁写入会与之构成数据竞争（-race 可检出）。
+	s.stateLk.Lock()
+	s.httpServer = srv
+	s.stateLk.Unlock()
+
 	errCh := make(chan error, 1)
 	go func() {
 		if s.conf.CertFile != "" && s.conf.KeyFile != "" {
-			errCh <- s.httpServer.ListenAndServeTLS(s.conf.CertFile, s.conf.KeyFile)
+			errCh <- srv.ListenAndServeTLS(s.conf.CertFile, s.conf.KeyFile)
 		} else {
-			errCh <- s.httpServer.ListenAndServe()
+			errCh <- srv.ListenAndServe()
 		}
 	}()
 
 	sigCh := make(chan os.Signal, 1)
 	// 监听 SIGINT、SIGTERM 和 SIGHUP，兼容 Kubernetes 环境信号
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	// 必须注销：否则本函数返回后 sigCh 仍被注册在 signal 包中，
+	// 后续信号会被投递到无人接收的 channel（缓冲满后静默丢弃），
+	// 且同一进程多次 Start 会累积注册。
+	defer signal.Stop(sigCh)
 
 	select {
 	case err := <-errCh:
@@ -371,13 +468,17 @@ func (s *Server) Start() error {
 // Shutdown 优雅关闭服务器，等待活跃连接处理完毕。
 // 超时时间由 WithShutdownTimeout 设置（默认 10 秒）。
 // 关闭失败时记录日志但不静默吞掉错误。
+//
+// 若服务器尚未启动（Start 未被调用），返回 nil（空操作）。
+// 并发安全：可在与 Start 不同的 goroutine 中调用。
 func (s *Server) Shutdown() error {
-	if s.httpServer == nil {
+	srv := s.currentHTTPServer()
+	if srv == nil {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.conf.ShutdownTimeout)
 	defer cancel()
-	err := s.httpServer.Shutdown(ctx)
+	err := srv.Shutdown(ctx)
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("httpx: graceful shutdown failed",
 			logger.Err(err),

@@ -74,7 +74,10 @@ func TestMiddlewareCompat_Cors(t *testing.T) {
 	rec := doRequestWithHeaders(t, s, http.MethodGet, "/ok", nil,
 		map[string]string{"Origin": "http://allowed.com"})
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
+	// allowAll 回显具体 Origin（而非 "*"）：与 Allow-Credentials 同用时
+	// 通配符会被浏览器拒绝。
+	assert.Equal(t, "http://allowed.com", rec.Header().Get("Access-Control-Allow-Origin"))
+	assert.Equal(t, "Origin", rec.Header().Get("Vary"))
 }
 
 func TestMiddlewareCompat_Timeout(t *testing.T) {

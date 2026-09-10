@@ -230,6 +230,205 @@ func TestExpandEnv(t *testing.T) {
 	}
 }
 
+// TestExpandEnv_DollarEscape 验证 $$ 转义为字面量 $，
+// 使配置中能够书写字面 $（否则 `${...}` 之外的 $ 会被当作变量引用吞掉）。
+func TestExpandEnv_DollarEscape(t *testing.T) {
+	t.Setenv("EE_VAR", "val")
+
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"bare escape", "$$", "$"},
+		{"escape inside word", "p$$ssword", "p$ssword"},
+		{"escape does not consume following name", "$$EE_VAR", "$EE_VAR"},
+		{"escape mixed with real var", "100$$-${EE_VAR}", "100$-val"},
+		{"double escape", "$$$$", "$$"},
+		{"trailing dollar stays literal", "100$", "100$"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, ExpandEnv(tt.in))
+		})
+	}
+}
+
+// TestLoad_UseEnvDoesNotSwallowLiteralDollar 回归测试：开启 UseEnv 后，
+// 配置中的字面 $ 不再被当作变量引用吞掉。
+// 旧实现在解析前对原文做文本替换，`"p$ssword"` 会被展开成 `"p"`。
+func TestLoad_UseEnvDoesNotSwallowLiteralDollar(t *testing.T) {
+	file := createTempFile(t, ".json", `{"password": "p$$ssword"}`)
+
+	var cfg struct {
+		Password string `json:"password"`
+	}
+	require.NoError(t, Load(file, &cfg, UseEnv()))
+	assert.Equal(t, "p$ssword", cfg.Password)
+}
+
+// TestLoad_UseEnvCannotInjectStructure 回归测试：环境变量的值不得注入/改写配置结构。
+// 旧实现在解析前做文本替换，值中的 JSON 片段会凭空创建出新的键。
+func TestLoad_UseEnvCannotInjectStructure(t *testing.T) {
+	t.Setenv("INJECT_ME", `","admin":true,"x":"`)
+
+	file := createTempFile(t, ".json", `{"user": "${INJECT_ME}"}`)
+
+	var cfg struct {
+		User string `json:"user"`
+		// 该键只能来自配置文件本身；若被环境变量凭空创建，下面断言会失败
+		Admin bool `json:"admin,optional"`
+	}
+	require.NoError(t, Load(file, &cfg, UseEnv()))
+	assert.Equal(t, `","admin":true,"x":"`, cfg.User)
+	assert.False(t, cfg.Admin, "env value must not inject new config keys")
+}
+
+// TestLoad_UseEnvSpecialCharsInValue 回归测试：环境变量值中的引号、大括号、
+// 逗号等字符不再破坏配置文件语法（旧实现下会导致解析失败）。
+func TestLoad_UseEnvSpecialCharsInValue(t *testing.T) {
+	t.Setenv("QUOTED_VAL", `he said "hi" and left`)
+	t.Setenv("BRACE_VAL", `{"a":1}`)
+	t.Setenv("COMMA_VAL", "a,b,c")
+	t.Setenv("NEWLINE_VAL", "line1\nline2")
+
+	text := `{"msg": "${QUOTED_VAL}", "raw": "${BRACE_VAL}", "list": "${COMMA_VAL}", "multi": "${NEWLINE_VAL}"}`
+	file := createTempFile(t, ".json", text)
+
+	var cfg struct {
+		Msg   string `json:"msg"`
+		Raw   string `json:"raw"`
+		List  string `json:"list"`
+		Multi string `json:"multi"`
+	}
+	require.NoError(t, Load(file, &cfg, UseEnv()))
+	assert.Equal(t, `he said "hi" and left`, cfg.Msg)
+	assert.Equal(t, `{"a":1}`, cfg.Raw)
+	assert.Equal(t, "a,b,c", cfg.List)
+	assert.Equal(t, "line1\nline2", cfg.Multi)
+}
+
+// TestLoad_UseEnvSpecialCharsInYAML 同上，覆盖 YAML（值中的冒号/引号不再破坏语法）。
+func TestLoad_UseEnvSpecialCharsInYAML(t *testing.T) {
+	t.Setenv("URL_VAL", "https://user:pass@host:5432/db?sslmode=disable")
+	t.Setenv("JSON_VAL", `{"k": "v"}`)
+
+	text := "dsn: ${URL_VAL}\nmeta: ${JSON_VAL}\n"
+	file := createTempFile(t, ".yaml", text)
+
+	var cfg struct {
+		DSN  string `json:"dsn"`
+		Meta string `json:"meta"`
+	}
+	require.NoError(t, Load(file, &cfg, UseEnv()))
+	assert.Equal(t, "https://user:pass@host:5432/db?sslmode=disable", cfg.DSN)
+	assert.Equal(t, `{"k": "v"}`, cfg.Meta)
+}
+
+// TestLoad_UseEnvExpandsMapKeys 验证 map 的键同样支持环境变量展开（与旧行为一致）。
+func TestLoad_UseEnvExpandsMapKeys(t *testing.T) {
+	t.Setenv("MAP_KEY", "dynamic")
+	t.Setenv("MAP_VAL", "v")
+
+	file := createTempFile(t, ".json", `{"labels": {"${MAP_KEY}": "${MAP_VAL}"}}`)
+
+	var cfg struct {
+		Labels map[string]string `json:"labels"`
+	}
+	require.NoError(t, Load(file, &cfg, UseEnv()))
+	assert.Equal(t, map[string]string{"dynamic": "v"}, cfg.Labels)
+}
+
+// TestLoad_UseEnvDuplicateKeyAfterExpansion 验证展开后键冲突会报错，
+// 而不是静默丢弃其中一个键的数据。
+func TestLoad_UseEnvDuplicateKeyAfterExpansion(t *testing.T) {
+	t.Setenv("DUP_KEY", "same")
+
+	file := createTempFile(t, ".json", `{"m": {"${DUP_KEY}": "a", "same": "b"}}`)
+
+	var cfg struct {
+		M map[string]string `json:"m"`
+	}
+	err := Load(file, &cfg, UseEnv())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate key")
+}
+
+// TestLoad_UseEnvNestedAndSlices 验证嵌套结构体与切片元素中的引用也会被展开。
+func TestLoad_UseEnvNestedAndSlices(t *testing.T) {
+	t.Setenv("NEST_HOST", "h")
+	t.Setenv("LIST_ITEM", "item")
+
+	text := `{"db": {"host": "${NEST_HOST}"}, "items": ["${LIST_ITEM}", "plain"]}`
+	file := createTempFile(t, ".json", text)
+
+	var cfg struct {
+		DB struct {
+			Host string `json:"host"`
+		} `json:"db"`
+		Items []string `json:"items"`
+	}
+	require.NoError(t, Load(file, &cfg, UseEnv()))
+	assert.Equal(t, "h", cfg.DB.Host)
+	assert.Equal(t, []string{"item", "plain"}, cfg.Items)
+}
+
+// TestLoad_UseEnvDoesNotReexpandResult 验证展开结果不会被二次展开
+// （环境变量的值里含 ${...} 时应原样保留）。
+func TestLoad_UseEnvDoesNotReexpandResult(t *testing.T) {
+	t.Setenv("INNER_REF", "${OTHER_VAR}")
+	t.Setenv("OTHER_VAR", "should-not-appear")
+
+	file := createTempFile(t, ".json", `{"host": "${INNER_REF}"}`)
+
+	var cfg struct {
+		Host string `json:"host"`
+	}
+	require.NoError(t, Load(file, &cfg, UseEnv()))
+	assert.Equal(t, "${OTHER_VAR}", cfg.Host)
+}
+
+// TestLoadFromBytes_UseEnv 验证字节入口同样支持 opts（UseEnv）。
+func TestLoadFromBytes_UseEnv(t *testing.T) {
+	t.Setenv("BYTES_HOST", "from-bytes")
+
+	var cfg struct {
+		Host string `json:"host"`
+	}
+	require.NoError(t, LoadFromJSONBytes([]byte(`{"host": "${BYTES_HOST}"}`), &cfg, UseEnv()))
+	assert.Equal(t, "from-bytes", cfg.Host)
+
+	var yamlCfg struct {
+		Host string `json:"host"`
+	}
+	require.NoError(t, LoadFromYAMLBytes([]byte("host: ${BYTES_HOST}\n"), &yamlCfg, UseEnv()))
+	assert.Equal(t, "from-bytes", yamlCfg.Host)
+}
+
+// TestLoadFromBytes_NoOptsKeepsLiteral 验证不传 opts 时配置中的 $ 原样保留。
+func TestLoadFromBytes_NoOptsKeepsLiteral(t *testing.T) {
+	t.Setenv("BYTES_HOST", "from-bytes")
+
+	var raw struct {
+		Host string `json:"host"`
+	}
+	require.NoError(t, LoadFromJSONBytes([]byte(`{"host": "${BYTES_HOST}"}`), &raw))
+	assert.Equal(t, "${BYTES_HOST}", raw.Host)
+}
+
+// TestLoad_UseEnvDisabledKeepsLiteral 验证未开启 UseEnv 时配置中的 $ 原样保留。
+func TestLoad_UseEnvDisabledKeepsLiteral(t *testing.T) {
+	file := createTempFile(t, ".json", `{"password": "p$ssword", "host": "${DB_HOST}"}`)
+
+	var cfg struct {
+		Password string `json:"password"`
+		Host     string `json:"host"`
+	}
+	require.NoError(t, Load(file, &cfg))
+	assert.Equal(t, "p$ssword", cfg.Password)
+	assert.Equal(t, "${DB_HOST}", cfg.Host)
+}
+
 func TestLoad_UseEnvExpansionDefaultValue(t *testing.T) {
 	// 未设置环境变量时回退到 :- 默认值
 	text := `{

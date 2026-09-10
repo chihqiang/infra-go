@@ -34,7 +34,10 @@ func TestRedisTokenBucket_Allow(t *testing.T) {
 	client, cleanup := newMiniRedis(t)
 	defer cleanup()
 
-	tb := NewRedisTokenBucket(client, "test:tb:1", 100, 5)
+	// rate 取极小值（1 个令牌 / 1000 秒），使测试期间几乎没有令牌补充，
+	// 断言不依赖机器快慢。此前 rate=100（每 10ms 补 1 个令牌），
+	// 负载高时第 6 个请求会在补令牌后被放行，导致偶发失败。
+	tb := NewRedisTokenBucket(client, "test:tb:1", 0.001, 5)
 
 	// 突发：前 5 个请求应该通过
 	for i := 0; i < 5; i++ {
@@ -81,8 +84,10 @@ func TestRedisTokenBucket_Concurrent(t *testing.T) {
 	client, cleanup := newMiniRedis(t)
 	defer cleanup()
 
-	// rate=1/sec, burst=50：并发 200 请求，大部分应被限流
-	tb := NewRedisTokenBucket(client, "test:tb:4", 1, 50)
+	// rate 取极小值（1 个令牌 / 1000 秒），使测试期间几乎没有令牌补充，
+	// 断言不依赖机器快慢。此前 rate=1/sec、上限 55 个令牌，
+	// 在 -race 等慢环境下 200 个并发请求耗时超过 5 秒就会多放行令牌。
+	tb := NewRedisTokenBucket(client, "test:tb:4", 0.001, 50)
 
 	var allowed, rejected int64
 	var wg sync.WaitGroup
@@ -125,7 +130,9 @@ func TestRedisSlidingWindow_Allow(t *testing.T) {
 	client, cleanup := newMiniRedis(t)
 	defer cleanup()
 
-	sw := NewRedisSlidingWindow(client, "test:sw:1", 5, 100*time.Millisecond)
+	// 窗口取足够长（10s），确保 6 次调用都落在同一窗口内，断言不依赖机器快慢。
+	// 此前窗口为 100ms，负载高时前 5 次调用可能跨越窗口边界，导致第 6 次被放行。
+	sw := NewRedisSlidingWindow(client, "test:sw:1", 5, 10*time.Second)
 
 	for i := 0; i < 5; i++ {
 		assert.True(t, sw.Allow(), "request %d should be allowed", i)
@@ -207,8 +214,11 @@ func TestRedisTokenBucket_MultipleInstances(t *testing.T) {
 	defer cleanup()
 
 	// 模拟两个实例共享同一个 Redis
-	tb1 := NewRedisTokenBucket(client, "shared:tb", 100, 5)
-	tb2 := NewRedisTokenBucket(client, "shared:tb", 100, 5)
+	// rate 取极小值，使测试期间几乎没有令牌补充。
+	// 此前 rate=100（每 10ms 补 1 个令牌），-race 下 5 次调用耗时超过 10ms
+	// 就会补上令牌，导致第 6 个请求被误放行。
+	tb1 := NewRedisTokenBucket(client, "shared:tb", 0.001, 5)
+	tb2 := NewRedisTokenBucket(client, "shared:tb", 0.001, 5)
 
 	// 实例1 消耗 3 个令牌
 	for i := 0; i < 3; i++ {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -67,7 +68,6 @@ func TestStartAgent_FileExporter(t *testing.T) {
 	})
 	defer func() {
 		StopAgent()
-		closeFile()
 		resetOnce()
 	}()
 
@@ -337,15 +337,218 @@ func TestStartSpan_WithAttributes(t *testing.T) {
 
 // --- 辅助函数 ---
 
-// resetOnce 重置 sync.Once（仅用于测试）。
+// resetOnce 重置 agent 生命周期状态（仅用于测试）。
+//
+// 现在 StartAgent/StopAgent 通过锁 + currentAgent 管理生命周期，
+// 不再依赖 sync.Once，因此测试只需把状态清空即可重复启动。
 func resetOnce() {
-	once = sync.Once{}
-	shutdownOnceFn = sync.OnceFunc(func() {
-		if tp != nil {
-			_ = tp.Shutdown(context.Background())
-		}
+	StopAgent()
+	agentLk.Lock()
+	currentAgent = nil
+	agentLk.Unlock()
+}
+
+// --- 并发安全（回归）---
+
+// TestAddResources_Concurrent 回归测试：并发 AddResources 与读取不得竞争。
+//
+// 历史缺陷：attrResources 是无锁的包级切片，AddResources 直接 append，
+// startAgent 直接读取，-race 可检出数据竞争。
+func TestAddResources_Concurrent(t *testing.T) {
+	resetResources()
+	t.Cleanup(resetResources)
+
+	const workers = 16
+	const iterations = 100
+
+	var wg sync.WaitGroup
+	// 并发写入
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				AddResources(AttrString("k", "v"))
+			}
+		}()
+	}
+	// 并发读取（模拟 startAgent 构造 Resource）。
+	// 此处不断言长度：读取与写入并发，长度只保证单调递增，不保证等于最终值。
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				got := resourceAttrs()
+				assert.NotNil(t, got)
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Len(t, resourceAttrs(), workers*iterations)
+}
+
+// TestAddResources_SnapshotIsACopy 验证 resourceAttrs 返回副本，
+// 调用方修改不会影响内部状态。
+func TestAddResources_SnapshotIsACopy(t *testing.T) {
+	resetResources()
+	defer resetResources()
+
+	AddResources(AttrString("env", "test"))
+	got := resourceAttrs()
+	require.Len(t, got, 1)
+
+	got[0] = AttrString("mutated", "x")
+	assert.Equal(t, "env", string(resourceAttrs()[0].Key))
+}
+
+// TestStartAgent_RestartAfterStop 回归测试：StopAgent 之后必须能重新启动。
+//
+// 历史缺陷：StartAgent 使用 sync.Once，StopAgent 之后 once 仍为已执行状态，
+// 再次 StartAgent 无效，而 otel 全局 provider 仍指向已 Shutdown 的实例，
+// 导致后续 span 被静默丢弃。
+func TestStartAgent_RestartAfterStop(t *testing.T) {
+	resetOnce()
+	t.Cleanup(resetOnce)
+
+	dir := t.TempDir()
+
+	// 第一次启动
+	StartAgent(Config{
+		Name:     "first",
+		Endpoint: dir + "/first.log",
+		Batcher:  BatcherFile,
+		Sampler:  1.0,
 	})
-	tp = nil
+	require.NotNil(t, currentAgent, "first StartAgent should establish an agent")
+	first := currentAgent
+
+	StopAgent()
+	assert.Nil(t, currentAgent, "StopAgent should clear the agent state")
+
+	// 再次启动：应建立新的 agent，而不是被忽略
+	StartAgent(Config{
+		Name:     "second",
+		Endpoint: dir + "/second.log",
+		Batcher:  BatcherFile,
+		Sampler:  1.0,
+	})
+	require.NotNil(t, currentAgent, "StartAgent after StopAgent must work")
+	assert.NotSame(t, first, currentAgent, "a new agent state must be created")
+}
+
+// TestStartAgent_AlreadyRunningIsIgnored 验证运行期间重复 StartAgent 被忽略并记录警告。
+func TestStartAgent_AlreadyRunningIsIgnored(t *testing.T) {
+	resetOnce()
+	t.Cleanup(resetOnce)
+
+	dir := t.TempDir()
+	StartAgent(Config{Name: "s", Endpoint: dir + "/a.log", Batcher: BatcherFile})
+	first := currentAgent
+	require.NotNil(t, first)
+
+	// 第二次调用（未 Stop）：应保持原 agent
+	StartAgent(Config{Name: "other", Endpoint: dir + "/b.log", Batcher: BatcherFile})
+	assert.Same(t, first, currentAgent, "a second StartAgent must not replace the running agent")
+}
+
+// TestStopAgent_Idempotent 验证 StopAgent 可重复调用。
+func TestStopAgent_Idempotent(t *testing.T) {
+	resetOnce()
+
+	dir := t.TempDir()
+	StartAgent(Config{Name: "s", Endpoint: dir + "/a.log", Batcher: BatcherFile})
+
+	require.NotPanics(t, func() {
+		StopAgent()
+		StopAgent()
+		StopAgent()
+	})
+	assert.Nil(t, currentAgent)
+}
+
+// TestStopAgent_ClosesFileExporter 回归测试：StopAgent 必须调用注册的 closers
+// 释放 file 导出器的文件句柄。
+//
+// 历史缺陷：closer 存在包级变量 fileCloser 中，StopAgent 从不调用它，
+// 文件句柄在进程生命周期内不释放（且重复启动会覆盖变量，先前句柄彻底丢失）。
+func TestStopAgent_ClosesFileExporter(t *testing.T) {
+	resetOnce()
+	t.Cleanup(resetOnce)
+
+	dir := t.TempDir()
+	path := dir + "/trace.log"
+
+	StartAgent(Config{Name: "s", Endpoint: path, Batcher: BatcherFile, Sampler: 1.0})
+	require.NotNil(t, currentAgent)
+	require.Len(t, currentAgent.closers, 1, "file exporter must register a closer")
+
+	// 用哨兵替换 closer，验证 StopAgent 确实调用了它
+	called := atomic.Int32{}
+	currentAgent.closers[0] = func() error {
+		called.Add(1)
+		return nil
+	}
+
+	StopAgent()
+
+	assert.Equal(t, int32(1), called.Load(),
+		"StopAgent must invoke the closers registered by the exporter")
+	assert.Nil(t, currentAgent)
+}
+
+// TestStopAgent_ClosesRealFileHandle 验证 file 导出器的句柄被真正释放：
+// 关闭后再次以同一路径启动仍可正常工作（不会因句柄泄漏而失败）。
+func TestStopAgent_ClosesRealFileHandle(t *testing.T) {
+	resetOnce()
+	t.Cleanup(resetOnce)
+
+	dir := t.TempDir()
+	path := dir + "/trace.log"
+
+	// 反复启动/停止，模拟配置重载；若有句柄泄漏，此处能暴露资源累积
+	for i := 0; i < 20; i++ {
+		StartAgent(Config{Name: "s", Endpoint: path, Batcher: BatcherFile, Sampler: 1.0})
+		require.NotNil(t, currentAgent, "iteration %d", i)
+		StopAgent()
+		require.Nil(t, currentAgent, "iteration %d", i)
+	}
+
+	// 文件应存在且可读
+	_, err := os.Stat(path)
+	require.NoError(t, err)
+}
+
+// TestStartAgent_Concurrent 验证并发 StartAgent/StopAgent 不产生竞争或 panic。
+func TestStartAgent_Concurrent(t *testing.T) {
+	resetOnce()
+	t.Cleanup(resetOnce)
+
+	dir := t.TempDir()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			StartAgent(Config{
+				Name:     "concurrent",
+				Endpoint: dir + "/c.log",
+				Batcher:  BatcherFile,
+			})
+		}(i)
+	}
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			StopAgent()
+		}()
+	}
+	wg.Wait()
+
+	StopAgent()
 }
 
 // newGRPCMetadata 创建一个空的 gRPC metadata。

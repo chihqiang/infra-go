@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -91,6 +93,78 @@ func TestFacade_OpenState(t *testing.T) {
 
 	err = b.DoWithAcceptable(func() error { return nil }, defaultAcceptable)
 	assert.ErrorIs(t, err, ErrServiceUnavailable)
+}
+
+// TestFacade_RejectedPromiseIsNil 回归测试：熔断打开时 Allow 必须返回 nil Promise。
+// 历史缺陷：始终返回内部 promise 为 nil 的 promiseWithReason（非 nil 外壳），
+// 调用方（例如统一 defer p.Accept()）忽略 err 直接使用时会 nil 解引用 panic，
+// 也不符合 Breaker.Allow 的契约。
+func TestFacade_RejectedPromiseIsNil(t *testing.T) {
+	b := facadeWithThrottle(t, trippedGoogleBreaker(t))
+
+	promise, err := b.Allow()
+	require.ErrorIs(t, err, ErrServiceUnavailable)
+	assert.Nil(t, promise, "rejected Allow must return a nil Promise")
+
+	// 允许时仍返回可用 Promise
+	b2 := NewBreaker(WithName("facade-promise-ok"))
+	promise, err = b2.Allow()
+	require.NoError(t, err)
+	require.NotNil(t, promise, "allowed Allow must return a usable Promise")
+	require.NotPanics(t, func() { promise.Accept() })
+}
+
+// TestErrorWindow_ConcurrentStringAndAdd 回归测试：errorWindow 的并发读写。
+// 历史缺陷：String() 在加锁之前读取 ew.count 来 make 切片，
+// 与锁内更新 count 的 add 构成数据竞争（-race 可检出）。
+func TestErrorWindow_ConcurrentStringAndAdd(t *testing.T) {
+	b := facadeWithThrottle(t, trippedGoogleBreaker(t))
+	ew := b.throttle.(*loggedThrottle).errWin
+
+	const workers = 16
+	const iterations = 200
+
+	var wg sync.WaitGroup
+	// 并发写入：模拟多个请求同时上报失败原因
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				ew.add(fmt.Sprintf("worker-%d-err-%d", n, j))
+			}
+		}(i)
+	}
+	// 并发读取：熔断打开时 logError 会调用 String()
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				_ = ew.String()
+			}
+		}()
+	}
+	wg.Wait()
+
+	// 环形缓冲最多保留 numHistoryReasons 条
+	assert.LessOrEqual(t, len(strings.Split(ew.String(), "\n")), numHistoryReasons)
+}
+
+// TestFacade_ConcurrentOpenAndAllow 在熔断打开状态下并发调用 Allow，
+// 覆盖 logError + errorWindow.String 的并发路径（配合 -race 检测）。
+func TestFacade_ConcurrentOpenAndAllow(t *testing.T) {
+	b := facadeWithThrottle(t, trippedGoogleBreaker(t))
+
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = b.Allow()
+		}()
+	}
+	wg.Wait()
 }
 
 // TestFacade_FallbackVariantsWhenOpen 覆盖各 Fallback 变体在熔断打开时执行降级。

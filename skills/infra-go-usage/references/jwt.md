@@ -212,11 +212,23 @@ func GetUserHandler(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-> 认证失败返回 401。经 httpx 主包 import 时错误为统一 JSON：
-> ```json
-> {"code":401,"msg":"token is missing","request_id":"..."}
+> 认证失败返回 401，并按 RFC 9110 §15.5.2（MUST）携带 `WWW-Authenticate` 质询；
+> `error` 参数取自 RFC 6750 §3：
+>
+> | 场景 | `error` 取值 |
+> |------|-------------|
+> | 未提供令牌 | `invalid_request` |
+> | 令牌过期 / 无效 / 格式错误 | `invalid_token` |
+>
+> ```http
+> HTTP/1.1 401 Unauthorized
+> WWW-Authenticate: Bearer error="invalid_token"
+>
+> {"code":401,"msg":"token expired","request_id":"..."}
 > ```
-> 未 import httpx 主包时退化为 `http.Error` 纯文本。
+>
+> 经 httpx 主包 import 时错误体为统一 JSON（如上）；未 import 时退化为 `http.Error` 纯文本。
+> 客户端可据此决定是跳转登录（`invalid_request`）还是刷新令牌（`invalid_token`）。
 
 ## 完整示例
 

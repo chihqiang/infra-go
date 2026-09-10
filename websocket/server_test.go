@@ -42,8 +42,22 @@ func newTestServer(handler Handler) *Server {
 	}, handler)
 }
 
+// wsURL 返回测试服务器的 WebSocket 地址。
 func wsURL(ts *httptest.Server) string {
 	return "ws" + ts.URL[len("http"):]
+}
+
+// waitForOpens 等待服务端完成 n 个连接注册（HandleOpen 在 conns.Store 之后调用），
+// 避免测试因"广播早于注册"而偶发失败。
+func waitForOpens(t *testing.T, opened <-chan struct{}, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		select {
+		case <-opened:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("server registered %d/%d connections in time", i, n)
+		}
+	}
 }
 
 // --- Server 端到端测试 ---
@@ -158,6 +172,12 @@ func TestServer_Emit(t *testing.T) {
 func TestServer_BroadcastToAll(t *testing.T) {
 	handler := NewEventHandler()
 
+	// 客户端握手完成不代表服务端已把连接注册进 conns：
+	// ServeHTTP 在 HandleOpen 之前才 Store，因此用 OnOpen 作为注册完成的信号，
+	// 否则广播可能早于注册发生，导致连接漏收（测试偶发超时）。
+	opened := make(chan struct{}, 2)
+	handler.OnOpen(func(conn *Conn) { opened <- struct{}{} })
+
 	srv := newTestServer(handler)
 	defer srv.Close()
 
@@ -171,6 +191,8 @@ func TestServer_BroadcastToAll(t *testing.T) {
 
 	ws2 := dialWs(t, url)
 	defer ws2.Close()
+
+	waitForOpens(t, opened, 2)
 
 	// 广播到所有连接
 	srv.BroadcastText("hello all")

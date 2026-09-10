@@ -137,10 +137,11 @@ func TestSingleFlight_PanicDoesNotBlockWaiters(t *testing.T) {
 	start := make(chan struct{})
 
 	// 第一个调用者 panic
+	var leaderPanic any
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		defer func() { _ = recover() }()
+		defer func() { leaderPanic = recover() }()
 		sf.Do("key", func() (int, error) {
 			close(start)
 			time.Sleep(50 * time.Millisecond)
@@ -150,11 +151,13 @@ func TestSingleFlight_PanicDoesNotBlockWaiters(t *testing.T) {
 
 	<-start
 
-	// 等待者应返回而非永久阻塞
+	// 等待者应返回而非永久阻塞，并且收到与 leader 相同的 panic
 	done := make(chan struct{})
+	var waiterPanic any
 	go func() {
 		defer close(done)
-		_, _ = sf.Do("key", func() (int, error) { return 7, nil })
+		defer func() { waiterPanic = recover() }()
+		sf.Do("key", func() (int, error) { return 7, nil })
 	}()
 	select {
 	case <-done:
@@ -162,6 +165,102 @@ func TestSingleFlight_PanicDoesNotBlockWaiters(t *testing.T) {
 		t.Fatal("waiter blocked forever after fn panicked")
 	}
 	wg.Wait()
+
+	assert.Equal(t, "boom", leaderPanic)
+	assert.Equal(t, "boom", waiterPanic,
+		"waiter must see the same panic as the leader instead of a zero-value success")
+}
+
+// TestSingleFlight_PanicNotReportedAsZeroSuccess 回归测试：leader panic 时
+// 等待者不得把失败当作成功返回。旧实现下等待者的 sf.Do 会正常返回 (0, nil)。
+func TestSingleFlight_PanicNotReportedAsZeroSuccess(t *testing.T) {
+	sf := NewSingleFlight[int]()
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer func() { _ = recover() }()
+		sf.Do("key", func() (int, error) {
+			close(start)
+			time.Sleep(30 * time.Millisecond)
+			panic("fetch failed")
+		})
+	}()
+	<-start
+
+	type outcome struct {
+		err       error
+		panicked  bool
+		returned  bool
+		panickedV any
+	}
+	got := make(chan outcome, 1)
+	go func() {
+		var o outcome
+		defer func() {
+			if r := recover(); r != nil {
+				o.panicked = true
+				o.panickedV = r
+			}
+			got <- o
+		}()
+		_, o.err = sf.Do("key", func() (int, error) { return 0, nil })
+		o.returned = true
+	}()
+	wg.Wait()
+
+	select {
+	case o := <-got:
+		require.True(t, o.panicked, "waiter must panic instead of returning a result")
+		assert.False(t, o.returned, "sf.Do must not return normally for the waiter")
+		assert.Equal(t, "fetch failed", o.panickedV)
+	case <-time.After(2 * time.Second):
+		t.Fatal("waiter did not return")
+	}
+}
+
+// TestSingleFlight_PanicNilValueIsNotSwallowed 验证 fn 内部 panic(nil) 时，
+// 等待者仍能感知失败（Go 1.21+ 会以 *runtime.PanicNilError 呈现）。
+func TestSingleFlight_PanicNilValueIsNotSwallowed(t *testing.T) {
+	sf := NewSingleFlight[int]()
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer func() { _ = recover() }()
+		sf.Do("key", func() (int, error) {
+			close(start)
+			time.Sleep(30 * time.Millisecond)
+			panic(nil) //nolint:staticcheck // 验证运行时转换后的 panic 仍会被传播
+		})
+	}()
+	<-start
+
+	panicked := make(chan bool, 1)
+	go func() {
+		recovered := false
+		defer func() {
+			if recover() != nil {
+				recovered = true
+			}
+			panicked <- recovered
+		}()
+		_, _ = sf.Do("key", func() (int, error) { return 5, nil })
+	}()
+	wg.Wait()
+
+	select {
+	case p := <-panicked:
+		assert.True(t, p, "panic(nil) must not be silently converted into a successful zero value")
+	case <-time.After(2 * time.Second):
+		t.Fatal("waiter did not return")
+	}
 }
 
 // --- DoCtx 测试 ---

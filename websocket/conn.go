@@ -7,12 +7,16 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	gws "github.com/gorilla/websocket"
 )
 
 // ErrConnClosed 连接已关闭。
 var ErrConnClosed = errors.New("websocket: connection closed")
+
+// defaultWriteTimeout 在 server 为 nil（如手工构造 Conn 的测试）时的写超时兜底。
+const defaultWriteTimeout = 10 * time.Second
 
 // Conn 封装 gorilla/websocket.Conn，提供线程安全的写入和连接管理。
 //
@@ -61,8 +65,30 @@ func (c *Conn) IsClosed() bool {
 
 // --- 写入方法 ---
 
+// writeTimeout 返回本连接的单次写超时。
+// 返回 0 表示不限制（仅当配置显式设为负值时）。
+func (c *Conn) writeTimeout() time.Duration {
+	if c.server == nil {
+		// 手工构造的 Conn（测试场景）没有配置，使用兜底值
+		return defaultWriteTimeout
+	}
+	switch {
+	case c.server.cfg.WriteTimeout < 0:
+		// 显式禁用写超时
+		return 0
+	case c.server.cfg.WriteTimeout == 0:
+		// 配置未经过 fillDefault 时兜底，避免误判为"不限制"
+		return defaultWriteTimeout
+	default:
+		return c.server.cfg.WriteTimeout
+	}
+}
+
 // WriteMessage 写入指定类型的 WebSocket 消息。
 // messageType 取值为 TextMessage、BinaryMessage 等。
+//
+// 写入前会设置写截止时间（见 Config.WriteTimeout），
+// 避免慢客户端让写入无限阻塞并连带阻塞广播与关闭流程。
 func (c *Conn) WriteMessage(messageType int, data []byte) error {
 	if c.closed.Load() {
 		return ErrConnClosed
@@ -71,6 +97,9 @@ func (c *Conn) WriteMessage(messageType int, data []byte) error {
 	defer c.mu.Unlock()
 	if c.closed.Load() {
 		return ErrConnClosed
+	}
+	if timeout := c.writeTimeout(); timeout > 0 {
+		_ = c.ws.SetWriteDeadline(time.Now().Add(timeout))
 	}
 	return c.ws.WriteMessage(messageType, data)
 }

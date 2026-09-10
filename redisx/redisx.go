@@ -16,6 +16,11 @@ var (
 	ErrLockNotAcquired = errors.New("redisx: lock not acquired")
 	// ErrLockOwnershipMismatch 释放锁失败（锁不属于当前持有者）。
 	ErrLockOwnershipMismatch = errors.New("redisx: lock ownership mismatch")
+	// ErrInvalidLockTTL 锁的 TTL 非法（<= 0 或小于 minLockTTL）。
+	// TTL <= 0 时 SET NX 会写入永不过期的 key（持有者崩溃即永久死锁），
+	// 且启用自动续期时 time.NewTicker(ttl/3) 会在 goroutine 内 panic 终止进程；
+	// TTL 小于 1ms 时续期脚本的 PEXPIRE 参数会被截断为 0，直接删除锁。
+	ErrInvalidLockTTL = errors.New("redisx: invalid lock ttl")
 )
 
 // Client 封装了 redis.Client，提供便捷的 Redis 操作。

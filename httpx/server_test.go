@@ -1,7 +1,9 @@
 package httpx
 
 import (
+	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -1011,4 +1013,147 @@ func TestSetNotFoundHandler_MethodNotAllowed(t *testing.T) {
 	// 405 不应被 404 处理器接管
 	rec := doRequest(t, s, http.MethodPost, "/users", nil)
 	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+}
+
+// TestSetNotFoundHandler_Business404NotHijacked 验证业务路由主动返回的 404
+// 不会被全局 404 处理器劫持（历史缺陷：拦截 ResponseWriter 的 404 写入，
+// 导致业务 404 被替换、业务响应体被吞掉）。
+func TestSetNotFoundHandler_Business404NotHijacked(t *testing.T) {
+	s := newTestServer()
+	s.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
+		OkJSON(w, NewCodeError(CodeNotFound, "custom not found"))
+	})
+	s.AddRoute(Route{
+		Method: "GET", Path: "/users/{id}",
+		Handler: func(w http.ResponseWriter, r *http.Request) {
+			// 业务语义上的"资源不存在"，必须原样返回给客户端
+			WriteHTTPError(w, http.StatusNotFound, "user not found")
+		},
+	})
+
+	rec := doRequest(t, s, http.MethodGet, "/users/42", nil)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+
+	var resp Response[any]
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "user not found", resp.Msg)
+	assert.NotContains(t, rec.Body.String(), "custom not found")
+}
+
+// TestSetNotFoundHandler_BusinessOtherStatusesNotHijacked 验证其它状态码同样不受影响。
+func TestSetNotFoundHandler_BusinessOtherStatusesNotHijacked(t *testing.T) {
+	s := newTestServer()
+	s.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
+		OkJSON(w, NewCodeError(CodeNotFound, "custom not found"))
+	})
+	s.AddRoute(Route{
+		Method: "GET", Path: "/teapot",
+		Handler: func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusTeapot)
+			_, _ = w.Write([]byte("teapot body"))
+		},
+	})
+
+	rec := doRequest(t, s, http.MethodGet, "/teapot", nil)
+	assert.Equal(t, http.StatusTeapot, rec.Code)
+	assert.Equal(t, "teapot body", rec.Body.String())
+}
+
+// capsWriter 实现 Flusher / Hijacker / Pusher / Unwrap，
+// 用于验证可选接口不会被 ResponseWriter 包装层吞掉。
+type capsWriter struct {
+	*httptest.ResponseRecorder
+}
+
+func (w *capsWriter) Flush() { w.ResponseRecorder.Flush() }
+
+func (w *capsWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return nil, nil, errors.New("test: hijack not supported")
+}
+
+func (w *capsWriter) Push(string, *http.PushOptions) error { return nil }
+
+func (w *capsWriter) Unwrap() http.ResponseWriter { return w.ResponseRecorder }
+
+// TestSetNotFoundHandler_PreservesWriterCapabilities 验证设置自定义 404 之后，
+// 正常路由的 handler 仍能看到 Flush / Hijack / Push / Unwrap 能力
+// （历史缺陷：包装 writer 未实现这些接口，导致 SSE / WebSocket / HTTP2 静默失效）。
+func TestSetNotFoundHandler_PreservesWriterCapabilities(t *testing.T) {
+	s := newTestServer()
+	s.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
+		WriteHTTPError(w, http.StatusNotFound, "custom not found")
+	})
+
+	var hasFlusher, hasHijacker, hasPusher, hasUnwrap bool
+	var flushed bool
+	s.AddRoute(Route{
+		Method: "GET", Path: "/stream",
+		Handler: func(w http.ResponseWriter, r *http.Request) {
+			_, hasFlusher = w.(http.Flusher)
+			_, hasHijacker = w.(http.Hijacker)
+			_, hasPusher = w.(http.Pusher)
+			_, hasUnwrap = w.(interface{ Unwrap() http.ResponseWriter })
+
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("chunk"))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+				flushed = true
+			}
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	cw := &capsWriter{ResponseRecorder: rec}
+	s.Handler().ServeHTTP(cw, httptest.NewRequest(http.MethodGet, "/stream", nil))
+
+	assert.True(t, hasFlusher, "http.Flusher must not be swallowed")
+	assert.True(t, hasHijacker, "http.Hijacker must not be swallowed")
+	assert.True(t, hasPusher, "http.Pusher must not be swallowed")
+	assert.True(t, hasUnwrap, "Unwrap (http.ResponseController) must not be swallowed")
+	assert.True(t, flushed)
+	assert.True(t, rec.Flushed, "Flush should reach the underlying writer")
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "chunk", rec.Body.String())
+}
+
+// TestSetNotFoundHandler_CustomHandlerReceivesCapableWriter 验证自定义 404 处理器
+// 自身也能拿到完整的 writer 能力。
+func TestSetNotFoundHandler_CustomHandlerReceivesCapableWriter(t *testing.T) {
+	var hasFlusher, hasHijacker, hasPusher, hasUnwrap bool
+	s := newTestServer()
+	s.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
+		_, hasFlusher = w.(http.Flusher)
+		_, hasHijacker = w.(http.Hijacker)
+		_, hasPusher = w.(http.Pusher)
+		_, hasUnwrap = w.(interface{ Unwrap() http.ResponseWriter })
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	rec := httptest.NewRecorder()
+	cw := &capsWriter{ResponseRecorder: rec}
+	s.Handler().ServeHTTP(cw, httptest.NewRequest(http.MethodGet, "/missing", nil))
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.True(t, hasFlusher)
+	assert.True(t, hasHijacker)
+	assert.True(t, hasPusher)
+	assert.True(t, hasUnwrap)
+}
+
+// TestSetNotFoundHandler_CustomHandlerSeesOriginalRequest 验证自定义 404
+// 处理器收到的仍是最原始的请求（含 method / path / query）。
+func TestSetNotFoundHandler_CustomHandlerSeesOriginalRequest(t *testing.T) {
+	var gotMethod, gotPath, gotQuery string
+	s := newTestServer()
+	s.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath, gotQuery = r.Method, r.URL.Path, r.URL.RawQuery
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	rec := doRequest(t, s, http.MethodPost, "/a/b?x=1", nil)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Equal(t, http.MethodPost, gotMethod)
+	assert.Equal(t, "/a/b", gotPath)
+	assert.Equal(t, "x=1", gotQuery)
 }

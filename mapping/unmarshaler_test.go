@@ -698,6 +698,156 @@ func TestUnmarshal_UsingDifferentTagKey(t *testing.T) {
 	assert.Equal(t, "", cfg.Name) // 未设置
 }
 
+// --- range 校验一致性（各写入路径都必须生效，不得因值来源/表示形式被绕过）---
+
+// TestUnmarshal_RangeNotBypassedByStringValue 验证 range 校验不因值的类型
+// 与字段类型不一致而被绕过（如 YAML 中写作 port: "9090"）。
+// 历史缺陷：这类值走 setConvertedValue，完全没有范围校验。
+func TestUnmarshal_RangeNotBypassedByStringValue(t *testing.T) {
+	type Config struct {
+		Port int `json:"port,range=[1:8080]"`
+	}
+
+	// 同一语义值：原生 int 越界会报错，字符串形式也必须报错
+	var native Config
+	err := UnmarshalJsonMap(map[string]any{"port": 9090}, &native)
+	require.Error(t, err, "native int out of range must be rejected")
+
+	var asString Config
+	err = UnmarshalJsonMap(map[string]any{"port": "9090"}, &asString)
+	require.Error(t, err, "string value out of range must be rejected too")
+
+	// 边界内的字符串值仍可正常解析
+	var ok Config
+	err = UnmarshalJsonMap(map[string]any{"port": "8080"}, &ok)
+	require.NoError(t, err)
+	assert.Equal(t, 8080, ok.Port)
+}
+
+// TestUnmarshal_RangeNotBypassedByEnv 验证环境变量覆盖配置时 range 仍然生效。
+// 历史缺陷：setEnvValue 只校验 options，不校验 range。
+func TestUnmarshal_RangeNotBypassedByEnv(t *testing.T) {
+	type Config struct {
+		Port int `json:",range=[1:8080],env=TEST_RANGE_BYPASS_PORT"`
+	}
+
+	t.Setenv("TEST_RANGE_BYPASS_PORT", "99999")
+	var bad Config
+	err := UnmarshalJsonMap(map[string]any{}, &bad)
+	require.Error(t, err, "env value out of range must be rejected")
+
+	t.Setenv("TEST_RANGE_BYPASS_PORT", "8080")
+	var ok Config
+	err = UnmarshalJsonMap(map[string]any{}, &ok)
+	require.NoError(t, err)
+	assert.Equal(t, 8080, ok.Port)
+}
+
+// TestUnmarshal_RangeOnDuration 验证 duration 字段的 range 约束生效。
+// 历史缺陷：duration 分支完全跳过校验；range 为纯数值（纳秒），
+// 与 time.Duration 的底层 int64 表示一致。
+func TestUnmarshal_RangeOnDuration(t *testing.T) {
+	type Config struct {
+		// 1ns <= timeout <= 10s（10s = 10000000000ns）
+		Timeout time.Duration `json:"timeout,range=[1:10000000000]"`
+	}
+
+	var ok Config
+	err := UnmarshalJsonMap(map[string]any{"timeout": "5s"}, &ok)
+	require.NoError(t, err)
+	assert.Equal(t, 5*time.Second, ok.Timeout)
+
+	var bad Config
+	err = UnmarshalJsonMap(map[string]any{"timeout": "60s"}, &bad)
+	require.Error(t, err, "duration out of range must be rejected")
+}
+
+// TestUnmarshal_RangeOnDefaultValue 验证标签中声明的 default 也需满足 range。
+// 历史缺陷：setDefaultValue 不做范围校验，越界默认值被静默写入。
+func TestUnmarshal_RangeOnDefaultValue(t *testing.T) {
+	// 越界默认值：属于标签声明错误，应在加载期暴露
+	type BadConfig struct {
+		Port int `json:",default=99999,range=[1:8080]"`
+	}
+	var bad BadConfig
+	err := UnmarshalJsonMap(map[string]any{}, &bad)
+	require.Error(t, err, "out-of-range default must be rejected")
+
+	// 合法默认值仍正常填充
+	type OkConfig struct {
+		Port int `json:",default=8080,range=[1:8080]"`
+	}
+	var ok OkConfig
+	err = UnmarshalJsonMap(map[string]any{}, &ok)
+	require.NoError(t, err)
+	assert.Equal(t, 8080, ok.Port)
+}
+
+// TestFillDefault_RangeOnDefaultValue 验证 FillDefault 路径同样校验默认值范围。
+func TestFillDefault_RangeOnDefaultValue(t *testing.T) {
+	type BadConfig struct {
+		Port int `json:",default=99999,range=[1:8080]"`
+	}
+	var bad BadConfig
+	err := FillDefault(&bad)
+	require.Error(t, err)
+
+	type OkConfig struct {
+		Port int `json:",default=8080,range=[1:8080]"`
+	}
+	var ok OkConfig
+	require.NoError(t, FillDefault(&ok))
+	assert.Equal(t, 8080, ok.Port)
+}
+
+// TestUnmarshal_RangeOnEnvDuration 验证 duration 字段经环境变量覆盖时 range 生效。
+func TestUnmarshal_RangeOnEnvDuration(t *testing.T) {
+	type Config struct {
+		Timeout time.Duration `json:",range=[1:10000000000],env=TEST_RANGE_DUR"`
+	}
+
+	t.Setenv("TEST_RANGE_DUR", "60s")
+	var bad Config
+	err := UnmarshalJsonMap(map[string]any{}, &bad)
+	require.Error(t, err, "env duration out of range must be rejected")
+
+	t.Setenv("TEST_RANGE_DUR", "5s")
+	var ok Config
+	err = UnmarshalJsonMap(map[string]any{}, &ok)
+	require.NoError(t, err)
+	assert.Equal(t, 5*time.Second, ok.Timeout)
+}
+
+// TestValidateRangeForType 直接覆盖新的校验辅助函数。
+func TestValidateRangeForType(t *testing.T) {
+	rng, err := parseNumberRange("[1:10]")
+	require.NoError(t, err)
+	opts := &fieldOptions{Range: rng}
+
+	t.Run("int within range", func(t *testing.T) {
+		assert.NoError(t, validateRangeForType(reflect.TypeOf(0), 5, opts, "f"))
+		assert.NoError(t, validateRangeForType(reflect.TypeOf(0), "5", opts, "f"))
+	})
+	t.Run("int out of range", func(t *testing.T) {
+		assert.Error(t, validateRangeForType(reflect.TypeOf(0), 11, opts, "f"))
+		assert.Error(t, validateRangeForType(reflect.TypeOf(0), "11", opts, "f"))
+	})
+	t.Run("nil range is skipped", func(t *testing.T) {
+		assert.NoError(t, validateRangeForType(reflect.TypeOf(0), 999, nil, "f"))
+		assert.NoError(t, validateRangeForType(reflect.TypeOf(0), 999, &fieldOptions{}, "f"))
+	})
+	t.Run("duration compares in nanoseconds", func(t *testing.T) {
+		// 5ns 在 [1:10] 内，1h 不在
+		assert.NoError(t, validateRangeForType(durationType, 5*time.Nanosecond, opts, "f"))
+		assert.NoError(t, validateRangeForType(durationType, "5ns", opts, "f"))
+		assert.Error(t, validateRangeForType(durationType, time.Hour, opts, "f"))
+		assert.Error(t, validateRangeForType(durationType, "1h", opts, "f"))
+	})
+	t.Run("duration with unparsable value", func(t *testing.T) {
+		assert.Error(t, validateRangeForType(durationType, "not-a-duration", opts, "f"))
+	})
+}
+
 func TestUnmarshal_IgnoreDashField(t *testing.T) {
 	type Config struct {
 		Name string `json:"-"`

@@ -2,6 +2,7 @@ package trace
 
 import (
 	"os"
+	"sync"
 
 	"github.com/chihqiang/infra-go/mapping"
 	"go.opentelemetry.io/otel/attribute"
@@ -50,38 +51,53 @@ func fillDefault(cfg Config) Config {
 
 // --- 资源管理 ---
 
-var attrResources = make([]attribute.KeyValue, 0)
+var (
+	// attrResources 会附加到所有 span 的 Resource 上。
+	//
+	// 用锁保护：AddResources 可能被业务在运行期调用（动态打标签），
+	// 而 startAgent 会读取它构造 Resource；无保护时 -race 可检出数据竞争。
+	attrResourcesLk sync.RWMutex
+	attrResources   = make([]attribute.KeyValue, 0)
+)
 
 // AddResources 添加额外的资源属性。
 // 资源属性会附加到所有链路 span 上，用于标识服务来源。
 // 使用 AttrString / AttrInt 等函数创建属性，无需导入 otel/attribute。
+//
+// 并发安全。注意：属性是在 TracerProvider 创建时快照的，
+// 因此 **启动后添加的属性不会生效**（需要重新 StartAgent）。
 func AddResources(attrs ...Attr) {
+	if len(attrs) == 0 {
+		return
+	}
+	attrResourcesLk.Lock()
 	attrResources = append(attrResources, attrs...)
+	attrResourcesLk.Unlock()
+}
+
+// resourceAttrs 返回资源属性副本，供构造 Resource 使用。
+func resourceAttrs() []attribute.KeyValue {
+	attrResourcesLk.RLock()
+	defer attrResourcesLk.RUnlock()
+	out := make([]attribute.KeyValue, len(attrResources))
+	copy(out, attrResources)
+	return out
 }
 
 // resetResources 重置资源属性（仅用于测试）。
 func resetResources() {
+	attrResourcesLk.Lock()
 	attrResources = make([]attribute.KeyValue, 0)
-}
-
-// ensureFile 确保 trace 日志文件的写入器在测试后可关闭。
-// 当 Batcher 为 file 时，需要持有文件句柄以便后续关闭。
-var fileCloser func()
-
-// closeFile 关闭 trace 日志文件（仅用于测试）。
-func closeFile() {
-	if fileCloser != nil {
-		fileCloser()
-		fileCloser = nil
-	}
+	attrResourcesLk.Unlock()
 }
 
 // openFileForExporter 打开文件用于 file 类型导出器。
-func openFileForExporter(path string) (*os.File, error) {
+// 返回文件及其关闭函数：调用方负责在 agent 停止时关闭，
+// 避免把 closer 存在包级变量里（多实例会互相覆盖，且 StopAgent 无法释放）。
+func openFileForExporter(path string) (*os.File, func() error, error) {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	fileCloser = func() { _ = f.Close() }
-	return f, nil
+	return f, f.Close, nil
 }

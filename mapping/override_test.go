@@ -122,6 +122,102 @@ func TestFillAndOverride_NotPointer(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// --- 回归：nil / 类型化 nil / 匿名嵌入指针（此前均 panic）---
+
+// TestFillAndOverride_NilOverrides 验证 overrides 为 nil 时仅填充默认值，不 panic。
+// 历史缺陷：reflect.ValueOf(nil) 得到无效值，取 Type() 时
+// panic "reflect: call of reflect.Value.Type on zero Value"。
+func TestFillAndOverride_NilOverrides(t *testing.T) {
+	type Config struct {
+		Host string `json:",default=localhost"`
+		Port int    `json:",default=8080"`
+	}
+
+	var c Config
+	require.NotPanics(t, func() {
+		require.NoError(t, FillAndOverride(&c, nil))
+	})
+	assert.Equal(t, "localhost", c.Host)
+	assert.Equal(t, 8080, c.Port)
+}
+
+// TestFillAndOverride_TypedNilOverrides 验证类型化 nil 指针同样视为"无覆盖"。
+func TestFillAndOverride_TypedNilOverrides(t *testing.T) {
+	type Config struct {
+		Host string `json:",default=localhost"`
+		Port int    `json:",default=8080"`
+	}
+
+	var nilCfg *Config
+	var c Config
+	require.NotPanics(t, func() {
+		require.NoError(t, FillAndOverride(&c, nilCfg))
+	})
+	assert.Equal(t, "localhost", c.Host)
+	assert.Equal(t, 8080, c.Port)
+}
+
+// TestFillAndOverride_AnonymousPtrField 验证匿名嵌入指针结构体可被递归覆盖，
+// 且默认值得以保留。
+// 历史缺陷：递归时未解引用，在 Ptr 值上调用 Field(i) 会
+// panic "reflect: call of reflect.Value.Field on ptr Value"。
+func TestFillAndOverride_AnonymousPtrField(t *testing.T) {
+	type Base struct {
+		Host string `json:",default=0.0.0.0"`
+		Port int    `json:",default=80"`
+	}
+	type Server struct {
+		*Base
+		Name string `json:",default=svc"`
+	}
+
+	t.Run("target pointer nil, override provided", func(t *testing.T) {
+		var c Server
+		require.NotPanics(t, func() {
+			require.NoError(t, FillAndOverride(&c, Server{
+				Base: &Base{Port: 8080},
+				Name: "api",
+			}))
+		})
+		require.NotNil(t, c.Base, "embedded pointer should be allocated to receive overrides")
+		assert.Equal(t, "0.0.0.0", c.Host, "default must be preserved")
+		assert.Equal(t, 8080, c.Port)
+		assert.Equal(t, "api", c.Name)
+	})
+
+	t.Run("override pointer nil keeps defaults", func(t *testing.T) {
+		var c Server
+		require.NotPanics(t, func() {
+			require.NoError(t, FillAndOverride(&c, Server{Name: "api"}))
+		})
+		// 默认值来自 FillDefault（嵌入指针由 mapping 分配），override 为 nil 时不覆盖
+		assert.Equal(t, "api", c.Name)
+		if c.Base != nil {
+			assert.Equal(t, "0.0.0.0", c.Host)
+		}
+	})
+}
+
+// TestFillAndOverride_AnonymousPtrFieldNestedNonZero 验证匿名嵌入指针的
+// 非零子字段覆盖与默认值保留同时成立。
+func TestFillAndOverride_AnonymousPtrFieldNestedNonZero(t *testing.T) {
+	type Base struct {
+		Host string `json:",default=localhost"`
+		Port int    `json:",default=3306"`
+	}
+	type Config struct {
+		*Base
+		Name string `json:",default=app"`
+	}
+
+	var c Config
+	require.NoError(t, FillAndOverride(&c, Config{Base: &Base{Host: "db.example.com"}}))
+	require.NotNil(t, c.Base)
+	assert.Equal(t, "db.example.com", c.Host)
+	assert.Equal(t, 3306, c.Port, "unset sub-field must keep its default")
+	assert.Equal(t, "app", c.Name)
+}
+
 func TestFillAndOverride_TypeMismatch(t *testing.T) {
 	type A struct {
 		Name string

@@ -234,9 +234,13 @@ func (c *RedisCache) doGet(ctx context.Context, key string) (any, error) {
 	// 读取结构体/指针等复杂类型时需由调用方自行类型断言或转换（见 cache.md）。
 	var v any
 	if err := json.Unmarshal([]byte(data), &v); err != nil {
-		// 反序列化失败：删除无效缓存并返回未命中，让上层重新加载
+		// 反序列化失败：返回未命中让上层重新加载，但**不删除** key。
+		//
+		// 不能删：同一个 key 可能被其他组件以非 JSON 格式写入
+		// （如 redisx.Client.Set 存原始字符串）。自动删除会导致
+		// "对方刚写入就被本缓存删掉"的隐蔽故障，且难以定位。
+		// 真要处理脏数据，应由调用方判断后用 Delete 显式清理。
 		logger.InfofCtx(ctx, "cache(%s): unmarshal cache failed, key: %s, error: %v", c.name, key, err)
-		_, _ = c.rds.Del(ctx, key)
 		return nil, ErrNotFound
 	}
 	return v, nil

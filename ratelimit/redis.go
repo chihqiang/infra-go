@@ -2,7 +2,10 @@ package ratelimit
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"os"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -10,8 +13,28 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// memberCounter 用于生成 Redis 滑动窗口中 ZSET 成员的唯一标识。
-// 防止并发请求生成相同的 member 导致 ZADD 覆盖而非新增。
+// memberPrefix 是进程级唯一前缀，用于生成 Redis 滑动窗口的 ZSET 成员。
+//
+// 成员必须**跨进程**唯一：滑动窗口用 ZCARD 统计窗口内请求数，而 ZADD 对已存在
+// 的成员只更新 score、不增加基数。旧实现用 `<毫秒>:<进程内原子计数>` 作为成员，
+// 两个进程在同一毫秒各自产生 counter=1 时成员完全相同 → ZADD 覆盖 → ZCARD 低估
+// 真实请求数 → 实际放行量超过 limit（实测：limit=2 时 2 次请求 ZCARD 仍为 1）。
+//
+// 因此成员包含 64 位随机前缀（crypto/rand）；随机源不可用时退化为
+// 主机名 + pid + 启动纳秒，仍可保证跨进程不重复。
+var memberPrefix = newMemberPrefix()
+
+func newMemberPrefix() string {
+	var b [8]byte
+	if _, err := crand.Read(b[:]); err == nil {
+		return hex.EncodeToString(b[:])
+	}
+	host, _ := os.Hostname()
+	return fmt.Sprintf("%s-%d-%d", host, os.Getpid(), time.Now().UnixNano())
+}
+
+// memberCounter 用于生成 Redis 滑动窗口中 ZSET 成员的进程内唯一后缀。
+// 与 memberPrefix 组合，保证同进程并发请求不会生成相同成员。
 var memberCounter uint64
 
 // RedisClient Redis 客户端接口。
@@ -77,6 +100,23 @@ return allowed
 func (tb *RedisTokenBucket) Allow() bool {
 	ok, _ := tb.AllowContext(context.Background())
 	return ok
+}
+
+// RetryAfter 返回建议的重试等待时间：距下一个令牌可用的时长。
+//
+// 基于配置的 rate 给出上界估计（不额外访问 Redis）：
+// 桶内令牌状态由服务端脚本维护，客户端无法无开销地得知实时余量，
+// 而“令牌生成一个所需的时间”正是被限流后最早可能成功的时机。
+// 实现 http 层的 Retry-After 语义（RFC 9110 §10.2.3）。
+func (tb *RedisTokenBucket) RetryAfter() time.Duration {
+	if tb.rate <= 0 {
+		return 0
+	}
+	wait := time.Duration(float64(time.Second) / tb.rate)
+	if wait < time.Millisecond {
+		wait = time.Millisecond
+	}
+	return wait
 }
 
 // AllowContext 带 context 的检查。
@@ -147,12 +187,27 @@ func (sw *RedisSlidingWindow) Allow() bool {
 	return ok
 }
 
+// RetryAfter 返回建议的重试等待时间：整个窗口滑过所需的最长时长。
+//
+// 与内存实现不同，Redis 端无法在本地得知窗口内最早记录的时间戳
+// （需额外访问 Redis，而此处正处于限流路径，不应再增加负载），
+// 因此给出保守上界：等满一个窗口后必定有配额可用。
+// 实现 http 层的 Retry-After 语义（RFC 9110 §10.2.3）。
+func (sw *RedisSlidingWindow) RetryAfter() time.Duration {
+	if sw.window <= 0 {
+		return 0
+	}
+	return sw.window
+}
+
 // AllowContext 带 context 的检查。
 func (sw *RedisSlidingWindow) AllowContext(ctx context.Context) (bool, error) {
 	now := time.Now().UnixMilli()
-	// 使用时间戳 + 原子计数器作为唯一标识，防止并发请求 member 冲突
+	// 成员格式：<进程唯一前缀>:<毫秒时间戳>:<进程内计数>
+	// 前缀保证跨进程唯一，计数保证同进程并发唯一，两者缺一都会让 ZADD 覆盖
+	// 已有成员，导致 ZCARD 低估窗口内请求数（限流被突破）。
 	counter := atomic.AddUint64(&memberCounter, 1)
-	member := strconv.FormatInt(now, 10) + ":" + strconv.FormatUint(counter, 10)
+	member := memberPrefix + ":" + strconv.FormatInt(now, 10) + ":" + strconv.FormatUint(counter, 10)
 
 	result, err := slidingWindowScript.Run(ctx, sw.client, []string{sw.key},
 		now, sw.window.Milliseconds(), sw.limit, member).Int()

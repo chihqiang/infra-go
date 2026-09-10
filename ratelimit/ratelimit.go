@@ -85,6 +85,33 @@ func (tb *TokenBucket) Tokens() float64 {
 	return tb.tokens
 }
 
+// RetryAfter 返回建议的重试等待时间：距下一个令牌可用的时长。
+//
+// 实现 http 层的 Retry-After 语义（RFC 9110 §10.2.3）。
+// rate <= 0 时桶永远填不满，返回 0 表示无法给出估计。
+func (tb *TokenBucket) RetryAfter() time.Duration {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+
+	if tb.rate <= 0 {
+		return 0
+	}
+
+	now := time.Now()
+	tokens := tb.tokens + now.Sub(tb.lastUpdate).Seconds()*tb.rate
+	if tokens >= 1 {
+		return 0 // 已有可用令牌
+	}
+
+	// 距凑满 1 个令牌还需 (1-tokens)/rate 秒
+	wait := time.Duration((1 - tokens) / tb.rate * float64(time.Second))
+	if wait < time.Millisecond {
+		// 向上取整到 1ms，避免因浮点误差算出 0 而被解读为“可立即重试”
+		wait = time.Millisecond
+	}
+	return wait
+}
+
 // --- 滑动窗口（内存） ---
 
 // SlidingWindow 滑动窗口限流器。
@@ -155,6 +182,28 @@ func (sw *SlidingWindow) Count() int {
 
 	sw.pruneExpired(time.Now())
 	return len(sw.requests)
+}
+
+// RetryAfter 返回建议的重试等待时间：最早一次记录滑出窗口所需时长。
+//
+// 实现 http 层的 Retry-After 语义（RFC 9110 §10.2.3）。
+// 窗口未满或没有记录时返回 0（无意义或无必要重试提示）。
+func (sw *SlidingWindow) RetryAfter() time.Duration {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+
+	now := time.Now()
+	sw.pruneExpired(now)
+	if len(sw.requests) < sw.limit {
+		return 0
+	}
+
+	// 最早一条记录滑出窗口后才会腾出配额
+	wait := sw.requests[0].Add(sw.window).Sub(now)
+	if wait < time.Millisecond {
+		wait = time.Millisecond
+	}
+	return wait
 }
 
 // --- 并发数限制 ---

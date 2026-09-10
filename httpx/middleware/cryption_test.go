@@ -185,8 +185,9 @@ func TestCryption_ResponseOverflowFallsBackPlaintext(t *testing.T) {
 		httptest.NewRequest(http.MethodGet, "/big", nil))
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	// 明文回退：输出已缓冲的 5MB 明文，body 可直接读取（非密文）
-	assert.Len(t, rec.Body.Bytes(), defaultMaxBytes)
+	// 明文回退：完整输出 12 块 = 6MB 明文（body 可直接读取，非密文），不得截断
+	assert.Len(t, rec.Body.Bytes(), 12*chunk)
+	assert.Equal(t, bytes.Repeat([]byte("x"), chunk), rec.Body.Bytes()[:chunk])
 }
 
 func TestCryption_ResponseLimitConfigurable(t *testing.T) {
@@ -204,7 +205,7 @@ func TestCryption_ResponseLimitConfigurable(t *testing.T) {
 	rec := perform(mw.Middleware(), big, httptest.NewRequest(http.MethodGet, "/big", nil))
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Len(t, rec.Body.Bytes(), customLimit) // 回退明文输出已缓冲的 64KB
+	assert.Len(t, rec.Body.Bytes(), 4*chunk) // 回退明文，完整输出 128KB，不得截断
 }
 
 func TestCryption_SuccessResponseEncryptedWithStatus(t *testing.T) {

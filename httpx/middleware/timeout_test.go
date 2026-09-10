@@ -48,3 +48,39 @@ func TestTimeout_WebSocketExempt(t *testing.T) {
 	rec := perform(NewTimeout(1*time.Millisecond).Middleware(), ok, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
+
+// TestTimeout_StreamingPreservesStatusCode 验证流式 handler（显式状态码 + Flush）
+// 的状态码不会被隐式 200 覆盖。
+func TestTimeout_StreamingPreservesStatusCode(t *testing.T) {
+	stream := func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("boom"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+
+	rec := perform(NewTimeout(time.Second).Middleware(), stream,
+		httptest.NewRequest(http.MethodGet, "/stream", nil))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Equal(t, "boom", rec.Body.String())
+}
+
+// TestTimeout_StreamingChunkedWrites 验证多次 Write+Flush 的流式响应内容完整、状态码正确。
+func TestTimeout_StreamingChunkedWrites(t *testing.T) {
+	stream := func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPartialContent)
+		f, _ := w.(http.Flusher)
+		for _, chunk := range []string{"a", "b", "c"} {
+			_, _ = w.Write([]byte(chunk))
+			if f != nil {
+				f.Flush()
+			}
+		}
+	}
+
+	rec := perform(NewTimeout(time.Second).Middleware(), stream,
+		httptest.NewRequest(http.MethodGet, "/stream", nil))
+	assert.Equal(t, http.StatusPartialContent, rec.Code)
+	assert.Equal(t, "abc", rec.Body.String())
+}

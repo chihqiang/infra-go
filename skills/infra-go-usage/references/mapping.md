@@ -82,11 +82,18 @@ func main() {
 | ------ | ------ | ------ |
 | `default` | `default=<值>` | 默认值，未提供时自动填充 |
 | `env` | `env=<变量名>` | 环境变量名，优先从环境变量读取 |
-| `optional` | `optional` 或 `optional=!dep` | 字段可选，未提供时不报错 |
+| `optional` | `optional` / `optional=dep` / `optional=!dep` | 字段可选；带依赖时条件可选 |
 | `options` | `options=[a,b,c]` 或 `options=a\|b\|c` | 枚举验证，值必须在列表中 |
 | `range` | `range=[min:max]` | 数值范围验证 |
 | `string` | `string` | 强制从字符串模式解析值 |
-| `inherit` | `inherit` | 从父级继承值 |
+
+> **未知选项会报错**。标签中的拼写错误（如 `optinal`）或前缀误写
+> （如 `defaultFoo=bar`）会直接返回 `unknown option` 错误，而不是被静默忽略。
+> 这使得“标签写错导致字段行为不符预期”能在加载期被发现，
+> 而不是等到运行期以 `field not set` 的形式暴露。
+>
+> 历史上 `inherit` 会被解析但从未生效，现已明确报错（本设计中没有“父级”概念）：
+> 如果确实需要继承语义，请显式写出值或给字段加 `default`。
 
 ### 默认值（default）
 
@@ -127,6 +134,38 @@ type Config struct {
 }
 ```
 
+#### 条件可选（optional=dep）
+
+可以声明“仅在某个依赖被设置时才可选”，依赖名为**配置键**
+（即依赖字段的 json/yaml 标签键）：
+
+```go
+type Config struct {
+    // 依赖存在时可选：给了 use_proxy 就可以不写 proxy_url
+    UseProxy bool   `json:"use_proxy,optional"`
+    ProxyURL string `json:"proxy_url,optional=use_proxy"`
+
+    // 依赖不存在时可选：没给 mode 就不需要提供 custom_mode
+    Mode       string `json:"mode,optional"`
+    CustomMode string `json:"custom_mode,optional=!mode"`
+}
+```
+
+语义与覆盖规则：
+
+| 标签 | 可选条件 | 条件不满足时 |
+|------|---------|-------------|
+| `optional=dep` | `dep` **已设置** | 未提供值则报错（视为必填） |
+| `optional=!dep` | `dep` **未设置** | 未提供值则报错（视为必填） |
+
+- 依赖名必须能匹配同一结构体（含匿名嵌入字段）中的某个字段键，
+  否则返回 `does not match any field key` 错误 —— 避免依赖名写错导致
+  条件可选静默失效。
+- 依赖查找与字段取值走同一路径：配置 `WithCanonicalKeyFunc(strings.ToLower)`
+  时同样大小写不敏感。
+- 字段同时有 `default` 时**忽略依赖检查**：默认值总能填上值，依赖与之无关。
+- 字段自己提供了值时不做依赖判定。
+
 ### 枚举验证（options）
 
 ```go
@@ -156,6 +195,26 @@ type Config struct {
 - `[` 表示包含左边界，`(` 表示不包含
 - `]` 表示包含右边界，`)` 表示不包含
 - `[:max]` 表示只有上界，`[min:]` 表示只有下界
+
+约束在所有写入路径上一致生效，不会因值的来源或表示形式被绕过：
+
+| 值的来源 / 形式 | 是否校验 |
+|----------------|:---:|
+| 配置中的原生数值（`port: 9090`） | ✅ |
+| 类型不匹配、需字符串转换的值（`port: "9090"`、`json.Number`） | ✅ |
+| 环境变量覆盖（`env=PORT`） | ✅ |
+| 标签中声明的 `default` | ✅ |
+| `time.Duration` 字段（比较单位为**纳秒**，与底层 `int64` 一致） | ✅ |
+| `FillDefault` 填充的默认值 | ✅ |
+
+```go
+type Config struct {
+    // 越界默认值属于标签声明错误，会在加载期直接报错
+    Port    int           `json:",default=8080,range=[1:65535]"`
+    // duration 的 range 以纳秒为单位：1ns ≤ timeout ≤ 10s
+    Timeout time.Duration `json:",default=5s,range=[1:10000000000]"`
+}
+```
 
 ### 组合使用
 

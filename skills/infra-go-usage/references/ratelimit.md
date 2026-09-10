@@ -83,11 +83,35 @@ HTTP 限流中间件已迁至 `httpx/middleware` 子包：`middleware.NewRateLim
 
 特性：
 
-- 被限流返回 **429 Too Many Requests**
+- 被限流返回 **429 Too Many Requests**，并按 RFC 6585 §4 携带 **`Retry-After`**
 - 通过 `AllowContext` 复用请求 context，Redis 限流器自动获得超时控制
 - 限流组件异常时 **fail-open 放行**并记录错误日志，避免 Redis 抖动拖垮服务
 - `skipPaths` 可跳过健康检查等路径（精确匹配或 `*` 前缀通配，同 `httpx.WithLogger`）
 - `limiter` 为 nil 时降级为不限流并记录告警（不 panic）
+
+### Retry-After（建议重试间隔）
+
+本包的限流器均实现了 `RetryAfter() time.Duration`，HTTP 中间件据此生成
+`Retry-After`（RFC 9110 §10.2.3），让客户端在正确的时机重试而非盲目退避：
+
+| 限流器 | `RetryAfter()` 含义 |
+|--------|------------------|
+| `TokenBucket` | 距下一个令牌可用（由实时令牌数与 `rate` 算出） |
+| `SlidingWindow` | 最早一次记录滑出窗口 |
+| `RedisTokenBucket` | 生成一个令牌所需时长（按 `rate` 估计） |
+| `RedisSlidingWindow` | 整个窗口时长（保守上界，避免在限流路径上再访问 Redis） |
+| `Concurrency` | **未实现** —— 占用时长不可预测，编造数值会误导客户端 |
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 2
+```
+
+> 自定义限流器若未实现 `RetryAfter()`，可用
+> `middleware.NewRateLimit(lim).WithRetryAfter(d)` 给出固定值；
+> 两者都没有时**省略该头**，而不是发送编造的时长。
+>
+> 数值统一**向上取整到秒**；不足 1 秒也输出 `1`，避免 `Retry-After: 0`。
 
 ### httpx 用法
 
@@ -172,6 +196,9 @@ tb1 := ratelimit.NewRedisTokenBucket(rdb, "shared:api:limit", 100, 200)
 tb2 := ratelimit.NewRedisTokenBucket(rdb, "shared:api:limit", 100, 200)
 ```
 
+> **要求**：所有实例必须把**同一个键**传给限流器，且各实例使用**同一组** `rate`/`burst`/`limit`/`window` 参数。
+> 参数不一致时，脚本会按调用方自己传入的值判断，导致行为不可预期。
+
 ## 原理说明
 
 ### Redis 令牌桶
@@ -181,6 +208,14 @@ tb2 := ratelimit.NewRedisTokenBucket(rdb, "shared:api:limit", 100, 200)
 ### Redis 滑动窗口
 
 用 Lua 脚本 + Redis ZSET 实现：`ZREMRANGEBYSCORE` 移除窗口外旧记录 → `ZCARD` 统计当前窗口请求数 → 未超限则 `ZADD` 当前时间戳 → 设置键过期自动清理。
+
+ZSET 成员（member）的格式为 `<进程唯一前缀>:<毫秒时间戳>:<进程内计数>`，
+前缀由 `crypto/rand` 生成，保证**跨进程**唯一。
+
+> 这一点对计数的正确性至关重要：`ZADD` 对已存在的成员只更新 score、不增加基数，
+> 而窗口大小是用 `ZCARD` 统计的。若成员不含节点标识，两个实例在同一毫秒
+> 各自从计数 1 开始，就会生成相同的成员 → `ZADD` 覆盖 → `ZCARD` 低估真实请求数
+> → 实际放行量超过 `limit`，全局限流形同虚设。
 
 ## 错误处理
 

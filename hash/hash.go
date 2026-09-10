@@ -170,8 +170,16 @@ func fileHash(path string, h hash.Hash) (string, error) {
 
 // Hash 使用指定的 hash.Hash 计算数据的哈希值，返回十六进制字符串。
 // 适用于需要自定义哈希算法的场景。
+//
+// h 会先被 Reset，因此复用同一个 hash.Hash 实例（如包级共享的 sha256.New()）
+// 是安全的，每次调用都只对本次 data 求值。
+// 注意：本函数会重置 h 的内部状态，请勿用它计算分块累积的摘要
+// （累积场景应直接使用 h.Write / h.Sum）。
 func Hash(data []byte, h hash.Hash) string {
-	h.Write(data)
+	// Write 不会重置状态，Sum 也不会。若不 Reset，复用同一实例时
+	// 第二次调用会得到"累积摘要"而非本次数据的摘要，且不会报错。
+	h.Reset()
+	_, _ = h.Write(data)
 	return hex.EncodeToString(h.Sum(nil))
 }
 

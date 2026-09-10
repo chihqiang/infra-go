@@ -52,6 +52,13 @@ val, err := sf.DoCtx(ctx, "user:123", func(ctx context.Context) (string, error) 
 | `DoCtx(ctx, key, fn)` | 同上，支持 context 取消 |
 | `Forget(key)` | 清除 key 的调用记录，下次重新执行 |
 
+> **panic 会传播给所有等待者**：若 leader 的 `fn` panic，等待者会收到**同一个
+> panic 值并同样 panic**，而不会被转换成零值返回。因此调用方的 `recover`
+> 必须覆盖每个 `Do`/`DoCtx` 调用点（而不只是发起调用的那一个）。
+>
+> 这样设计是为了避免"静默数据损坏"：在缓存击穿场景下，若等待者拿到
+> 零值 + `nil` error，上层会误判为加载成功并把零值写回缓存或返回给用户。
+
 ## ConcurrentMap
 
 泛型分段锁 Map，默认 32 个分段，比全局单一锁有更好的并发性能。

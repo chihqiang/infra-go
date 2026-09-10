@@ -2,6 +2,8 @@ package orm
 
 import (
 	"fmt"
+	"os"
+	"sync/atomic"
 
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
@@ -189,11 +191,25 @@ func buildPostgresDSN(c Config) string {
 		c.Host, c.Username, c.Password, c.Database, c.Port, sslMode, timeZone)
 }
 
+// sqliteMemCounter 为内存数据库实例生成唯一序号。
+var sqliteMemCounter atomic.Uint64
+
 // buildSQLiteDSN 构建 SQLite 连接字符串。
-// Config.Database 为文件路径，为空时使用内存数据库。
+// Config.Database 为文件路径；为空时使用**本实例独占**的内存数据库。
+//
+// 独占性很重要：旧实现固定返回 "file::memory:?cache=shared"，
+// 而带 cache=shared 的同名 DSN 在**整个进程内共享同一个数据库**，
+// 因此两次 New 会拿到同一个库 —— 一个组件建的表/写入的数据会被另一个看到，
+// 且进程退出即丢数据（容易被误认为"数据莫名消失"）。
+//
+// 这里为每次调用生成唯一的库名，既保留"零配置即可用内存库"的便利
+// （测试场景常用），又保证实例之间互不干扰。
+// 注意仍保留 cache=shared：匿名内存库（:memory:）会让连接池中每个连接各拿到
+// 一个独立的库，导致建表后其他连接看不到，那才是更常见的坑。
 func buildSQLiteDSN(c Config) string {
 	if c.Database == "" {
-		return "file::memory:?cache=shared"
+		return fmt.Sprintf("file:orm_mem_%d_%d?mode=memory&cache=shared",
+			os.Getpid(), sqliteMemCounter.Add(1))
 	}
 	return c.Database
 }

@@ -114,22 +114,27 @@ func (c *Cryption) Middleware() func(http.Handler) http.Handler {
 				code = http.StatusOK
 			}
 
-			// 明文透传分支：
-			//  1) 缓冲超限（响应过大，回退明文避免 OOM）；
-			//  2) 非 2xx（错误/重定向响应明文，便于客户端直接读取与排错）；
-			//  3) 204/205（HTTP 规定无响应体，不得输出密文 body）；
-			//  4) HEAD 请求（无响应体）。
 			encryptable := code >= http.StatusOK && code < http.StatusMultipleChoices &&
 				code != http.StatusNoContent && code != http.StatusResetContent &&
 				r.Method != http.MethodHead
 
-			if cw.Overflowed() || !encryptable {
-				if cw.Overflowed() {
-					logger.WarnCtx(r.Context(), "encrypted response exceeds max buffer, falling back to plaintext",
-						logger.String("path", r.URL.Path),
-						logger.Int("max_bytes", c.maxResponseBytes),
-					)
-				}
+			// 缓冲超限：CryptionWriter 已切换为明文透传模式，
+			// 响应头与（已缓冲 + 后续的）完整正文都已写入底层，此处不可再写，
+			// 否则会产生重复响应。历史缺陷：此处只写出截断的缓冲前缀，
+			// 导致超限响应被静默截断，客户端拿到残缺数据且无任何错误信号。
+			if cw.Overflowed() {
+				logger.WarnCtx(r.Context(), "encrypted response exceeds max buffer, falling back to plaintext",
+					logger.String("path", r.URL.Path),
+					logger.Int("max_bytes", c.maxResponseBytes),
+				)
+				return
+			}
+
+			// 明文透传分支：
+			//  1) 非 2xx（错误/重定向响应明文，便于客户端直接读取与排错）；
+			//  2) 204/205（HTTP 规定无响应体，不得输出密文 body）；
+			//  3) HEAD 请求（无响应体）。
+			if !encryptable {
 				// Content-Length 交由 net/http 按实际 body 自动计算，避免与透传内容不一致
 				w.Header().Del("Content-Length")
 				w.WriteHeader(code)

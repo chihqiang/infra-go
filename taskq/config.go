@@ -3,6 +3,7 @@ package taskq
 import (
 	"time"
 
+	"github.com/chihqiang/infra-go/logger"
 	"github.com/chihqiang/infra-go/mapping"
 )
 
@@ -55,7 +56,12 @@ func fillDefault(cfg Config) Config {
 		c.Concurrency = cfg.Concurrency
 	}
 	if len(cfg.Queues) > 0 {
-		c.Queues = cfg.Queues
+		// 必须拷贝：asynq 会直接持有该 map 并并发读取，
+		// 与调用方共享同一实例会在调用方后续修改时构成数据竞争。
+		c.Queues = make(map[string]int, len(cfg.Queues)+1)
+		for name, priority := range cfg.Queues {
+			c.Queues[name] = priority
+		}
 	}
 	if cfg.ShutdownTimeout != 0 {
 		c.ShutdownTimeout = cfg.ShutdownTimeout
@@ -69,5 +75,37 @@ func fillDefault(cfg Config) Config {
 	if cfg.DefaultQueue != "" {
 		c.DefaultQueue = cfg.DefaultQueue
 	}
+
+	// 保证生产者投递的队列（DefaultQueue）确实被消费者订阅。
+	//
+	// 若只配了 Queues 而 DefaultQueue 不在其中（默认 "default"），
+	// 生产者会把任务投到一个无人消费的队列：Enqueue 返回成功、任务永久滞留，
+	// 且没有任何错误提示。这里自动补上该队列，避免静默丢任务。
+	c = ensureDefaultQueueConsumed(c)
+	return c
+}
+
+// ensureDefaultQueueConsumed 保证 DefaultQueue 出现在消费者订阅的队列列表中。
+// Queues 为空时本函数不做处理（toAsynqConfig 会自行兵底为 {DefaultQueue: 1}）。
+func ensureDefaultQueueConsumed(c Config) Config {
+	if len(c.Queues) == 0 {
+		return c
+	}
+	if _, ok := c.Queues[c.DefaultQueue]; ok {
+		return c
+	}
+
+	// 拷贝后再改，避免与调用方共享底层数据
+	queues := make(map[string]int, len(c.Queues)+1)
+	for name, priority := range c.Queues {
+		queues[name] = priority
+	}
+	queues[c.DefaultQueue] = defaultQueuePriority
+	c.Queues = queues
+
+	logger.Warn(
+		"taskq: DefaultQueue is not listed in Queues, it was added automatically to avoid unconsumed tasks",
+		logger.String("default_queue", c.DefaultQueue),
+	)
 	return c
 }

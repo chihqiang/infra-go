@@ -104,13 +104,67 @@ func TestBuildPostgresDSN(t *testing.T) {
 }
 
 func TestBuildSQLiteDSN(t *testing.T) {
-	// 空数据库路径使用内存数据库
+	// 空数据库路径使用内存数据库，且每次调用生成唯一库名（实例间不共享）
 	dsn := buildSQLiteDSN(Config{})
-	assert.Equal(t, "file::memory:?cache=shared", dsn)
+	assert.Contains(t, dsn, "mode=memory")
+	assert.Contains(t, dsn, "cache=shared", "shared cache is required for pool connections to see the same DB")
 
-	// 指定文件路径
+	dsn2 := buildSQLiteDSN(Config{})
+	assert.NotEqual(t, dsn, dsn2, "each instance must get its own in-memory database")
+
+	// 指定文件路径时原样使用
 	dsn = buildSQLiteDSN(Config{Database: "/tmp/test.db"})
 	assert.Equal(t, "/tmp/test.db", dsn)
+}
+
+// TestSQLite_MemoryDBNotSharedBetweenInstances 回归测试：两个默认配置的 SQLite 实例
+// 必须拥有各自独立的内存库。
+//
+// 历史缺陷：空 Database 固定返回 "file::memory:?cache=shared"，
+// 该 DSN 在**整个进程内共享同一个数据库**，导致一个实例建的表/写入的数据
+// 会被另一个实例看到（组件间数据串扰），且进程退出即丢失。
+func TestSQLite_MemoryDBNotSharedBetweenInstances(t *testing.T) {
+	open := func() *gorm.DB {
+		db, err := New(Config{Driver: DriverSQLite})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = Close(db) })
+		return db
+	}
+
+	db1 := open()
+	db2 := open()
+
+	require.NoError(t, db1.Exec("CREATE TABLE only_in_db1 (id INTEGER)").Error)
+	require.NoError(t, db1.Exec("INSERT INTO only_in_db1 (id) VALUES (1)").Error)
+
+	// db1 自己可以读到
+	var count int64
+	require.NoError(t, db1.Raw("SELECT COUNT(*) FROM only_in_db1").Scan(&count).Error)
+	assert.Equal(t, int64(1), count)
+
+	// db2 不能看到 db1 的表
+	err := db2.Raw("SELECT COUNT(*) FROM only_in_db1").Scan(&count).Error
+	assert.Error(t, err, "instances must not share an in-memory database")
+}
+
+// TestSQLite_MemoryDBPoolsShareWithinInstance 验证同一实例内的多个连接
+// 看到同一个库（cache=shared 的作用）。
+func TestSQLite_MemoryDBPoolsShareWithinInstance(t *testing.T) {
+	db, err := New(Config{Driver: DriverSQLite})
+	require.NoError(t, err)
+	defer func() { _ = Close(db) }()
+
+	require.NoError(t, db.Exec("CREATE TABLE t (id INTEGER)").Error)
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	// 开多个连接，确认都能看到该表（匿名 :memory: 会各自独立，导致这里失败）
+	sqlDB.SetMaxOpenConns(4)
+	for i := 0; i < 8; i++ {
+		var n int
+		require.NoError(t, db.Raw("SELECT COUNT(*) FROM t").Scan(&n).Error,
+			"all pooled connections must see the same in-memory database")
+	}
 }
 
 func TestNewSQLite_MemoryDB(t *testing.T) {

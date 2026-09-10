@@ -322,8 +322,29 @@ room.Delete(1, "room1")                  // 将连接 1 从 room1 移除
 room.Delete(1)                           // 移除连接 1 的所有房间
 clients := room.GetClients("room1")     // 获取房间内的连接 ID 列表
 rooms := room.GetRooms(1)               // 获取连接 1 所在的所有房间
-room.Clear()                             // 清空所有房间
+room.Clear()                             // 清空所有房间（⚠️ 仅运维/测试用，见下）
 ```
+
+> ⚠️ **`Clear` 影响所有实例**：Redis 房间的键（`{prefix}rooms:*` / `{prefix}fds:*`）
+> 由集群中所有实例共享，`Clear` 会把**其他节点**的连接也从房间中抹掉，
+> 使其后续广播静默失效。因此它只应用于运维/测试场景。
+>
+> `Server.Close()` **不会**调用 `Clear`，它只把本实例的连接移出房间
+> （通过 `room.Delete(fd)` 逐个清理），不会影响其他节点。
+
+### 写超时与慢客户端
+
+每次写入前都会设置写截止时间（`WriteTimeout`，默认 10 秒）。这是必需的：
+客户端若不读取数据，其 TCP 缓冲区写满后 `WriteMessage` 会**无限阻塞**，
+且阻塞期间持有该连接的写锁，会连带卡住：
+
+- 广播循环（阻塞调用方的业务 goroutine）
+- `Conn.Close()` 与整个 `Server.Close()`
+- 该连接的心跳 goroutine
+
+超过 `WriteTimeout` 后写入返回错误（通常是 `i/o timeout`），锁被释放，
+上述流程可以继续。默认值对正常客户端足够宽松，无需调整；只有在网络极差、
+单条消息极大等场景才需要调大。
 
 ## 配置
 
@@ -335,6 +356,7 @@ room.Clear()                             // 清空所有房间
 | `PingTimeout` | `time.Duration` | `60s` | 心跳超时时间 |
 | `ReadBufferSize` | `int` | `4096` | 读缓冲区大小（字节） |
 | `WriteBufferSize` | `int` | `4096` | 写缓冲区大小（字节） |
+| `WriteTimeout` | `time.Duration` | `10s` | 单次写操作的超时时间；设为负值可禁用 |
 | `MaxMessageSize` | `int64` | `4096` | 单条消息最大大小（字节） |
 | `NodeID` | `uint16` | `0` | 节点 ID，集群部署时每个实例必须不同 |
 | `RoomType` | `string` | `memory` | 房间存储类型（`memory` 或 `redis`） |

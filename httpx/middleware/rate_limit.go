@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/chihqiang/infra-go/httpx/x"
 	"github.com/chihqiang/infra-go/logger"
@@ -21,10 +22,16 @@ type RateLimiter interface {
 
 // RateLimit 是基于限流器的 HTTP 限流中间件。
 // 每个请求先向限流器申请配额，允许则放行；被限流返回 429 Too Many Requests。
+//
+// 被限流时若限流器实现了 RetryAfterProvider，会据其给出精确的 Retry-After
+// （RFC 9110 §10.2.3）；否则回退到 WithRetryAfter 配置的值，仍未设置则省略该头。
 type RateLimit struct {
 	limiter  RateLimiter
 	disabled bool // limiter 为 nil 时降级为不限流（fail-open）
 	matcher  *x.PathMatcher
+
+	// retryAfter 为限流器无法给出估计时的回退重试间隔，0 表示不发送该头。
+	retryAfter time.Duration
 }
 
 // NewRateLimit 创建 HTTP 限流中间件。
@@ -53,6 +60,28 @@ func NewRateLimit(limiter RateLimiter, skipPaths ...string) *RateLimit {
 		logger.Warn("middleware: NewRateLimit called with nil limiter, rate limiting disabled")
 	}
 	return rl
+}
+
+// WithRetryAfter 设置限流器无法给出精确估计时的回退重试间隔。
+//
+// ratelimit 内置限流器（TokenBucket/SlidingWindow 及其 Redis 版本）
+// 均实现了 RetryAfterProvider，因此无需调用本方法即可获得准确的 Retry-After。
+// 仅在自定义限流器不实现该接口、且希望仍给出提示时使用。
+// d <= 0（默认）表示不发送 Retry-After 头 —— 与其给出编造的时长，不如省略。
+func (rl *RateLimit) WithRetryAfter(d time.Duration) *RateLimit {
+	rl.retryAfter = d
+	return rl
+}
+
+// resolveRetryAfter 返回本次限流应提示的重试间隔。
+// 优先使用限流器给出的精确值，其次回退到配置值。
+func (rl *RateLimit) resolveRetryAfter() time.Duration {
+	if p, ok := rl.limiter.(RetryAfterProvider); ok {
+		if d := p.RetryAfter(); d > 0 {
+			return d
+		}
+	}
+	return rl.retryAfter
 }
 
 // Middleware 返回标准形式 func(http.Handler) http.Handler 的限流中间件。
@@ -92,7 +121,10 @@ func (rl *RateLimit) Middleware() func(http.Handler) http.Handler {
 					logger.String("path", r.URL.Path),
 					logger.String("remote", x.ClientIP(r)),
 				)
-				writeError(r.Context(), w, http.StatusTooManyRequests, http.StatusText(http.StatusTooManyRequests))
+				// RFC 6585 §4：429 可以（MAY）携带 Retry-After 指示何时重试。
+				// 客户端退避逻辑普遍依赖该头，故尽量给出精确值。
+				WriteRetryAfter(r.Context(), w, http.StatusTooManyRequests,
+					rl.resolveRetryAfter(), http.StatusText(http.StatusTooManyRequests))
 				return
 			}
 

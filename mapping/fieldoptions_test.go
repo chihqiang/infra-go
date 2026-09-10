@@ -188,25 +188,107 @@ func TestParseKeyAndOptions_InvalidOption(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestParseKeyAndOptions_Inherit 验证 inherit 被明确拒绝。
+//
+// 历史行为：inherit 被解析并写入 fieldOptions.Inherit，但 unmarshaler 从未读取它 ——
+// 文档承诺"从父级继承值"，实际什么都没做。本设计中没有"父级"概念，
+// 因此改为报错，而不是继续静默忽略。
 func TestParseKeyAndOptions_Inherit(t *testing.T) {
 	type S struct {
 		X string `json:"x,inherit"`
 	}
-	_, opts, err := parseKeyAndOptions("json", reflect.TypeOf(S{}).Field(0))
-	assert.NoError(t, err)
-	require.NotNil(t, opts)
-	assert.True(t, opts.Inherit)
+	_, _, err := parseKeyAndOptions("json", reflect.TypeOf(S{}).Field(0))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not supported")
+	assert.Contains(t, err.Error(), "inherit")
 }
 
 func TestParseKeyAndOptions_OptionalDep(t *testing.T) {
 	type S struct {
-		X string `json:"x,optional=Other"`
+		X string `json:"x,optional=other"`
 	}
 	_, opts, err := parseKeyAndOptions("json", reflect.TypeOf(S{}).Field(0))
 	assert.NoError(t, err)
 	require.NotNil(t, opts)
 	assert.True(t, opts.Optional)
-	assert.Equal(t, "Other", opts.OptionalDep)
+	assert.Equal(t, "other", opts.OptionalDep)
+	assert.False(t, opts.OptionalDepNegate, "without ! the dependency is not negated")
+}
+
+func TestParseKeyAndOptions_OptionalDepNegated(t *testing.T) {
+	type S struct {
+		X string `json:"x,optional=!other"`
+	}
+	_, opts, err := parseKeyAndOptions("json", reflect.TypeOf(S{}).Field(0))
+	require.NoError(t, err)
+	require.NotNil(t, opts)
+	assert.True(t, opts.Optional)
+	assert.Equal(t, "other", opts.OptionalDep)
+	assert.True(t, opts.OptionalDepNegate)
+}
+
+// TestParseKeyAndOptions_OptionalNegatedEmpty 验证 `optional=!` 被拒绝。
+func TestParseKeyAndOptions_OptionalNegatedEmpty(t *testing.T) {
+	type S struct {
+		X string `json:"x,optional=!"`
+	}
+	_, _, err := parseKeyAndOptions("json", reflect.TypeOf(S{}).Field(0))
+	assert.Error(t, err)
+}
+
+// TestParseKeyAndOptions_UnknownOption 回归测试：未知选项必须报错。
+//
+// 历史缺陷：parseOption 用 strings.HasPrefix 逐个匹配且无 default 分支，
+// 拼写错误（如 optinal）被静默忽略 —— 字段按必填处理，
+// 直到运行期才以 "field not set" 暴露，且错误信息不指向真实原因。
+func TestParseKeyAndOptions_UnknownOption(t *testing.T) {
+	cases := []struct {
+		name string
+		tag  string
+	}{
+		{"typo in optional", `json:"x,optinal"`},
+		{"typo in default", `json:"x,defualt=1"`},
+		{"typo in range", `json:"x,rang=[1:2]"`},
+		{"unknown word", `json:"x,bogus"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var field reflect.StructField
+			switch tc.tag {
+			case `json:"x,optinal"`:
+				field = reflect.TypeOf(struct {
+					X string `json:"x,optinal"`
+				}{}).Field(0)
+			case `json:"x,defualt=1"`:
+				field = reflect.TypeOf(struct {
+					X string `json:"x,defualt=1"`
+				}{}).Field(0)
+			case `json:"x,rang=[1:2]"`:
+				field = reflect.TypeOf(struct {
+					X string `json:"x,rang=[1:2]"`
+				}{}).Field(0)
+			default:
+				field = reflect.TypeOf(struct {
+					X string `json:"x,bogus"`
+				}{}).Field(0)
+			}
+			_, _, err := parseKeyAndOptions("json", field)
+			require.Error(t, err, "unknown option must be rejected")
+			assert.Contains(t, err.Error(), "unknown option")
+		})
+	}
+}
+
+// TestParseKeyAndOptions_PrefixMustNotMatch 回归测试：前缀不得误匹配。
+//
+// 历史缺陷：`defaultFoo=bar` 会因 HasPrefix("default") 而生效为 Default="bar"。
+func TestParseKeyAndOptions_PrefixMustNotMatch(t *testing.T) {
+	type S struct {
+		X string `json:"x,defaultFoo=bar"`
+	}
+	_, _, err := parseKeyAndOptions("json", reflect.TypeOf(S{}).Field(0))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown option")
 }
 
 func TestParseKeyAndOptions_OptionalInvalid(t *testing.T) {

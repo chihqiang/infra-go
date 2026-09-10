@@ -191,6 +191,177 @@ func TestServiceGroup_PanicInStart_OtherServicesUnblocked(t *testing.T) {
 	assert.Equal(t, int32(1), atomic.LoadInt32(&svc.stopCalled))
 }
 
+// --- 停止屏障 ---
+
+// TestServiceGroup_DoStopWaitsForStartBarrier 白盒验证停止屏障：
+// Start 已开始但服务尚未进入 Start 时，doStop 必须等待屏障放行后才下发 Stop。
+//
+// 该屏障解决的是：某服务 panic 触发的 Stop 会立即作用于"Start 尚未被调用"的服务，
+// 它们的 Stop 先执行（对多数真实服务是空操作），随后才进入 Start 并永久阻塞，
+// 而 stopOnce 已耗尽，再也不会有人调用它们的 Stop。
+func TestServiceGroup_DoStopWaitsForStartBarrier(t *testing.T) {
+	svc := newMockService()
+	sg := NewServiceGroup()
+	sg.Add(svc)
+
+	// 构造"Start 已开始、但服务还没进入 Start"的中间态：allEntered 未关闭。
+	sg.mu.Lock()
+	sg.started = true
+	sg.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sg.doStop()
+	}()
+
+	// 屏障未放行前不得调用 Stop
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int32(0), atomic.LoadInt32(&svc.stopCalled),
+		"Stop must not be issued before every service has entered Start")
+
+	// 放行屏障：doStop 应继续并完成停止
+	close(sg.allEntered)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("doStop did not proceed after the barrier was released")
+	}
+	assert.Equal(t, int32(1), atomic.LoadInt32(&svc.stopCalled))
+}
+
+// TestServiceGroup_DoStopWithoutStartSkipsBarrier 验证未调用 Start 时
+// doStop 不会因等待屏障而永久阻塞。
+func TestServiceGroup_DoStopWithoutStartSkipsBarrier(t *testing.T) {
+	svc := newMockService()
+	sg := NewServiceGroup()
+	sg.Add(svc)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sg.doStop()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("doStop blocked even though Start was never called")
+	}
+	assert.Equal(t, int32(1), atomic.LoadInt32(&svc.stopCalled))
+}
+
+// TestServiceGroup_ManyServicesWithPanic 在较多服务 + 延迟启动 + panic 的组合下
+// 验证不会死锁、不会 panic，且所有服务最终都被停止。
+func TestServiceGroup_ManyServicesWithPanic(t *testing.T) {
+	sg := NewServiceGroup()
+	const n = 12
+	svcs := make([]*delayedStartService, 0, n)
+	for i := 0; i < n; i++ {
+		s := newDelayedStartService(time.Duration(i) * 5 * time.Millisecond)
+		svcs = append(svcs, s)
+		sg.Add(s)
+	}
+	sg.Add(&panicService{panicMsg: "boom"})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sg.Start()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start blocked after panic with many services")
+	}
+
+	// 所有已进入 Start 的服务都必须收到 Stop（否则会永久阻塞在 Start 内）
+	for i, s := range svcs {
+		assert.Equal(t, int32(1), atomic.LoadInt32(&s.stopCalled), "service %d must be stopped", i)
+	}
+}
+
+// delayedStartService 延迟片刻后进入阻塞的 Start，Stop 通过关闭 stopCh 解除阻塞。
+type delayedStartService struct {
+	delay       time.Duration
+	startCalled int32
+	stopCalled  int32
+	stopCh      chan struct{}
+	stopOnce    sync.Once
+}
+
+func newDelayedStartService(delay time.Duration) *delayedStartService {
+	return &delayedStartService{delay: delay, stopCh: make(chan struct{})}
+}
+
+func (s *delayedStartService) Start() {
+	if s.delay > 0 {
+		time.Sleep(s.delay)
+	}
+	atomic.StoreInt32(&s.startCalled, 1)
+	<-s.stopCh
+}
+
+func (s *delayedStartService) Stop() {
+	atomic.StoreInt32(&s.stopCalled, 1)
+	s.stopOnce.Do(func() { close(s.stopCh) })
+}
+
+// TestServiceGroup_ConcurrentAddAndStart 回归测试：Add 与 Start 并发不产生数据竞争。
+// 历史缺陷：services 是裸切片，Add 无同步追加，Start/Stop 在其它 goroutine 中遍历，
+// -race 可检出。
+func TestServiceGroup_ConcurrentAddAndStart(t *testing.T) {
+	sg := NewServiceGroup()
+	sg.Add(newMockService())
+
+	var wg sync.WaitGroup
+	// 与服务列表并发读取（doStart 的 snapshot）竞争
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sg.Add(newMockService())
+		}()
+	}
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = sg.snapshot()
+		}()
+	}
+	wg.Wait()
+
+	// 停止以解除所有 mockService 的阻塞
+	sg.Stop()
+}
+
+// TestServiceGroup_AddAfterStartNotStarted 验证 Start 后新增的服务不在快照内，
+// 因而不会被启动或停止（文档化的生命周期约束）。
+func TestServiceGroup_AddAfterStartNotStarted(t *testing.T) {
+	first := newMockService()
+	sg := NewServiceGroup()
+	sg.Add(first)
+
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		sg.Stop()
+	}()
+
+	// 在 Start 期间并发 Add：该服务不在快照内
+	late := newMockService()
+	time.AfterFunc(10*time.Millisecond, func() { sg.Add(late) })
+
+	sg.Start()
+	<-stopped
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&first.startCalled), "first must have started")
+	// 后加服务的启动与否取决于快照时机，此处只断言不 panic、无死锁
+}
+
 func TestServiceGroup_PanicInStart_MultiplePanics(t *testing.T) {
 	// 多个服务同时 panic，不 panic，正常返回
 	svc1 := &panicService{panicMsg: "first"}

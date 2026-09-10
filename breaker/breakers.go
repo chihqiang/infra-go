@@ -37,6 +37,27 @@ func NoBreakerFor(name string) {
 	breakersLock.Unlock()
 }
 
+// RegistrySize 返回全局注册表中已缓存的熔断器数量。
+//
+// 主要用于观测与测试：注册表按名称永久缓存、不会自动淘汰，
+// 因此调用方必须保证 name 的基数有界。
+// 若该值随请求量持续增长，说明 name 里混入了高基数字段
+// （例如把具体路径 /users/123 而非路由模板 /users/{id} 当作名称）。
+func RegistrySize() int {
+	breakersLock.RLock()
+	defer breakersLock.RUnlock()
+	return len(breakers)
+}
+
+// RemoveBreaker 从全局注册表中移除指定名称的熔断器（下次获取时重新创建）。
+// 用于释放不再使用的名称，避免注册表长期累积。
+// 已持有该实例的调用方不受影响（它们继续使用旧实例）。
+func RemoveBreaker(name string) {
+	breakersLock.Lock()
+	delete(breakers, name)
+	breakersLock.Unlock()
+}
+
 // Do 使用指定名称的熔断器执行请求。
 func Do(name string, req func() error) error {
 	return GetBreaker(name).Do(req)

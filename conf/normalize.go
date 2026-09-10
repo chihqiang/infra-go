@@ -2,8 +2,9 @@ package conf
 
 // 本文件负责将解析出的配置 map 规整到可反序列化状态：
 //   - normalizeMap/normalizeValue/...：把 YAML 产生的各类值统一为 json.Number
-//   - lowercaseKeys/lowercaseValues：key 小写化（大小写不敏感匹配）
 //   - unmarshalMap：规整后的 map 反序列化到目标结构体
+//     （字段名大小写不敏感匹配由 mapping 的 canonicalKey 完成，
+//     不在这里改写 map 的键，以免破坏 map 字段的数据）
 
 import (
 	"encoding/json"
@@ -109,41 +110,14 @@ func normalizeSlice(s []any) []any {
 	return result
 }
 
-// lowercaseKeys 递归地将 map 中所有 key 转为小写，支持大小写不敏感匹配。
-func lowercaseKeys(m map[string]any) map[string]any {
-	if m == nil {
-		return nil
-	}
-	result := make(map[string]any, len(m))
-	for k, v := range m {
-		result[strings.ToLower(k)] = lowercaseValues(v)
-	}
-	return result
-}
-
-// lowercaseValues 递归地将嵌套 map 中的 key 转为小写。
-func lowercaseValues(v any) any {
-	if v == nil {
-		return nil
-	}
-	switch val := v.(type) {
-	case map[string]any:
-		return lowercaseKeys(val)
-	case []any:
-		result := make([]any, len(val))
-		for i, item := range val {
-			result[i] = lowercaseValues(item)
-		}
-		return result
-	default:
-		return v
-	}
-}
-
 // unmarshalMap 将解析后的配置 map 反序列化到 v。
-// 内部负责 key 小写化（map 侧）与大小写不敏感匹配（字段侧），
+// 内部通过 mapping.WithCanonicalKeyFunc 实现字段名大小写不敏感匹配，
 // 供 Load / LoadFromJSONBytes / LoadFromYAMLBytes 复用。
+//
+// 注意：这里刻意**不**预先小写化输入 map 的键。map 的键同时也是
+// map 类型字段的数据，整体小写化会静默破坏用户数据
+// （labels: {AppName: x} 会被写成 appname，且 AppName/appname 并存时
+// 因 map 遍历顺序不同而结果不确定）。大小写不敏感匹配由 mapping 侧完成。
 func unmarshalMap(m map[string]any, v any) error {
-	m = lowercaseKeys(m)
 	return mapping.UnmarshalJsonMap(m, v, mapping.WithCanonicalKeyFunc(strings.ToLower))
 }
