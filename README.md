@@ -6,7 +6,8 @@ Go 项目底层基础设施通用封装库，整合存储、日志、配置、�
 
 ## 快速开始
 
-最小 HTTP 服务示例（配置 `conf` + 日志 `logger` + HTTP `httpx` + 生命周期编排 `service`），零外部服务依赖；需要数据库 / Redis 时再按需引入 `orm` / `redisx`：
+最小 HTTP 服务示例（配置 `conf` + 日志 `logger` + HTTP `httpx` + 生命周期编排 `service`），不需要任何外部服务；
+需要数据库 / Redis 时再按需引入 `orm` / `redisx`（依赖范围见下方[「依赖足迹」](#依赖足迹)）：
 
 ```go
 package main
@@ -81,7 +82,7 @@ port: 8080
 | ------ | ------ |
 | [conf](./skills/infra-go-usage/references/conf.md) | 配置解析，支持 JSON/YAML，默认值、环境变量、参数验证 |
 | [logger](./skills/infra-go-usage/references/logger.md) | 日志封装，基于 zap + lumberjack 滚动日志 |
-| [orm](./skills/infra-go-usage/references/orm.md) | ORM 封装，基于 gorm，支持 MySQL/PostgreSQL/SQLite |
+| [orm](./skills/infra-go-usage/references/orm.md) | ORM 封装，基于 gorm，支持 MySQL/PostgreSQL/SQLite（三个 driver 均编译进本包，见「依赖足迹」） |
 | [redisx](./skills/infra-go-usage/references/redisx.md) | Redis 客户端封装，连接池、健康检查、分布式锁 |
 | [cache](./skills/infra-go-usage/references/cache.md) | 统一缓存接口，内存（LRU 淘汰、命中率统计）+ Redis（防击穿/防穿透）两种实现 |
 | [httpx](./skills/infra-go-usage/references/httpx.md) | HTTP 工具，请求参数绑定、统一泛型响应、路由注册、优雅关闭。内置中间件：CORS/Recovery/RequestID/链路追踪/访问日志/熔断/超时/请求体限制/gzip/并发数限制/限流/JWT 认证/加解密/内容安全。核心按子包拆分：`binding`（绑定实现）、`middleware`（通用中间件，标准 `func(http.Handler) http.Handler`，可被 gin/echo 复用）、`x`（通用小工具：路径匹配 + 客户端 IP 解析）、`respw`（ResponseWriter 包装） |
@@ -90,23 +91,55 @@ port: 8080
 | [retry](./skills/infra-go-usage/references/retry.md) | 重试机制，指数退避、固定延迟、抖动 |
 | [jwt](./skills/infra-go-usage/references/jwt.md) | JWT 签发与解析，支持 HS256/HS384/HS512（HMAC）；认证中间件 `AuthMiddleware` / `httpx.WithJWT`，验证后注入业务 claims 到 context |
 | [hash](./skills/infra-go-usage/references/hash.md) | 哈希加密，MD5/SHA/Bcrypt/HMAC，AES-GCM 加密，HMAC 签名/校验 |
-| [trace](./skills/infra-go-usage/references/trace.md) | 链路追踪，基于 OpenTelemetry：agent / span 管理 / gRPC·HTTP 头传播 / 属性封装。HTTP 服务端埋点统一为 `httpx.WithTracing` |
+| [trace](./skills/infra-go-usage/references/trace.md) | 链路追踪，基于 OpenTelemetry：agent / span 管理 / gRPC·HTTP 头传播 / 属性封装。HTTP 服务端埋点统一为 `httpx.WithTracing`（四类 exporter 均编译进本包，见「依赖足迹」） |
 | [mapping](./skills/infra-go-usage/references/mapping.md) | map → struct 反序列化，struct tag 解析引擎 |
 | [cast](./skills/infra-go-usage/references/cast.md) | 类型安全转换，支持基本类型/时间/切片/泛型 |
 | [syncx](./skills/infra-go-usage/references/syncx.md) | 并发工具，SingleFlight/ConcurrentMap/Semaphore |
 | [service](./skills/infra-go-usage/references/service.md) | 服务组，并发启动/停止多个 Service，sync.Once 保证只停一次 |
 | [taskq](./skills/infra-go-usage/references/taskq.md) | 异步任务队列，基于 asynq，生产者/消费者模式 |
-| [storage](./skills/infra-go-usage/references/storage.md) | 统一对象存储接口，支持本地文件、阿里云 OSS、腾讯云 COS 和七牛云 KODO；提供写入/读取/存在性判断/删除/URL 拼接。 |
+| [storage](./skills/infra-go-usage/references/storage.md) | 统一对象存储接口，支持本地文件、阿里云 OSS、腾讯云 COS 和七牛云 KODO；提供写入/读取/存在性判断/删除/URL 拼接（三家 SDK 均编译进本包，见「依赖足迹」）。 |
 | [websocket](./skills/infra-go-usage/references/websocket.md) | WebSocket 服务封装，基于 gorilla/websocket，事件驱动、房间广播、心跳检测 |
 | [stringx](./skills/infra-go-usage/references/stringx.md) | 字符串工具包，随机生成、判断、转换、拆分连接等常用函数 |
 
 ## 特性
 
 - **统一风格**：所有模块使用中文注释、英文错误信息、函数式选项配置
-- **零依赖侵入**：每个模块独立 import，按需使用
+- **依赖可控**：模块独立 import，未使用的模块**不会**进入你的 `go.mod` / `go.sum`（Go 1.17+ 模块图剪枝）。轻量工具包（`cast` / `stringx` / `syncx` / `retry` / `mapping`）零第三方依赖；但同类实现打包在同一 package 内时无法只选一家，详见下方「依赖足迹」
 - **类型安全**：广泛使用泛型（`Response[T]`、`cast.To[T]`）
 - **可测试**：每个模块都有完整的单元测试，支持 `-race` 检测
-- **依赖治理**：统一维护依赖基线并定期升级（当前 Go 1.25 / gorm 1.31 / OpenTelemetry 1.44 等）；模块独立 import、按需引入
+- **依赖治理**：统一维护依赖基线并定期升级（当前 Go 1.25 / gorm 1.31 / OpenTelemetry 1.44 等）
+
+### 依赖足迹
+
+模块图剪枝保证**未 import 的模块不会进入消费者构建**：例如只 import `stringx` 时，消费者的
+`go.mod` 仅含 infra-go 自身一条 require、`go.sum` 仅 8 行，产出的二进制不含任何云 SDK / gorm / asynq 符号。
+
+但**同一 package 内的同类实现会一起编译进来**，无法只选其中一家。各模块实测引入的第三方模块数：
+
+| 模块 | 第三方模块数 | 说明 |
+| ---- | ----------- | ---- |
+| `cast` `mapping` `retry` `stringx` `syncx` | 0 | 仅标准库 |
+| `conf` `hash` | 1 | yaml.v3 / x/crypto |
+| `breaker` `logger` `ratelimit` `service` | 3 | |
+| `cache` `redisx` | 6 | go-redis |
+| `websocket` | 7 | |
+| `jwt` | 11 | |
+| `storage` | 12 | 阿里云 OSS + 腾讯云 COS + 七牛 KODO 三家 SDK **全量** |
+| `taskq` | 12 | asynq + go-redis + cron |
+| `orm` | 14 | MySQL + PostgreSQL + SQLite 三个 driver **全量**（含 `mattn/go-sqlite3`） |
+| `httpx` | 16 | |
+| `trace` | 17 | OTLP gRPC / OTLP HTTP / stdout / Zipkin 四类 exporter **全量** |
+
+快速开始示例（`conf` + `logger` + `httpx` + `service`）实际引入 17 个第三方模块，但**不含**云厂商 SDK、
+gorm driver、asynq 与 OTel exporter。
+
+> ⚠️ **`storage` / `trace` / `orm` 目前无法只引入单一实现**：
+> 只 import `orm`（且仅用 MySQL）也会编译进 postgres 与 sqlite driver，
+> 消费者 `go.sum` 由 8 行增至 56 行、二进制由 2.5M 增至 7.5M。
+>
+> - `CGO_ENABLED=0` 下仍可构建成功（`mattn/go-sqlite3` 提供非 cgo 桩实现），但运行时 sqlite 不可用。
+> - 若在意产物体积，可绕过封装直接引入 `gorm.io/driver/*` 或
+>   `go.opentelemetry.io/otel/exporters/*`，或直接使用云厂商官方 SDK。
 
 ## Skills 安装
 

@@ -77,7 +77,13 @@ go get github.com/chihqiang/infra-go/ratelimit
 # ...按需引入
 ```
 
-模块间零强制依赖，按需 import。
+模块间零强制依赖，按需 import：未 import 的模块不会进入消费者 `go.mod` / `go.sum`。
+
+> ⚠️ 包内粒度例外：`storage`（三家云 SDK）、`orm`（三个 driver）、`trace`（四类 exporter）
+> 的同类实现打包在同一 package 内，**无法只选一家**——只 import `orm` 且仅用 MySQL，
+> 也会编译进 postgres / sqlite driver（消费者 `go.sum` 8 行 → 56 行，二进制 2.5M → 7.5M）。
+> 若对产物体积敏感（容器镜像、冷启动），可绕过封装直接用 `gorm.io/driver/*`、
+> `go.opentelemetry.io/otel/exporters/*` 或云厂商官方 SDK。
 
 ### Step 3 — 用 conf 定义并加载配置
 
