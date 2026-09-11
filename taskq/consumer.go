@@ -20,8 +20,9 @@ type Consumer struct {
 
 // NewConsumer 创建消费者。
 // log 传 nil 使用 asynq 默认日志器。
-func NewConsumer(cfg Config, log logger.ILogger) *Consumer {
-	c := fillDefault(cfg)
+// opts 用于表达 Config 结构体无法表达的显式零值，见 Option。
+func NewConsumer(cfg Config, log logger.ILogger, opts ...Option) *Consumer {
+	c := fillDefault(cfg, opts...)
 	la := newLogAdapter(log)
 	return &Consumer{
 		server: asynq.NewServer(c.redisOpt(), c.toAsynqConfig(la)),

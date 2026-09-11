@@ -56,3 +56,21 @@ func TestComputeDelay_MaxDelayCap(t *testing.T) {
 	d := computeDelay(c, 1, 0)
 	assert.Equal(t, 100*time.Millisecond, d)
 }
+
+// TestCapDelay_ZeroMaxDelayMeansNoCap 验证 maxDelay <= 0 表示不限制上限，
+// 而不是把所有延迟截断为 0（WithMaxDelay(0) 的可达路径）。
+func TestCapDelay_ZeroMaxDelayMeansNoCap(t *testing.T) {
+	assert.Equal(t, 5*time.Second, capDelay(5*time.Second, 0, false))
+	assert.Equal(t, 5*time.Second, capDelay(5*time.Second, -1, false))
+	// 设置了上限时仍正常截断
+	assert.Equal(t, time.Second, capDelay(5*time.Second, time.Second, false))
+}
+
+// TestComputeDelay_NoMaxDelay 验证 WithMaxDelay(0) 下指数退避正常增长且不产生负值。
+func TestComputeDelay_NoMaxDelay(t *testing.T) {
+	c := Config{Delay: 100 * time.Millisecond, MaxDelay: 0, RetryIf: func(error) bool { return true }}
+	assert.Equal(t, 100*time.Millisecond, computeDelay(c, 1, 0))
+	assert.Equal(t, 200*time.Millisecond, computeDelay(c, 2, 0))
+	// attempt 极大时位移溢出，应饱和为正值而不是回绕成 0 或负数
+	assert.Positive(t, computeDelay(c, 200, 0))
+}

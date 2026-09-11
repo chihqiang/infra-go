@@ -21,13 +21,16 @@ import (
 // 熔断（全局/按路由）、超时、请求体大小限制、gzip 解压、并发连接数限制、限流（WithRateLimit）、
 // JWT 认证（WithJWT，转发 jwt.AuthMiddleware）、请求/响应加密、内容安全校验。
 
-func init() {
-	// 注入统一 JSON 错误响应（携带 request_id），使 httpx 注册的中间件
-	// 错误响应保持原有格式；middleware 子包在其它框架中可用 SetErrorHandler
-	// 自行注入框架的错误渲染。
-	middleware.SetErrorHandler(func(ctx context.Context, w http.ResponseWriter, status int, msg string) {
-		WriteHTTPErrorCtx(ctx, w, status, msg)
-	})
+// middlewareErrorHandler 把 httpx/middleware 子包产生的错误按 httpx 统一响应格式写入。
+//
+// 为什么不用 init 注入全局：那样会让“仅 import httpx”这一动作静默改变同进程内
+// gin/echo 路由的错误响应格式（它们同样在用 httpx/middleware 子包），
+// 而 import 与调用顺序无关，使用者无法 opt-out。
+// 改为由 Server 在每个请求的 context 上注入（见 server.go 的 buildGlobalHandler），
+// 使作用域限定在经 httpx 分发的请求；jwt 等经由请求 context 调用
+// middleware.WriteError / WriteUnauthorized 的组件会自动继承该格式。
+func middlewareErrorHandler(ctx context.Context, w http.ResponseWriter, status int, msg string) {
+	WriteHTTPErrorCtx(ctx, w, status, msg)
 }
 
 // WithCors 返回一个为响应设置 CORS 头的中间件。

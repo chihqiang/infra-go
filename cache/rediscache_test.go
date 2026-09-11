@@ -79,7 +79,7 @@ func TestRedisSetStruct(t *testing.T) {
 	// 无目标类型信息，反序列化为 map[string]any
 	m, ok := got.(map[string]any)
 	require.True(t, ok, "非泛型缓存读取结构体返回 map[string]any")
-	assert.Equal(t, float64(1), m["id"]) // JSON 数字默认为 float64
+	assert.Equal(t, json.Number("1"), m["id"]) // UseNumber：JSON 数字解码为 json.Number
 	assert.Equal(t, "chihqiang", m["name"])
 
 	// 借助 JSON 还原为具体结构体
@@ -102,6 +102,40 @@ func TestRedisSetEx(t *testing.T) {
 	// miniredis 时钟需用 FastForward 推进（考虑 5% 抖动，多推一些）
 	mr.FastForward(120 * time.Millisecond)
 	_, err = c.Get(ctx, "k")
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+// TestRedisGetLargeInt64Precision 验证 Get 对超过 2^53 的 int64 不丢精度。
+// doGet 用 json.Decoder.UseNumber() 解码，数字保留为 json.Number 而不是 float64，
+// 否则雪花 ID / 纳秒时间戳这类大整数在 float64 往返中会失真。
+func TestRedisGetLargeInt64Precision(t *testing.T) {
+	ctx := context.Background()
+	c := newTestRedisCache(t)
+
+	const big = int64(9007199254740993) // 2^53 + 1，float64 无法精确表示
+	require.NoError(t, c.Set(ctx, "big", big))
+
+	got, err := c.Get(ctx, "big")
+	require.NoError(t, err)
+	num, ok := got.(json.Number)
+	require.True(t, ok, "JSON 数字应解码为 json.Number，实际为 %T", got)
+	assert.Equal(t, "9007199254740993", num.String())
+
+	n, err := num.Int64()
+	require.NoError(t, err)
+	assert.Equal(t, big, n)
+}
+
+// TestRedisGetTrailingGarbage 验证尾随垃圾内容仍被视为脏数据（与 json.Unmarshal 严格性一致）。
+func TestRedisGetTrailingGarbage(t *testing.T) {
+	ctx := context.Background()
+	rds, mr := newMiniRedis(t)
+	c := NewRedisCache(rds)
+
+	// 绕过 Set，直接写入脏数据模拟外部组件写入
+	mr.Set("dirty", `{"a":1}garbage`)
+
+	_, err := c.Get(ctx, "dirty")
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 

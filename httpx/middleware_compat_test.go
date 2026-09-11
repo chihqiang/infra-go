@@ -1,7 +1,9 @@
 package httpx
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -36,7 +38,8 @@ func silenceHttpxLogger(t *testing.T) {
 func TestMiddlewareCompat_Recovery(t *testing.T) {
 	silenceHttpxLogger(t)
 	s := newTestServer()
-	s.Use(WithRecovery())
+	// RequestID 在外层：先把 request_id 注入 context，Recovery 才能读到
+	s.Use(WithRequestID(), WithRecovery())
 	s.AddRoute(Route{
 		Method: "GET", Path: "/panic", Handler: func(w http.ResponseWriter, r *http.Request) {
 			panic("boom")
@@ -46,6 +49,13 @@ func TestMiddlewareCompat_Recovery(t *testing.T) {
 	rec := doRequest(t, s, http.MethodGet, "/panic", nil)
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.Contains(t, rec.Body.String(), "internal server error")
+
+	// Recovery 用请求 context 渲染错误，因此 panic 响应也携带 request_id，
+	// 与其它中间件（超时、限流、体积限制）保持一致，便于与日志关联。
+	id := rec.Header().Get(middleware.HeaderRequestID)
+	require.NotEmpty(t, id, "Recovery 应与 RequestID 组合时回写响应头")
+	assert.Contains(t, rec.Body.String(), `"request_id":"`+id+`"`,
+		"panic 响应体应带上 request_id，便于排查 500")
 }
 
 func TestMiddlewareCompat_RequestID(t *testing.T) {
@@ -109,8 +119,9 @@ func TestMiddlewareCompat_MaxBytes(t *testing.T) {
 }
 
 func TestMiddlewareCompat_ErrorResponseUsesUnifiedJSON(t *testing.T) {
-	// 组合 RequestID + Recovery：错误响应应为 httpx 统一 JSON（验证 middleware.SetErrorHandler
-	// 在 httpx init 注入的统一 JSON 输出接线正确，而非默认 http.Error 纯文本）
+	// 组合 RequestID + Recovery：错误响应应为 httpx 统一 JSON。
+	// 验证 Server 在每个请求上按请求作用域注入的错误渲染接线正确
+	// （middleware.ContextWithErrorHandler），而非默认 http.Error 纯文本。
 	silenceHttpxLogger(t)
 	s := newTestServer()
 	s.Use(WithRequestID(), WithRecovery())
@@ -125,6 +136,48 @@ func TestMiddlewareCompat_ErrorResponseUsesUnifiedJSON(t *testing.T) {
 	assert.NotEmpty(t, rec.Header().Get(middleware.HeaderRequestID)) // RequestID 中间件仍回写响应头
 	assert.Contains(t, rec.Header().Get("Content-Type"), "application/json")
 	assert.Contains(t, rec.Body.String(), "internal server error")
+}
+
+// TestMiddlewareCompat_NoGlobalErrorHandlerMutation 回归测试：导入 httpx 不应改写
+// httpx/middleware 的进程级全局错误渲染。
+//
+// 历史缺陷：httpx 在 init() 中调用 middleware.SetErrorHandler，于是“仅 import httpx”
+// 就会静默改变同进程内 gin/echo 路由（它们同样在用 middleware 子包）的错误响应格式，
+// 而 import 与调用顺序无关，使用者无法 opt-out。
+// 现在改为由 Server 按请求注入，本测试锁定全局未被写入。
+func TestMiddlewareCompat_NoGlobalErrorHandlerMutation(t *testing.T) {
+	// 不经 httpx Server 分发、纯粹使用 middleware 子包的调用应得到默认纯文本
+	rec := httptest.NewRecorder()
+	middleware.WriteError(context.Background(), rec, http.StatusForbidden, "denied")
+
+	assert.Contains(t, rec.Header().Get("Content-Type"), "text/plain",
+		"import httpx 不应改写 middleware 的全局错误渲染")
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Contains(t, rec.Body.String(), "denied")
+}
+
+// TestMiddlewareCompat_ScopedHandlerDoesNotLeak 验证经 httpx 分发后，
+// 全局错误渲染仍未被改写（作用域仅限该请求）。
+func TestMiddlewareCompat_ScopedHandlerDoesNotLeak(t *testing.T) {
+	silenceHttpxLogger(t)
+	s := newTestServer()
+	s.Use(WithRecovery())
+	s.AddRoute(Route{
+		Method: http.MethodGet, Path: "/panic", Handler: func(http.ResponseWriter, *http.Request) {
+			panic("boom")
+		},
+	})
+
+	rec := doRequest(t, s, http.MethodGet, "/panic", nil)
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	// 该请求本身应是 httpx 统一 JSON
+	assert.Contains(t, rec.Header().Get("Content-Type"), "application/json")
+
+	// 请求结束后，全局仍是默认纯文本
+	plain := httptest.NewRecorder()
+	middleware.WriteError(context.Background(), plain, http.StatusForbidden, "denied")
+	assert.Contains(t, plain.Header().Get("Content-Type"), "text/plain",
+		"httpx 请求的渲染应限定在该请求作用域，不应泄漏到全局")
 }
 
 func TestMiddlewareCompat_Tracing(t *testing.T) {

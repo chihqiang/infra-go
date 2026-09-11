@@ -27,6 +27,12 @@ type Config struct {
 	// 其他类型时为导出器服务地址，例如 "localhost:4317"。
 	Endpoint string `json:",optional"`
 	// Sampler 采样率，取值范围 0.0~1.0，默认 1.0（全采样）。
+	//
+	// 无法用本字段表达"不主动采样，仅跟随上游"：0 会被视为未设置并填充为 1.0。
+	// 需要该语义请用 WithSampler(0)，它与 Disabled 不等价：
+	//   - Sampler = 0：TracerProvider 正常创建，根 span 不采样，
+	//     但上游已采样的链路仍会继续上报
+	//   - Disabled = true：根本不创建 TracerProvider，任何链路都不上报
 	Sampler float64 `json:",default=1.0"`
 	// Batcher 导出器类型，默认 "otlpgrpc"。
 	// 可选值：otlpgrpc、otlphttp、zipkin、file。
@@ -43,4 +49,23 @@ type Config struct {
 	// Disabled 是否禁用链路追踪，默认 false。
 	// 设为 true 时 StartAgent 不会启动任何导出器。
 	Disabled bool `json:",optional"`
+}
+
+// Option 覆盖配置项，用于表达 Config 结构体无法表达的显式零值。
+//
+// 为什么需要：fillDefault 遵循「字段 == 0 视为未设置」的规则，
+// 而 Sampler = 0 是一个有别于默认值 1.0 的有效配置
+// （只跟随上游采样，自己不主动采样），详见 Config.Sampler 的说明。
+//
+// 通过 Option 传入的值会在默认值填充之后应用，因此能够生效：
+//
+//	trace.StartAgent(cfg, trace.WithSampler(0))
+type Option func(*Config)
+
+// WithSampler 显式设置采样率，取值范围 0.0~1.0。
+// 与 Config.Sampler 的区别：传 0 不会被填充为默认值 1.0，
+// 而是表示根 span 不采样、仅跟随上游采样（与 Disabled 不等价）。
+// 越界值由 otel 内部处理：>= 1 视为全采样，< 0 视为 0。
+func WithSampler(ratio float64) Option {
+	return func(c *Config) { c.Sampler = ratio }
 }

@@ -14,10 +14,10 @@ var ErrNotFound = errors.New("cache: key not found")
 //   - MemCache 返回存入时的原始类型（Set(ctx,"k",5) 读回 int(5)；
 //     Set(ctx,"k",u) 读回 u 本身）
 //   - RedisCache 必须序列化存储，读回的是 JSON 解码结果
-//     （Set(ctx,"k",5) 读回 float64(5)；Set(ctx,"k",u) 读回 map[string]any）
+//     （Set(ctx,"k",5) 读回 json.Number("5")；Set(ctx,"k",u) 读回 map[string]any）
 //
-// 因此直接对 Get 的返回值做类型断言（如 v.(int)）的代码在切换后端后会 panic，
-// 且 int64 大整数经 Redis 的 float64 往返会丢精度。
+// 因此直接对 Get 的返回值做类型断言（如 v.(int)、v.(float64)）的代码
+// 在切换后端后会 panic。
 // 需要后端无关的读取时请使用 GetAs[T]，它统一经 JSON 往返解码到具体类型：
 //
 //	n, err := cache.GetAs[int64](ctx, c, "counter")

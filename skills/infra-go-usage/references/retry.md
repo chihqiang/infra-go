@@ -149,6 +149,26 @@ err := retry.DoWithConfig(ctx, func(ctx context.Context) error {
 | `WithOnRetry(fn)` | 重试回调 | 无 |
 | `WithJitter()` | 启用随机抖动 | false |
 
+### 显式零值：不重试 / 重试不等待
+
+`Config` 结构体采用「字段 == 0 视为未设置」的规则，因此**无法用字段表达 0**。
+需要这些语义时把 Option 传给 `DoWithRetryConfig`（Option 在默认值填充之后应用）：
+
+```go
+// 不重试，只执行一次（Config{MaxRetries: 0} 会被填成默认 3 次）
+err := retry.DoWithRetryConfig(ctx, fn, retry.Config{}, retry.WithMaxRetries(0))
+
+// 立即重试，不等待默认的 100ms 初始延迟
+err = retry.DoWithRetryConfig(ctx, fn, retry.Config{}, retry.WithDelay(0))
+
+// 不限制延迟上限（Config{MaxDelay: 0} 会被填成默认 10s）
+err = retry.DoWithRetryConfig(ctx, fn, retry.Config{}, retry.WithMaxDelay(0))
+```
+
+> `Attempts(c, opts...)` 接受同一组 opts，用于预先得知总执行次数；
+> `retry.Attempts(c, retry.WithMaxRetries(0))` 返回 `1`。
+> `WithMaxDelay(0)` 的语义是「不限制上限」，而不是「把延迟截断为 0」。
+
 ## 错误处理
 
 ```go

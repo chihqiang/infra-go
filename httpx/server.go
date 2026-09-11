@@ -309,12 +309,8 @@ func (s *Server) Handler() http.Handler {
 //
 // handler 链（从内到外）：
 //
-//	mux（含自定义 404 判定）→ 全局中间件
+//	mux（含自定义 404 判定）→ 全局中间件 → 错误渲染/路由模板注入
 func (s *Server) buildGlobalHandler() {
-	if len(s.gmw) == 0 && s.notFoundHandler == nil {
-		s.gh = s.mux
-		return
-	}
 	handler := http.HandlerFunc(s.mux.ServeHTTP)
 	// 自定义 404 紧贴 mux，只对真正未匹配的路由生效。
 	// 通过路由预判而非包装 ResponseWriter 判定"未匹配"，原因是后者无法区分
@@ -347,11 +343,18 @@ func (s *Server) buildGlobalHandler() {
 	// 顺序很关键：若包在内层，中间件执行时 context 里还没有模板。
 	mux := s.mux
 	inner := handler
+	// 仅在存在全局中间件/自定义 404 时才做路由预判（它们才需要模板）。
+	needPattern := len(s.gmw) > 0 || s.notFoundHandler != nil
 	s.gh = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if pattern := matchedPattern(mux, r); pattern != "" {
-			r = r.WithContext(middleware.ContextWithPattern(r.Context(), pattern))
+		// 按请求注入错误渲染：经 httpx 分发的请求保持统一 JSON 响应，
+		// 而同进程内 gin/echo 路由不受影响（详见 middlewareErrorHandler）。
+		ctx := middleware.ContextWithErrorHandler(r.Context(), middlewareErrorHandler)
+		if needPattern {
+			if pattern := matchedPattern(mux, r); pattern != "" {
+				ctx = middleware.ContextWithPattern(ctx, pattern)
+			}
 		}
-		inner(w, r)
+		inner(w, r.WithContext(ctx))
 	})
 }
 

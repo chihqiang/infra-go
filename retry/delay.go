@@ -18,16 +18,23 @@ func computeDelay(c Config, attempt int, previousDelay time.Duration) time.Durat
 
 	// 默认指数退避：delay * 2^(attempt-1)，用位运算替代浮点指数计算。
 	d := c.Delay << uint(attempt-1)
-	// 位移溢出（attempt 过大）时直接取最大值，避免产生异常值。
+	// 位移溢出（attempt 过大）时饱和，避免产生异常值。
 	if d < c.Delay {
 		d = c.MaxDelay
+		if d <= 0 {
+			// 未设置延迟上限（WithMaxDelay(0)）：饱和到 time.Duration 最大值，
+			// 否则回绕后的负值会被 capDelay 归零，退化成无间隔重试。
+			d = time.Duration(1<<63 - 1)
+		}
 	}
 	return capDelay(d, c.MaxDelay, c.Jitter)
 }
 
 // capDelay 限制延迟不超过最大值，并可选添加抖动。
+// maxDelay <= 0 表示不限制上限——normalize 会填充默认值，
+// 只有通过 WithMaxDelay(0) 显式设置时才可能为 0。
 func capDelay(d, maxDelay time.Duration, jitter bool) time.Duration {
-	if d > maxDelay {
+	if maxDelay > 0 && d > maxDelay {
 		d = maxDelay
 	}
 	if d < 0 {
@@ -39,7 +46,7 @@ func capDelay(d, maxDelay time.Duration, jitter bool) time.Duration {
 		if half > 0 {
 			jitterAmount := time.Duration(rand.Int64N(half))
 			d += jitterAmount
-			if d > maxDelay {
+			if maxDelay > 0 && d > maxDelay {
 				d = maxDelay
 			}
 		}

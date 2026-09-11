@@ -38,10 +38,12 @@ var (
 //     配置在 agent 启动时快照，无法热更新；需要换配置请先 StopAgent 再 StartAgent。
 //   - 已调用过 StopAgent → 允许重新启动（使用新配置）。
 //
+// opts 用于表达 Config 结构体无法表达的显式零值（如 Sampler = 0），见 Option。
+//
 // 旧实现用 sync.Once 实现“只初始化一次”，副作用是 StopAgent 之后再也无法重启，
 // 而 otel 仍指向已关闭的 TracerProvider，导致后续 span 被静默丢弃。
-func StartAgent(cfg Config) {
-	c := fillDefault(cfg)
+func StartAgent(cfg Config, opts ...Option) {
+	c := fillDefault(cfg, opts...)
 
 	if c.Disabled {
 		return

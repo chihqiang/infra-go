@@ -11,8 +11,11 @@ import (
 // fillDefaultUnmarshaler 用于填充默认值的反序列化器。
 var fillDefaultUnmarshaler = mapping.NewDefaultUnmarshaler()
 
-// fillDefault 填充默认值，然后用用户配置中的非零字段覆盖。
-func fillDefault(cfg Config) Config {
+// fillDefault 填充默认值，然后用用户配置中的非零字段覆盖，最后应用 opts。
+//
+// 局限：非零字段覆盖的规则无法区分"未设置"与"显式设为 0"，
+// 需要表达显式 0（如 Sampler = 0）时通过 opts 传入，见 Option。
+func fillDefault(cfg Config, opts ...Option) Config {
 	var c Config
 	if err := fillDefaultUnmarshaler.Unmarshal(map[string]any{}, &c); err != nil {
 		panic(err)
@@ -44,6 +47,11 @@ func fillDefault(cfg Config) Config {
 	}
 	if cfg.Disabled {
 		c.Disabled = cfg.Disabled
+	}
+
+	// Option 最后应用：可覆盖上面「零值即未设置」的判定结果。
+	for _, opt := range opts {
+		opt(&c)
 	}
 
 	return c

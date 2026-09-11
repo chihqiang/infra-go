@@ -86,6 +86,29 @@ type Config struct {
 }
 ```
 
+### 无法用 Config 表达的零值：`DefaultMaxRetry = 0`
+
+`fillDefault` 采用「字段 == 0 视为未设置」的规则，而 `asynq.MaxRetry(0)` 是有意义的
+取值（**任务失败后不重试**）。因此 `Config{DefaultMaxRetry: 0}` 会被静默填充为 25 次重试，
+与意图相反。需要显式 0 时使用 Option 形式：
+
+```go
+// 投递的任务失败后不重试（否则会被填为默认 25 次）
+producer := taskq.NewProducer(cfg, taskq.WithDefaultMaxRetry(0))
+consumer := taskq.NewConsumer(cfg, nil, taskq.WithDefaultMaxRetry(0))
+```
+
+| Option | 说明 |
+| ------ | ------ |
+| `WithDefaultMaxRetry(n)` | 显式设置默认最大重试；传 `0` 表示不重试，不会被填充为 25 |
+
+> `DefaultTimeout` **没有**对应的 Option：asynq 自身把 `Timeout(0)` 视为未设置并回落 30 分钟
+> 默认超时（见 `asynq.EnqueueContext` 对 `noTimeout` 的处理），所以传 0 与不传结果完全相同，
+> 本包不提供名不副实的 API。
+>
+> Option 在默认值填充**之后**应用，因此会覆盖 `Config` 中的非零字段。
+> 单次投递的覆盖仍可继续用 `Producer.Enqueue(ctx, task, asynq.MaxRetry(0))`。
+
 ## 延迟/定时任务
 
 ```go

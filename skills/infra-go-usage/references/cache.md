@@ -43,12 +43,13 @@ go get github.com/chihqiang/infra-go/cache
 
 | 写入 | MemCache 读回 | RedisCache 读回 |
 |------|--------------|----------------|
-| `Set(ctx, "k", 5)` | `int(5)` | `float64(5)` |
+| `Set(ctx, "k", 5)` | `int(5)` | `json.Number("5")` |
 | `Set(ctx, "k", u)`（结构体） | `u` 本身 | `map[string]any` |
-| `Set(ctx, "k", int64(2^53+1))` | 精确保留 | **精度丢失**（先变 `float64`） |
+| `Set(ctx, "k", int64(2^53+1))` | 精确保留 | 精确保留（`json.Number` 无损保存字面量） |
 
-因此**直接对 `Get` 的返回值做类型断言**（如 `v.(int)`）的代码在切换后端后会 panic，
-且 `int64` 大整数在 Redis 后端会丢精度。
+因此**直接对 `Get` 的返回值做类型断言**（如 `v.(int)`、`v.(float64)`）的代码在切换后端后会 panic。
+Redis 后端用 `json.Decoder.UseNumber()` 解码，数字一律是 `json.Number`
+（字符串别名，保留原始数字字面量，需要时用 `Int64()` / `Float64()` 取值）。
 
 需要后端无关的读取时，使用 `GetAs[T]`（统一经 JSON 往返解码到具体类型）：
 
@@ -58,9 +59,9 @@ var u User
 u, err = cache.GetAs[User](ctx, c, "user:1")
 ```
 
-> `GetAs[T]` 的已知限制：Redis 后端在 `Get` 阶段就把 JSON 数字解码为 `float64`，
-> 超过 2^53 的整数精度已丢失，`GetAs` 无法补救。需要在 Redis 后端精确保存大整数时，
-> 请以字符串形式存储，或改用 `MemCache`。
+> 大整数安全：`json.Number` 无损保留字面量，雪花 ID / 纳秒时间戳这类超过 2^53 的
+> `int64` 在 Redis 后端不会丢精度，`GetAs[int64]` 可完整还原。
+> 若直接使用 `Get` 拿到 `json.Number`，请勿先转 `float64` 再转整数。
 
 ## 计数与过期
 
@@ -73,7 +74,8 @@ _ = c.Increment(ctx, "visit:20260828", 1) // 计数 +1，key 不存在则初始�
 _ = c.Decrement(ctx, "stock:sku1", 3)     // 库存 -3，key 不存在则初始化为 -3
 ```
 
-> 注意：Redis 端自增后，`Get` 取回的是 `float64`（非泛型反序列化的既定行为），精确整数运算请直接用 `redisx.IncrBy` 的返回值。
+> 注意：Redis 端自增后，`Get` 取回的是 `json.Number`（非泛型反序列化的既定行为），
+> 用 `GetAs[int64]` 可直接拿回 `int64`；精确整数运算也可直接用 `redisx.IncrBy` 的返回值。
 
 ### 设置存活时间（Expire）
 
@@ -123,7 +125,8 @@ u, err := c.Take(ctx, "user:1", func() (any, error) {
     return loadUserFromDB(1) // 防击穿：并发下只执行一次
 })
 if err == nil {
-    // 去泛型后取回的是 map[string]any，需要时用 json.Marshal/Unmarshal 还原为 *User
+    // 去泛型后取回的是 map[string]any（数字为 json.Number），
+    // 需要时用 json.Marshal/Unmarshal 还原为 *User
     var user *User
     _ = json.Unmarshal(mustMarshal(u), &user)
 }
@@ -155,7 +158,7 @@ if err != nil {
 接口使用 `any` 存储值，调用方无需为每种类型单独实例化缓存，也不必定义泛型类型参数。取值后的处理：
 
 - **内存缓存（MemCache）**：`Set` 存入的就是原对象，`Get/Take` 返回值类型与存入时一致，可直接断言，例如 `v.(*User)`。
-- **Redis 缓存（RedisCache）**：值以 JSON 序列化存储，`Get` 时因无法得知目标类型，统一反序列化为 `map[string]any`（数字为 `float64`）；取回具体结构体时可用 `json.Marshal(got)` 后 `json.Unmarshal` 到目标类型，或自行按字段断言。
+- **Redis 缓存（RedisCache）**：值以 JSON 序列化存储，`Get` 时因无法得知目标类型，统一反序列化为 `map[string]any`（数字为 `json.Number`，不是 `float64`）；取回具体结构体时可用 `json.Marshal(got)` 后 `json.Unmarshal` 到目标类型，或直接使用 `GetAs[T]`。
 - 标量（string/int/bool 等）可直接使用返回值，无需额外处理。
 
 > 上述差异意味着**按类型断言使用 `Get` 的代码不具备后端可移植性**。

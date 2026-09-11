@@ -39,6 +39,12 @@ type OnRetryFunc func(attempt int, err error)
 type DelayFunc func(attempt int, previousDelay time.Duration) time.Duration
 
 // Config 重试配置。
+//
+// 局限：无法用本结构体表达显式 0（MaxRetries=0 表示不重试、Delay=0 表示立即重试，
+// 但如果字段值为 0 会被视为未设置并填充默认值）。
+// 需要这些语义时请使用 Option 形式，如
+// retry.DoWithConfig(ctx, fn, retry.WithMaxRetries(0), retry.WithDelay(0))，
+// 或 retry.DoWithRetryConfig(ctx, fn, c, retry.WithMaxRetries(0))。
 type Config struct {
 	// MaxRetries 最大重试次数，默认 3。
 	// 总执行次数 = MaxRetries + 1（首次执行 + 重试次数）。
@@ -46,7 +52,7 @@ type Config struct {
 	// Delay 初始重试延迟，默认 100 毫秒。
 	Delay time.Duration
 	// MaxDelay 最大重试延迟，默认 10 秒。
-	// 指数退避时延迟不会超过此值。
+	// 指数退避时延迟不会超过此值；通过 WithMaxDelay(0) 可显式表示不限制上限。
 	MaxDelay time.Duration
 	// DelayFunc 自定义延迟计算函数。
 	// 设置后会覆盖默认的延迟策略。

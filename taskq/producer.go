@@ -16,8 +16,9 @@ type Producer struct {
 }
 
 // NewProducer 创建生产者。
-func NewProducer(cfg Config) *Producer {
-	c := fillDefault(cfg)
+// opts 用于表达 Config 结构体无法表达的显式零值，见 Option。
+func NewProducer(cfg Config, opts ...Option) *Producer {
+	c := fillDefault(cfg, opts...)
 	return &Producer{
 		client:      asynq.NewClient(c.redisOpt()),
 		cfg:         c,

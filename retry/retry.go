@@ -32,20 +32,24 @@ func DoWithConfig(ctx context.Context, fn func(ctx context.Context) error, opts 
 //
 // 字段式配置无法区分"未设置"与"显式设为 0"，因此 MaxRetries/Delay/MaxDelay
 // 为 0 时一律视为未设置并填充默认值（见 normalize）。
-// 需要显式表示"不重试"或"零延迟"时，请使用 Option 形式：
+// 需要显式表示"不重试"或"零延迟"时，在 opts 中传入对应 Option
+// （Option 在默认值填充之后应用，因此能生效）：
 //
-//	retry.DoWithConfig(ctx, fn, retry.WithMaxRetries(0), retry.WithDelay(0))
-func DoWithRetryConfig(ctx context.Context, fn func(ctx context.Context) error, c Config) error {
-	return doRetry(ctx, fn, normalize(c))
+//	retry.DoWithRetryConfig(ctx, fn, c, retry.WithMaxRetries(0), retry.WithDelay(0))
+func DoWithRetryConfig(ctx context.Context, fn func(ctx context.Context) error, c Config, opts ...Option) error {
+	return doRetry(ctx, fn, normalize(c, opts...))
 }
 
-// normalize 为未显式设置的字段填充默认值。
+// normalize 为未显式设置的字段填充默认值，最后应用 opts 覆盖。
 // DoWithRetryConfig 与 Attempts 共用本函数，保证"实际执行次数"与声明一致。
 //
 // 局限：无法区分"未设置"与"显式设为 0"，0 值一律按未设置处理。
-// 这与 Option 路径不同：defaultConfig 先写入默认值再应用 opts，
-// 因此 WithMaxRetries(0) / WithDelay(0) 能生效。
-func normalize(c Config) Config {
+// 需要表达显式 0 时通过 opts 传入——它们在默认值填充之后应用：
+//
+//	retry.WithMaxRetries(0) // 不重试，仅执行一次
+//	retry.WithDelay(0)      // 立即重试，不等待
+//	retry.WithMaxDelay(0)   // 不限制延迟上限（见 capDelay）
+func normalize(c Config, opts ...Option) Config {
 	if c.RetryIf == nil {
 		c.RetryIf = func(error) bool { return true }
 	}
@@ -57,6 +61,10 @@ func normalize(c Config) Config {
 	}
 	if c.MaxDelay == 0 {
 		c.MaxDelay = defaultMaxDelay
+	}
+	// Option 在默认值填充之后应用：调用方可借此表达显式 0。
+	for _, opt := range opts {
+		opt(&c)
 	}
 	return c
 }
@@ -127,9 +135,13 @@ func IsNoRetry(err error) bool {
 
 // Attempts 返回重试配置生效后的总执行次数（首次 + 重试）。
 //
-// 与 DoWithRetryConfig 使用同一套默认值规则（normalize），
+// 与 DoWithRetryConfig 使用同一套默认值与 Option 规则（normalize），
 // 因此返回值就是 fn 的最大实际执行次数。
 // 旧实现直接返回 c.MaxRetries+1，对零值配置会声称 1 次而实际执行 4 次。
-func Attempts(c Config) int {
-	return normalize(c).MaxRetries + 1
+//
+// 若调用 DoWithRetryConfig 时传了 opts，这里应传同一组 opts 以保持一致：
+//
+//	retry.Attempts(c, retry.WithMaxRetries(0)) // 1
+func Attempts(c Config, opts ...Option) int {
+	return normalize(c, opts...).MaxRetries + 1
 }

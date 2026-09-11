@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/chihqiang/infra-go/mapping"
 	"go.uber.org/zap"
@@ -28,16 +29,60 @@ const (
 // ContextExtractor 从 context 中提取日志字段的函数。
 type ContextExtractor func(ctx context.Context) []Field
 
+// registeredExtractor 已注册的上下文字段提取器。
+//
+// removed 用原子标记而不是从切片中删除：读取路径（extractContextFields）
+// 在锁外遍历切片底层数组，原地删除/搬移元素会与正在遍历的 goroutine 构成数据竞争。
+type registeredExtractor struct {
+	fn      ContextExtractor
+	removed atomic.Bool
+}
+
 var (
-	contextExtractors []ContextExtractor
+	contextExtractors []*registeredExtractor
 	extractorsMu      sync.RWMutex
 )
 
-// RegisterContextExtractor 注册一个上下文字段提取器。
-func RegisterContextExtractor(extractor ContextExtractor) {
+// RegisterContextExtractor 注册一个上下文字段提取器，返回注销函数。
+//
+// 历史问题：注册是**追加**式的且没有注销入口，而函数值在 Go 中不可比较，
+// 无法在注册时去重。因此初始化流程若被多次执行（重试、多阶段配置、测试复用），
+// 同一个提取器会被注册多次，导致每条日志里相同字段重复输出多遍。
+// 返回的注销函数解决了这一点：它是幂等的，重复调用只生效一次。
+//
+//	unregister := logger.RegisterContextExtractor(myExtractor)
+//	defer unregister() // 不再使用时撤销
+//
+// extractor 为 nil 时不注册，返回的注销函数为空操作。
+func RegisterContextExtractor(extractor ContextExtractor) (unregister func()) {
+	if extractor == nil {
+		return func() {}
+	}
+
+	entry := &registeredExtractor{fn: extractor}
 	extractorsMu.Lock()
-	contextExtractors = append(contextExtractors, extractor)
+	contextExtractors = append(contextExtractors, entry)
 	extractorsMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			entry.removed.Store(true)
+
+			// 顺带压实切片，避免长期反复注册/注销导致切片无限增长。
+			// 整体替换切片头部是安全的：读路径已拷贝旧头部，
+			// 旧底层数组不会被修改，仍按 removed 标记跳过该元素。
+			extractorsMu.Lock()
+			defer extractorsMu.Unlock()
+			live := make([]*registeredExtractor, 0, len(contextExtractors))
+			for _, e := range contextExtractors {
+				if !e.removed.Load() {
+					live = append(live, e)
+				}
+			}
+			contextExtractors = live
+		})
+	}
 }
 
 func extractContextFields(ctx context.Context) []Field {
@@ -47,8 +92,11 @@ func extractContextFields(ctx context.Context) []Field {
 
 	// 预分配容量，避免多次扩容
 	fields := make([]Field, 0, len(extractors)*2)
-	for _, extractor := range extractors {
-		fields = append(fields, extractor(ctx)...)
+	for _, e := range extractors {
+		if e.removed.Load() {
+			continue
+		}
+		fields = append(fields, e.fn(ctx)...)
 	}
 	return fields
 }

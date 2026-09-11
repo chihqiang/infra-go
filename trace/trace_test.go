@@ -53,6 +53,52 @@ func TestStartAgent_Disabled(t *testing.T) {
 	})
 }
 
+// TestFillDefault_SamplerZeroViaOption 验证 Sampler=0（根 span 不采样、
+// 仅跟随上游采样）可通过 Option 表达，不被默认值 1.0 覆盖。
+func TestFillDefault_SamplerZeroViaOption(t *testing.T) {
+	c := fillDefault(Config{}, WithSampler(0))
+	assert.InDelta(t, 0.0, c.Sampler, 0.001)
+}
+
+// TestFillDefault_SamplerZeroWithoutOption 锁定已知局限：直接写 Config.Sampler = 0
+// 仍被当作未设置并回落默认 1.0，需要显式 0 时必须用 WithSampler(0)。
+func TestFillDefault_SamplerZeroWithoutOption(t *testing.T) {
+	c := fillDefault(Config{Sampler: 0})
+	assert.InDelta(t, 1.0, c.Sampler, 0.001)
+}
+
+// TestStartAgent_SamplerZeroViaOption 验证 WithSampler(0) 真正生效：
+// TracerProvider 仍被创建，但根 span 不被采样、不会被导出。
+// 这正是它与 Disabled 的区别（后者根本不创建 provider）。
+func TestStartAgent_SamplerZeroViaOption(t *testing.T) {
+	tmpDir := t.TempDir()
+	logFile := tmpDir + "/trace.log"
+
+	resetOnce()
+	StartAgent(Config{
+		Name:     "test-service",
+		Endpoint: logFile,
+		Batcher:  BatcherFile,
+	}, WithSampler(0))
+	defer func() {
+		StopAgent()
+		resetOnce()
+	}()
+
+	tracer := otel.Tracer(TraceName)
+	ctx, span := tracer.Start(context.Background(), "root-operation")
+	span.End()
+	assert.False(t, span.SpanContext().IsSampled(), "WithSampler(0) 下根 span 不应被采样")
+
+	require.NoError(t, span.TracerProvider().(interface {
+		ForceFlush(context.Context) error
+	}).ForceFlush(ctx))
+
+	data, err := readFile(logFile)
+	require.NoError(t, err)
+	assert.Empty(t, data, "未采样的 span 不应被导出")
+}
+
 func TestStartAgent_FileExporter(t *testing.T) {
 	tmpDir := t.TempDir()
 	logFile := tmpDir + "/trace.log"

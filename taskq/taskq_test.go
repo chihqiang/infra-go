@@ -50,6 +50,20 @@ func TestFillDefault_Override(t *testing.T) {
 	assert.Equal(t, 5, c.DefaultMaxRetry)
 }
 
+// TestFillDefault_ExplicitZeroViaOption 验证 Config 结构体无法表达的显式 0
+// 可通过 Option 设置（asynq 语义：0 次重试）。
+func TestFillDefault_ExplicitZeroViaOption(t *testing.T) {
+	c := fillDefault(Config{}, WithDefaultMaxRetry(0))
+	assert.Equal(t, 0, c.DefaultMaxRetry, "显式 0 不应被填充为默认值 25")
+}
+
+// TestFillDefault_OptionOverridesConfig 验证 Option 优先于 Config 中的非零字段。
+func TestFillDefault_OptionOverridesConfig(t *testing.T) {
+	c := fillDefault(Config{DefaultMaxRetry: 5, DefaultTimeout: time.Second}, WithDefaultMaxRetry(0))
+	assert.Equal(t, 0, c.DefaultMaxRetry)
+	assert.Equal(t, time.Second, c.DefaultTimeout)
+}
+
 // --- Payload ---
 
 func TestMarshalPayload(t *testing.T) {
@@ -107,6 +121,41 @@ func TestProducer_Enqueue(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "test:enqueue", info.Type)
 	assert.Equal(t, asynq.TaskStatePending, info.State)
+}
+
+// TestProducer_EnqueueExplicitZero 验证 Option 设置的显式 0 真正落到投递的任务上，
+// 而不是被 fillDefault 替换为默认值（testConfig 里是 3）。
+func TestProducer_EnqueueExplicitZero(t *testing.T) {
+	addr, cleanup := newMiniRedis(t)
+	defer cleanup()
+
+	p := NewProducer(testConfig(addr), WithDefaultMaxRetry(0))
+	defer p.Close()
+
+	info, err := p.Enqueue(context.Background(), asynq.NewTask("test:zero", []byte("{}")))
+	require.NoError(t, err)
+	assert.Equal(t, 0, info.MaxRetry, "任务应不重试")
+}
+
+// TestProducer_EnqueueZeroTimeoutNotExpressible 锁定 asynq 的既定行为，
+// 也是 taskq 不提供 WithDefaultTimeout 的原因：
+// 即使把 asynq.Timeout(0) 直接传给入队，asynq 也会把它视为未设置
+// 并回落 30 分钟默认超时（见 asynq.EnqueueContext 对 noTimeout 的处理）。
+// 因此该 Option 给不出比 Config 更多的能力，不加不实之名不副实的 API。
+func TestProducer_EnqueueZeroTimeoutNotExpressible(t *testing.T) {
+	addr, cleanup := newMiniRedis(t)
+	defer cleanup()
+
+	p := NewProducer(Config{RedisAddr: addr})
+	defer p.Close()
+
+	info, err := p.Enqueue(
+		context.Background(),
+		asynq.NewTask("test:zero-timeout", []byte("{}")),
+		asynq.Timeout(0),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 30*time.Minute, info.Timeout, "asynq 会把 0 超时归一化为默认 30m")
 }
 
 func TestProducer_EnqueuePayload(t *testing.T) {

@@ -33,7 +33,7 @@ func bothBackends(t *testing.T) map[string]Cache {
 }
 
 // TestGetAs_ScalarConsistentAcrossBackends 验证标量在两个后端读回一致的类型。
-// 直接用 Get 时 mem 返回 int、redis 返回 float64，按 int 断言会在 redis 上失败。
+// 直接用 Get 时 mem 返回 int、redis 返回 json.Number，按 int 断言会在 redis 上失败。
 func TestGetAs_ScalarConsistentAcrossBackends(t *testing.T) {
 	ctx := context.Background()
 
@@ -79,30 +79,31 @@ func TestGetAs_Int64WithinFloat64Range(t *testing.T) {
 	}
 }
 
-// TestGetAs_LargeInt64PrecisionMem 验证 MemCache 能精确保存超过 2^53 的 int64。
+// TestGetAs_LargeInt64Precision 验证两个后端都能精确保存超过 2^53 的 int64。
 //
-// Redis 后端的对应限制见 GetAs 的文档：RedisCache.Get 会把 JSON 数字解码为
-// float64，精度在 Get 阶段即已丢失，GetAs 无法补救。因此这里只对 mem 断言；
-// 若将来把 RedisCache 改为 UseNumber 解码，应把本用例扩展到两个后端。
-func TestGetAs_LargeInt64PrecisionMem(t *testing.T) {
+// Redis 后端依赖 RedisCache.Get 的 UseNumber 解码：若退回默认的 float64，
+// 精度会在 Get 阶段就丢失，GetAs 无法补救。
+func TestGetAs_LargeInt64Precision(t *testing.T) {
 	ctx := context.Background()
 	const big = int64(9007199254740993) // 2^53 + 1
 
-	mem := NewMemCache(ctx, time.Minute)
-	defer mem.Close()
+	for name, c := range bothBackends(t) {
+		t.Run(name, func(t *testing.T) {
+			require.NoError(t, c.Set(ctx, "big", big))
 
-	require.NoError(t, mem.Set(ctx, "big", big))
-
-	got, err := GetAs[int64](ctx, mem, "big")
-	require.NoError(t, err)
-	assert.Equal(t, big, got, "MemCache must preserve large int64 exactly")
+			got, err := GetAs[int64](ctx, c, "big")
+			require.NoError(t, err)
+			assert.Equal(t, big, got, "must preserve large int64 exactly")
+		})
+	}
 }
 
 // TestGetAs_StructConsistentAcrossBackends 验证结构体在两个后端都能还原为具体类型。
 // 直接用 Get 时 mem 返回原结构体、redis 返回 map[string]any。
+// ID 取超过 2^53 的值，同时覆盖结构体字段中的大整数精度。
 func TestGetAs_StructConsistentAcrossBackends(t *testing.T) {
 	ctx := context.Background()
-	want := getAsUser{ID: 7, Name: "chihqiang"}
+	want := getAsUser{ID: 9007199254740993, Name: "chihqiang"}
 
 	for name, c := range bothBackends(t) {
 		t.Run(name, func(t *testing.T) {

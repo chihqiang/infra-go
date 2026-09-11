@@ -11,8 +11,10 @@
 - **配置驱动**：Config 用 `default` 结构体标签定义默认值，遵循 conf 标准
 - **日志集成**：注册 context 提取器，`logger.XxxCtx` 自动携带 `trace_id`/`span_id`
 - **资源管理**：支持添加自定义资源属性（服务名、环境等）
-- **全局单例**：`StartAgent` 用 `sync.Once` 确保只初始化一次
-- **采样控制**：可配置采样率（`0`~`1.0`，注意传 `0` 会被忽略回落为 `1.0`，想关闭采样请用 `Disabled`）
+- **全局单例**：`StartAgent` 用锁 + `currentAgent` 管理生命周期，重复调用会忽略新配置并告警；
+  `StopAgent` 后可重新 `StartAgent`（旧实现用 `sync.Once`，导致停止后无法重启）
+- **采样控制**：可配置采样率（`0`~`1.0`）；注意 `Config.Sampler = 0` 会被当作未设置并回落为 `1.0`，
+  需要「不主动采样、仅跟随上游」请用 `trace.StartAgent(cfg, trace.WithSampler(0))`，它与 `Disabled` **不等价**
 - **易用封装**：封装 `attribute`/`trace` 类型，日常调用无需直接使用 OpenTelemetry API（仅在显式声明返回类型时才需导入 `go.opentelemetry.io/otel/trace`）
 
 ## 安装
@@ -66,13 +68,30 @@ trace.StartAgent(trace.Config{
 |------|------|--------|------|
 | `Name` | `string` | `infra-go` | 服务名称，标识链路来源 |
 | `Endpoint` | `string` | `""` | 导出器地址（file 类型为文件路径） |
-| `Sampler` | `float64` | `1.0` | 采样率（`0`~`1.0`；传 `0` 会被忽略并回落为默认 `1.0` 全采样，想关闭采样请用 `Disabled`） |
+| `Sampler` | `float64` | `1.0` | 采样率（`0`~`1.0`）；直接写 `0` 会被忽略并回落 `1.0`，需要 `0` 请用 `WithSampler(0)` |
 | `Batcher` | `Batcher` | `otlpgrpc` | 导出器类型 |
 | `OtlpHeaders` | `map[string]string` | `nil` | OTLP 传输自定义请求头 |
 | `OtlpHttpPath` | `string` | `""` | OTLP HTTP 路径 |
 | `OtlpHttpSecure` | `bool` | `false` | OTLP HTTP 是否使用 HTTPS |
 | `OtlpGrpcSecure` | `bool` | `false` | OTLP gRPC 是否使用 TLS（连接 TLS collector） |
-| `Disabled` | `bool` | `false` | 是否禁用链路追踪 |
+| `Disabled` | `bool` | `false` | 是否禁用链路追踪（不创建 TracerProvider） |
+
+### 采样率为 0：`WithSampler(0)` vs `Disabled`
+
+`fillDefault` 采用「字段 == 0 视为未设置」的规则，因此 `Config{Sampler: 0}` 会被填充为 `1.0`。
+需要 `0` 时用 Option 形式（在默认值填充之后应用）：
+
+```go
+// 根 span 不采样，但上游已采样的链路仍会继续上报（降本常用）
+trace.StartAgent(cfg, trace.WithSampler(0))
+```
+
+两者语义不同，不要互相替代：
+
+| 配置 | TracerProvider | 根 span | 上游已采样的链路 |
+|------|----------------|---------|------------------|
+| `WithSampler(0)` | 正常创建 | 不采样 | 继续上报（`ParentBased`） |
+| `Disabled: true` | 不创建 | — | 不上报 |
 
 | 导出器类型 | 说明 | Endpoint 示例 |
 |------|------|---------------|

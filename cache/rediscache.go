@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/chihqiang/infra-go/logger"
@@ -230,10 +231,12 @@ func (c *RedisCache) doGet(ctx context.Context, key string) (any, error) {
 		return nil, errPlaceholder
 	}
 
-	// 去泛型后无法在编译期知道目标类型，统一反序列化为 map[string]any。
+	// 去泛型后无法在编译期知道目标类型，统一反序列化为 any。
+	// 解码启用 UseNumber（见 decodeUseNumber），JSON 数字保留为 json.Number
+	// 而非 float64，避免 int64 大整数（> 2^53）在 float64 往返中丢精度。
 	// 读取结构体/指针等复杂类型时需由调用方自行类型断言或转换（见 cache.md）。
 	var v any
-	if err := json.Unmarshal([]byte(data), &v); err != nil {
+	if err := decodeUseNumber(data, &v); err != nil {
 		// 反序列化失败：返回未命中让上层重新加载，但**不删除** key。
 		//
 		// 不能删：同一个 key 可能被其他组件以非 JSON 格式写入
@@ -255,4 +258,25 @@ func (c *RedisCache) setNotFound(ctx context.Context, key string) error {
 // aroundDuration 返回带抖动的过期时间，避免大量 key 同时过期（雪崩防护）。
 func (c *RedisCache) aroundDuration(d time.Duration) time.Duration {
 	return c.unstable.AroundDuration(d)
+}
+
+// decodeUseNumber 将 JSON 文本解码到 out，数字保留为 json.Number 而非 float64。
+//
+// 为什么不直接用 json.Unmarshal：它把 JSON 数字统一解码为 float64。
+// float64 只有 53 位有效尾数，雪花 ID、纳秒时间戳等 int64 大整数（> 2^53）
+// 会在 Get 阶段就丢精度，且 GetAs 无法补救。
+// json.Number 是字符串别名，无损保留原始数字字面量，需要时可用 Int64/Float64
+// 转成具体数值类型；被 json.Marshal 编码时会原样写回（不加引号）。
+//
+// 严格性与 json.Unmarshal 保持一致：存在尾随垃圾内容时同样返回错误。
+func decodeUseNumber(data string, out *any) error {
+	dec := json.NewDecoder(strings.NewReader(data))
+	dec.UseNumber()
+	if err := dec.Decode(out); err != nil {
+		return err
+	}
+	if dec.More() {
+		return errors.New("cache: unexpected trailing data in cached value")
+	}
+	return nil
 }

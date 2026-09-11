@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -541,4 +542,91 @@ func TestRotation_FileSize(t *testing.T) {
 func TestILogger_Compliance(t *testing.T) {
 	var l ILogger = New(Config{})
 	assert.NotNil(t, l)
+}
+
+// --- 上下文字段提取器的注册与注销 ---
+
+// countFields 统计 extractContextFields 产出中指定 key 的出现次数。
+func countFields(t *testing.T, key string) int {
+	t.Helper()
+	n := 0
+	for _, f := range extractContextFields(context.Background()) {
+		if f.Key == key {
+			n++
+		}
+	}
+	return n
+}
+
+func TestRegisterContextExtractor_Unregister(t *testing.T) {
+	const key = "zz_test_unregister"
+	unregister := RegisterContextExtractor(func(context.Context) []Field {
+		return []Field{String(key, "v")}
+	})
+	require.Equal(t, 1, countFields(t, key))
+
+	unregister()
+	assert.Equal(t, 0, countFields(t, key), "注销后不应再提取到该字段")
+
+	// 幂等：重复调用不应 panic，也不应影响其它提取器
+	assert.NotPanics(t, unregister)
+	assert.NotPanics(t, unregister)
+}
+
+func TestRegisterContextExtractor_UnregisterIsolated(t *testing.T) {
+	// 注销其中一个不应影响另一个（验证按条目标记而非按下标删除）
+	const keyA, keyB = "zz_test_iso_a", "zz_test_iso_b"
+	unregisterA := RegisterContextExtractor(func(context.Context) []Field {
+		return []Field{String(keyA, "v")}
+	})
+	unregisterB := RegisterContextExtractor(func(context.Context) []Field {
+		return []Field{String(keyB, "v")}
+	})
+	t.Cleanup(func() { unregisterA(); unregisterB() })
+
+	unregisterA()
+	assert.Equal(t, 0, countFields(t, keyA))
+	assert.Equal(t, 1, countFields(t, keyB), "注销 A 不应连带移除 B")
+}
+
+func TestRegisterContextExtractor_Nil(t *testing.T) {
+	// nil 提取器不注册，返回的注销函数为空操作
+	unregister := RegisterContextExtractor(nil)
+	require.NotNil(t, unregister)
+	assert.NotPanics(t, unregister)
+}
+
+// TestRegisterContextExtractor_DuplicateProducesDuplicateFields 锁定注册无法去重的
+// 事实：Go 中函数值不可比较，所以同一提取器注册两次会产生两份字段。
+// 这正是需要注销函数的原因。
+func TestRegisterContextExtractor_DuplicateProducesDuplicateFields(t *testing.T) {
+	const key = "zz_test_dup"
+	extractor := func(context.Context) []Field { return []Field{String(key, "v")} }
+
+	unregister1 := RegisterContextExtractor(extractor)
+	unregister2 := RegisterContextExtractor(extractor)
+	t.Cleanup(func() { unregister1(); unregister2() })
+
+	assert.Equal(t, 2, countFields(t, key), "重复注册会产生重复字段，需用返回的注销函数撤销")
+
+	unregister1()
+	assert.Equal(t, 1, countFields(t, key))
+}
+
+// TestRegisterContextExtractor_Concurrent 验证注册/注销与提取并发时无数据竞争
+// （注销使用原子标记 + 整体替换切片头，不原地修改正在被遍历的底层数组）。
+func TestRegisterContextExtractor_Concurrent(t *testing.T) {
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			unregister := RegisterContextExtractor(func(context.Context) []Field {
+				return []Field{String("zz_test_concurrent", "v")}
+			})
+			_ = extractContextFields(context.Background())
+			unregister()
+		}()
+	}
+	wg.Wait()
 }

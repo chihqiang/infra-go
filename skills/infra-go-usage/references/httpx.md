@@ -363,7 +363,7 @@ server.Stop()     // 停止，委托 Shutdown（返回 error），便于 service
 
 httpx 中间件分两层：
 
-1. **`httpx/middleware` 子包（实现层）**：一个中间件一个文件、一个类型；`NewXxx(...)` 构造（构造时完成参数预计算），`(m *Xxx) Middleware()` 返回标准 `func(http.Handler) http.Handler`。不依赖 httpx，可被 gin/echo/标准库复用。错误响应经 `middleware.SetErrorHandler` 注入（httpx 主包 init 注入统一 JSON）。
+1. **`httpx/middleware` 子包（实现层）**：一个中间件一个文件、一个类型；`NewXxx(...)` 构造（构造时完成参数预计算），`(m *Xxx) Middleware()` 返回标准 `func(http.Handler) http.Handler`。不依赖 httpx，可被 gin/echo/标准库复用。错误响应按**请求作用域**解析：httpx 的 Server 在每个请求的 context 上注入统一 JSON 渲染，子包自身保持默认 `http.Error`。
 2. **`httpx` 主包（适配层）**：`WithXxx(...)` 便捷函数把子包标准中间件适配为 `httpx.Middleware` 供 `server.Use` 注册，方法签名稳定。
 
 ### 内置中间件清单（httpx.With*）
@@ -556,7 +556,19 @@ http.ListenAndServe(":8080", handler)
 router.Use(gin.WrapH(middleware.NewCORS("*").Middleware()(router)))
 ```
 
-错误响应机制：`middleware.WriteError(ctx, w, status, msg)`（导出）。httpx 主包被 import 时输出统一 JSON（携带 request_id）；否则默认 `http.Error` 纯文本。gin/echo 等可用 `middleware.SetErrorHandler` 注入自己的错误渲染。
+错误响应机制：`middleware.WriteError(ctx, w, status, msg)`（导出）。渲染函数按以下顺序解析：
+
+1. **请求 context 携带的**（`middleware.ContextWithErrorHandler`）——httpx 的 `Server` 在每个请求上注入统一 JSON（携带 `request_id`），使经 httpx 分发的请求保持 httpx 格式；
+2. 否则回退**进程级全局**（`middleware.SetErrorHandler`），默认 `http.Error` 纯文本。
+
+> 为什么不用 `init()` 注入全局：那样“仅 import httpx”就会静默改变同进程内 gin/echo 路由
+> （它们也在用 `middleware` 子包）的错误响应格式，而 import 与调用顺序无关、无法 opt-out。
+> 按请求注入后，httpx 只影响自己分发的请求；jwt 等通过请求 context 调用
+> `middleware.WriteError` / `WriteUnauthorized` 的组件也会自动继承该格式。
+>
+> 不经 httpx 分发、希望进程级生效时（如直接用子包供 gin/echo），显式调用
+> `middleware.SetErrorHandler(fn)`。需要在自定义 `http.Server` 上复用 httpx 格式时，
+> 可用 `middleware.ContextWithErrorHandler(ctx, fn)` 自行注入。
 
 ### 自定义 / 第三方标准中间件接入 httpx
 

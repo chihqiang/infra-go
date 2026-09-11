@@ -217,6 +217,43 @@ func TestAttempts(t *testing.T) {
 	assert.Equal(t, 6, Attempts(c))
 }
 
+// TestAttempts_WithOption 验证 Attempts 与 DoWithRetryConfig 使用同一套
+// 默认值 + Option 规则，传入同一组 opts 时结果与实际执行次数一致。
+func TestAttempts_WithOption(t *testing.T) {
+	assert.Equal(t, 1, Attempts(Config{}, WithMaxRetries(0)), "显式不重试时总执行 1 次")
+	assert.Equal(t, defaultMaxRetries+1, Attempts(Config{}))
+}
+
+// TestDoWithRetryConfig_ExplicitZeroRetries 验证结构体配置无法表达的
+// "不重试"可通过 WithMaxRetries(0) 表达，且不被 normalize 填充为默认 3 次。
+func TestDoWithRetryConfig_ExplicitZeroRetries(t *testing.T) {
+	var calls int32
+	err := DoWithRetryConfig(context.Background(), func(context.Context) error {
+		atomic.AddInt32(&calls, 1)
+		return errors.New("boom")
+	}, Config{MaxRetries: 9}, WithMaxRetries(0))
+
+	assert.ErrorIs(t, err, ErrMaxRetries)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "WithMaxRetries(0) 应只执行一次")
+}
+
+// TestDoWithRetryConfig_ExplicitZeroDelay 验证 WithDelay(0) 表示立即重试，
+// 不会等待默认的 100ms 初始延迟。
+func TestDoWithRetryConfig_ExplicitZeroDelay(t *testing.T) {
+	var calls int32
+	start := time.Now()
+	err := DoWithRetryConfig(context.Background(), func(context.Context) error {
+		if atomic.AddInt32(&calls, 1) < 2 {
+			return errors.New("boom")
+		}
+		return nil
+	}, Config{}, WithDelay(0), WithMaxDelay(0))
+
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), atomic.LoadInt32(&calls))
+	assert.Less(t, time.Since(start), 100*time.Millisecond, "零延迟应立刻重试")
+}
+
 // --- 错误链保留（回归：此前用 %s 拼接，errors.Is/As 失效）---
 
 // retryTestHTTPError 是用于验证 errors.As 的自定义错误类型。

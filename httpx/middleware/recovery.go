@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"context"
 	"net/http"
 	"runtime/debug"
 
@@ -31,9 +30,11 @@ func (r *Recovery) Middleware() func(http.Handler) http.Handler {
 						logger.String("remote", x.ClientIP(req)),
 						logger.String("stack", string(debug.Stack())),
 					)
-					// 使用空 context 输出错误，避免依赖请求链路中的 request_id
-					// （httpx 统一响应下与无 ctx 的 WriteHTTPError 行为一致）。
-					writeError(context.Background(), w, http.StatusInternalServerError, "internal server error")
+					// 用请求 context 渲染错误，与其它中间件（超时、限流、体积限制）保持一致，
+					// 使响应体带上 request_id —— 500 正是最需要该关联 ID 的场景。
+					// 取 context 中的值不受取消影响（ctx.Value 不查 Done），
+					// 因此即使请求已被取消（如客户端提前断开）仍能取到 request_id。
+					writeError(req.Context(), w, http.StatusInternalServerError, "internal server error")
 				}
 			}()
 			next.ServeHTTP(w, req)

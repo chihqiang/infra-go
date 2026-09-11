@@ -14,7 +14,7 @@
 - **自动目录创建**：文件输出时自动创建不存在的目录
 - **全局 Logger**：内置全局实例，支持包级别直接调用
 - **上下文日志**：`Ctx` 后缀方法自动从 `context.Context` 提取字段（traceID、spanID 等）
-- **可扩展提取器**：通过 `RegisterContextExtractor` 注册自定义上下文字段提取器
+- **可扩展提取器**：通过 `RegisterContextExtractor` 注册自定义上下文字段提取器（返回注销函数，可撤销）
 - **调用者信息**：自动记录调用者的文件名和行号（正确跳过封装层）
 - **堆栈追踪**：可选在 Error 及以上级别记录堆栈
 - **应用名称**：可选输出固定的应用名称字段
@@ -256,19 +256,26 @@ logger.InfofCtx(ctx, "处理请求, 用户ID: %d", userID)
 #### 自定义上下文提取器
 
 通过 `RegisterContextExtractor` 注册自定义提取器，从 context 中提取业务字段。
+它返回一个**注销函数**，用于撤销本次注册。
 
 ```go
 // 提取器函数签名
 type ContextExtractor func(ctx context.Context) []Field
 
 // 注册提取器（可注册多个，日志输出时合并所有结果）
-logger.RegisterContextExtractor(func(ctx context.Context) []logger.Field {
+unregister := logger.RegisterContextExtractor(func(ctx context.Context) []logger.Field {
     if tenantID, ok := ctx.Value("tenant_id").(string); ok {
         return []logger.Field{logger.String("tenant_id", tenantID)}
     }
     return nil
 })
+defer unregister() // 不再使用时撤销（幂等，重复调用只生效一次）
 ```
+
+> **为什么要注销**：注册是追加式的，且 Go 中函数值不可比较、无法在注册时去重。
+> 初始化流程若被多次执行（重试、多阶段配置、测试复用），同一提取器会被注册多次，
+> 导致每条日志里相同字段重复输出多遍。用返回的注销函数即可撤销。
+> `extractor` 传 `nil` 时不注册，返回的注销函数为空操作。
 
 #### 内置提取器
 

@@ -11,11 +11,12 @@ import (
 // 为什么需要它：Cache.Get 返回 any，而两个后端对同一个值给出不同的 Go 类型——
 //   - MemCache 返回存入时的原始类型（Set("k", 5) → int(5)、Set("k", u) → user）
 //   - RedisCache 必须序列化存储，读回的是 JSON 解码结果
-//     （Set("k", 5) → float64(5)、Set("k", u) → map[string]any）
+//     （Set("k", 5) → json.Number("5")、Set("k", u) → map[string]any）
 //
-// 因此按类型断言使用 Get 的代码一旦切换后端就会 panic 或丢精度
-// （int64 大整数经 float64 往返会失真）。GetAs 统一走 JSON 往返并解码到 T，
-// 在两个后端上得到相同结果。
+// 因此按类型断言使用 Get 的代码一旦切换后端就会 panic。
+// GetAs 统一走 JSON 往返并解码到 T，在两个后端上得到相同结果，
+// 且大整数不会因中途转成 float64 而失真
+// （RedisCache 用 json.Number 保存数字，见 rediscache.go 的 decodeUseNumber）。
 //
 // 用法：
 //
@@ -23,12 +24,11 @@ import (
 //	var u User
 //	u, err := cache.GetAs[User](ctx, c, "user:1")
 //
-// 未命中时返回 (零值, ErrNotFound)。
+// 未命中时返回 (零值, ErrNotFound)；值无法解码为 T 时返回错误而非静默零值。
 //
-// 已知限制：RedisCache 在 Get 阶段就把 JSON 数字解码为 float64，
-// 因此存入的 int64 若超过 2^53，精度在 Get 时已经丢失，GetAs 无法补救。
-// 需要在 Redis 后端精确保存大整数时，请以字符串形式存储（再用 GetAs 解回），
-// 或改用 MemCache 后端。参见 Cache 接口注释。
+// 注意：直接使用 Get 时，Redis 后端的数字是 json.Number（不是 float64）。
+// 需要按数值使用请走 GetAs，或自行调用 json.Number 的 Int64/Float64。
+// 参见 Cache 接口注释。
 func GetAs[T any](ctx context.Context, c Cache, key string) (T, error) {
 	var zero T
 
