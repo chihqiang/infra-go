@@ -132,8 +132,8 @@ func (b *googleBreaker) doReq(req func() error, fallback Fallback, acceptable Ac
 }
 
 // history 聚合滑动窗口内的统计结果。
-// 内联遍历以去掉 reduce 的回调闭包与逐桶取模开销（accept 每次判定都调用）。
-// 语义与原 reduce 完全等价：按时间从旧到新遍历所有有效桶。
+// 遍历逻辑在此内联，不抽成 rollingWindow 上的公共方法：accept 每次判定都会调用它，
+// 回调闭包与逐桶取模的开销在热路径上不可忽略。
 // 注意：workingBuckets/failingBuckets 依赖遍历顺序（连续成功/失败桶计数），
 // 因此无法增量维护，这里保持遍历；两段循环避免了每桶一次的 % size 取模。
 func (b *googleBreaker) history() windowResult {

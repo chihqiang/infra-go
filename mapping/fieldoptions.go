@@ -276,15 +276,6 @@ func parseOption(opts *fieldOptions, fieldName, option string) error {
 	}
 }
 
-// parseProperty 解析 key=value 格式的选项。
-func parseProperty(field, tag, val string) (string, error) {
-	segs := strings.Split(val, equalToken)
-	if len(segs) != 2 {
-		return "", fmt.Errorf("invalid %q option for field %q", tag, field)
-	}
-	return strings.TrimSpace(segs[1]), nil
-}
-
 // parseOptionsValue 解析允许值列表。
 // 支持两种格式: [a,b,c] 或 a|b|c
 func parseOptionsValue(val string) []string {

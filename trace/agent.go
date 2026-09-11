@@ -126,13 +126,10 @@ func startAgent(c Config) (*agentState, error) {
 	return st, nil
 }
 
-// createExporter 根据配置创建对应的 span 导出器。
-func createExporter(c Config) (sdktrace.SpanExporter, error) {
-	exp, _, err := createExporterWithClosers(c)
-	return exp, err
-}
-
 // createExporterWithClosers 创建导出器，并返回需要随 agent 生命周期释放的关闭函数。
+//
+// 关闭函数由调用方（startAgent → agentState.closers）持有，在 StopAgent 时释放；
+// 唯一的调用方必须处理返回值，否则 file 导出器的文件句柄会泄漏。
 func createExporterWithClosers(c Config) (sdktrace.SpanExporter, []func() error, error) {
 	switch c.Batcher {
 	case BatcherZipkin:

@@ -72,24 +72,6 @@ func (rw *rollingWindow) add(v int64) {
 	rw.buckets[rw.offset].add(v)
 }
 
-// reduce 对所有有效时间桶执行 fn 聚合统计。
-// span 为 0（刚写入过）时包含当前桶；span 越大，跳过的"部分数据"桶越多。
-func (rw *rollingWindow) reduce(fn func(*bucket)) {
-	rw.lock.RLock()
-	defer rw.lock.RUnlock()
-
-	span := rw.span()
-	diff := rw.size - span
-	if diff <= 0 {
-		return
-	}
-
-	start := (rw.offset + span + 1) % rw.size
-	for i := 0; i < diff; i++ {
-		fn(&rw.buckets[(start+i)%rw.size])
-	}
-}
-
 // span 计算自 lastTime 以来应跨越的桶数，超过窗口返回 size。
 func (rw *rollingWindow) span() int {
 	offset := int(time.Since(rw.lastTime) / rw.interval)

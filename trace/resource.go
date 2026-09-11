@@ -92,13 +92,6 @@ func resourceAttrs() []attribute.KeyValue {
 	return out
 }
 
-// resetResources 重置资源属性（仅用于测试）。
-func resetResources() {
-	attrResourcesLk.Lock()
-	attrResources = make([]attribute.KeyValue, 0)
-	attrResourcesLk.Unlock()
-}
-
 // openFileForExporter 打开文件用于 file 类型导出器。
 // 返回文件及其关闭函数：调用方负责在 agent 停止时关闭，
 // 避免把 closer 存在包级变量里（多实例会互相覆盖，且 StopAgent 无法释放）。

@@ -192,20 +192,16 @@ func TestAtomicNanoSetLoad(t *testing.T) {
 }
 
 func TestRollingWindowExpiredBuckets(t *testing.T) {
-	rw := newRollingWindow(testBuckets, testInterval)
+	b := getTestGoogleBreaker()
 
 	// 第一个桶写入数据
-	rw.add(success)
+	b.stat.add(success)
 
 	// 等待窗口过期后，旧数据不应再被统计
 	time.Sleep(testInterval * (testBuckets + 1))
-	rw.add(fail)
+	b.stat.add(fail)
 
-	var result windowResult
-	rw.reduce(func(b *bucket) {
-		result.total += b.Sum
-		result.accepts += b.Success
-	})
+	result := b.history()
 	// 旧桶已过期被重置，只剩新写入的 fail
 	assert.Equal(t, int64(1), result.total)
 	assert.Equal(t, int64(0), result.accepts)
@@ -287,18 +283,14 @@ func TestDoGlobal(t *testing.T) {
 	assert.True(t, called)
 }
 
-func TestRollingWindowReduce(t *testing.T) {
-	rw := newRollingWindow(testBuckets, testInterval)
+func TestRollingWindowHistory(t *testing.T) {
+	b := getTestGoogleBreaker()
 
-	rw.add(success)
-	rw.add(success)
-	rw.add(fail)
+	b.stat.add(success)
+	b.stat.add(success)
+	b.stat.add(fail)
 
-	var result windowResult
-	rw.reduce(func(b *bucket) {
-		result.accepts += b.Success
-		result.total += b.Sum
-	})
+	result := b.history()
 	assert.Equal(t, int64(2), result.accepts)
 	assert.Equal(t, int64(3), result.total)
 }

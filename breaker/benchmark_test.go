@@ -2,7 +2,6 @@ package breaker
 
 import (
 	"testing"
-	"time"
 )
 
 // 基准场景：真实配置（40 桶 / 250ms 每桶 / 10s 窗口）。
@@ -45,20 +44,15 @@ func BenchmarkDo(b *testing.B) {
 	}
 }
 
-// BenchmarkWindowReduce 单独测滑动窗口聚合遍历的开销（history 的核心成本）。
-func BenchmarkWindowReduce(b *testing.B) {
-	rw := newRollingWindow(buckets, window/buckets)
+// BenchmarkWindowHistory 单独测滑动窗口聚合遍历的开销（accept 判定的核心成本）。
+func BenchmarkWindowHistory(b *testing.B) {
+	br := realGoogleBreaker()
 	for i := 0; i < 1000; i++ {
-		rw.add(success)
+		br.markSuccess()
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		var r windowResult
-		rw.reduce(func(bk *bucket) {
-			r.accepts += bk.Success
-			r.total += bk.Sum
-		})
+		_ = br.history()
 	}
-	_ = time.Millisecond
 }

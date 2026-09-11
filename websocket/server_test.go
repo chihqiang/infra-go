@@ -361,6 +361,16 @@ func TestServer_Context(t *testing.T) {
 
 // --- 集群 ID 唯一性测试 ---
 
+// nodeIDFromConnID 从连接 ID 中提取节点 ID，供断言 nextConnID 的编码方式。
+func nodeIDFromConnID(id ConnID) uint16 {
+	return uint16(id >> 32)
+}
+
+// localIDFromConnID 从连接 ID 中提取本地计数器部分。
+func localIDFromConnID(id ConnID) uint32 {
+	return uint32(id & 0xFFFFFFFF)
+}
+
 func TestServer_ConnID_UniqueSingleNode(t *testing.T) {
 	srv := MustNew(Config{}, NewEventHandler())
 	defer srv.Close()

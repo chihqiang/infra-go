@@ -4,12 +4,61 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// --- mockPubSub（仅测试使用）---
+
+// mockPubSub 内存实现的 PubSub，用于集群测试。
+type mockPubSub struct {
+	mu   sync.Mutex
+	subs map[string][]chan []byte
+}
+
+func newMockPubSub() *mockPubSub {
+	return &mockPubSub{
+		subs: make(map[string][]chan []byte),
+	}
+}
+
+func (m *mockPubSub) Publish(_ context.Context, channel string, message []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, ch := range m.subs[channel] {
+		select {
+		case ch <- message:
+		default:
+		}
+	}
+	return nil
+}
+
+func (m *mockPubSub) Subscribe(_ context.Context, channel string) (<-chan []byte, func(), error) {
+	m.mu.Lock()
+	ch := make(chan []byte, 100)
+	m.subs[channel] = append(m.subs[channel], ch)
+	m.mu.Unlock()
+
+	cancel := func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		// 用 nil 标记已取消，避免发送到已关闭的 channel
+		for i, sub := range m.subs[channel] {
+			if sub == ch {
+				m.subs[channel][i] = nil
+				break
+			}
+		}
+		close(ch)
+	}
+
+	return ch, cancel, nil
+}
 
 // --- mockPubSub 测试 ---
 

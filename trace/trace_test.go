@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,8 +12,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/metadata"
 )
+
+// resetResources 重置全局资源属性，避免用例之间互相影响（仅测试使用）。
+func resetResources() {
+	attrResourcesLk.Lock()
+	attrResources = make([]attribute.KeyValue, 0)
+	attrResourcesLk.Unlock()
+}
 
 func TestFillDefault_AllDefaults(t *testing.T) {
 	c := fillDefault(Config{})
@@ -161,21 +170,36 @@ func TestStopAgent_MultipleCalls(t *testing.T) {
 }
 
 func TestCreateExporter_UnsupportedBatcher(t *testing.T) {
-	_, err := createExporter(Config{
+	_, closers, err := createExporterWithClosers(Config{
 		Batcher:  "unsupported",
 		Endpoint: "localhost:4317",
 	})
 	require.Error(t, err)
+	assert.Nil(t, closers)
 	assert.Contains(t, err.Error(), "unsupported batcher type")
 }
 
 func TestCreateExporter_FileError(t *testing.T) {
-	_, err := createExporter(Config{
+	_, closers, err := createExporterWithClosers(Config{
 		Batcher:  BatcherFile,
 		Endpoint: "/nonexistent_dir/deep/path/trace.log",
 	})
 	require.Error(t, err)
+	assert.Nil(t, closers)
 	assert.Contains(t, err.Error(), "file exporter endpoint error")
+}
+
+// file 导出器会打开文件句柄，必须把关闭函数交回调用方，否则 StopAgent 无法释放。
+func TestCreateExporterWithClosers_FileReturnsCloser(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trace.log")
+
+	_, closers, err := createExporterWithClosers(Config{
+		Batcher:  BatcherFile,
+		Endpoint: path,
+	})
+	require.NoError(t, err)
+	require.Len(t, closers, 1, "file 导出器必须返回关闭函数，否则文件句柄会泄漏")
+	assert.NoError(t, closers[0]())
 }
 
 func TestAddResources(t *testing.T) {

@@ -187,16 +187,6 @@ func (s *Server) nextConnID() ConnID {
 	return ConnID(s.nodeID)<<32 | ConnID(local)
 }
 
-// nodeIDFromConnID 从连接 ID 中提取节点 ID。
-func nodeIDFromConnID(id ConnID) uint16 {
-	return uint16(id >> 32)
-}
-
-// localIDFromConnID 从连接 ID 中提取本地计数器部分。
-func localIDFromConnID(id ConnID) uint32 {
-	return uint32(id & 0xFFFFFFFF)
-}
-
 // --- http.Handler 实现 ---
 
 // ServeHTTP 处理 HTTP 请求，将连接升级为 WebSocket。
