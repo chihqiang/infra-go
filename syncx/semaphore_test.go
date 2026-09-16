@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// --- Semaphore 测试 ---
+// --- Semaphore tests ---
 
 func TestSemaphore_Basic(t *testing.T) {
 	sem := NewSemaphore(3)
@@ -32,7 +32,7 @@ func TestSemaphore_Basic(t *testing.T) {
 }
 
 func TestSemaphore_InvalidCapacity(t *testing.T) {
-	// 非正数容量回退为 1
+	// A non-positive capacity falls back to 1
 	for _, n := range []int{0, -1, -100} {
 		sem := NewSemaphore(n)
 		assert.Equal(t, 1, sem.Capacity(), "NewSemaphore(%d) capacity", n)
@@ -47,7 +47,7 @@ func TestSemaphore_TryAcquire(t *testing.T) {
 	sem := NewSemaphore(1)
 
 	assert.True(t, sem.TryAcquire())
-	assert.False(t, sem.TryAcquire()) // 已满
+	assert.False(t, sem.TryAcquire()) // full
 
 	sem.Release()
 	assert.True(t, sem.TryAcquire())
@@ -79,7 +79,7 @@ func TestSemaphore_Concurrent(t *testing.T) {
 	}
 	wg.Wait()
 
-	// 并发数不应超过信号量容量
+	// Concurrency must never exceed the semaphore capacity
 	assert.LessOrEqual(t, atomic.LoadInt32(&maxCurrent), int32(5))
 }
 

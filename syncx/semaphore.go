@@ -2,16 +2,16 @@ package syncx
 
 import "sync"
 
-// Semaphore 信号量，用于控制并发数量。
+// Semaphore limits how many operations may run concurrently.
 //
-// 适用场景：
-//   - 限制并发请求数
-//   - 限制资源池使用
-//   - 批量任务并发控制
+// Use cases:
+//   - capping the number of in-flight requests
+//   - limiting the use of a resource pool
+//   - bounding the concurrency of batch tasks
 //
-// 用法：
+// Usage:
 //
-//	sem := syncx.NewSemaphore(10) // 最多 10 个并发
+//	sem := syncx.NewSemaphore(10) // at most 10 concurrent operations
 //	for _, task := range tasks {
 //	    sem.Acquire()
 //	    go func() {
@@ -19,13 +19,13 @@ import "sync"
 //	        doWork(task)
 //	    }()
 //	}
-//	sem.Wait() // 等待所有完成
+//	sem.Wait() // wait for all of them to finish
 type Semaphore struct {
 	pool chan struct{}
 	wg   sync.WaitGroup
 }
 
-// NewSemaphore 创建一个指定并发数的信号量。
+// NewSemaphore creates a semaphore with the given concurrency limit.
 func NewSemaphore(max int) *Semaphore {
 	if max <= 0 {
 		max = 1
@@ -35,13 +35,13 @@ func NewSemaphore(max int) *Semaphore {
 	}
 }
 
-// Acquire 获取一个信号量，如果已满则阻塞等待。
+// Acquire takes one slot, blocking while the semaphore is full.
 func (s *Semaphore) Acquire() {
 	s.wg.Add(1)
 	s.pool <- struct{}{}
 }
 
-// TryAcquire 尝试获取一个信号量，如果已满则返回 false。
+// TryAcquire attempts to take one slot and reports false when the semaphore is full.
 func (s *Semaphore) TryAcquire() bool {
 	s.wg.Add(1)
 	select {
@@ -53,23 +53,23 @@ func (s *Semaphore) TryAcquire() bool {
 	}
 }
 
-// Release 释放一个信号量。
+// Release frees one slot.
 func (s *Semaphore) Release() {
 	<-s.pool
 	s.wg.Done()
 }
 
-// Wait 等待所有已获取的信号量被释放。
+// Wait blocks until every acquired slot has been released.
 func (s *Semaphore) Wait() {
 	s.wg.Wait()
 }
 
-// Capacity 返回信号量的最大并发数。
+// Capacity returns the maximum concurrency of the semaphore.
 func (s *Semaphore) Capacity() int {
 	return cap(s.pool)
 }
 
-// Available 返回当前可用的信号量数量。
+// Available returns how many slots are currently free.
 func (s *Semaphore) Available() int {
 	return cap(s.pool) - len(s.pool)
 }

@@ -11,19 +11,20 @@ import (
 	"io"
 )
 
-// ErrInvalidAESKey AES 密钥长度非法。
+// ErrInvalidAESKey reports an illegal AES key length.
 var ErrInvalidAESKey = errors.New("hash: invalid AES key, must be 16/24/32 bytes")
 
-// ErrDecryptFailed 解密失败（密钥错误或数据被篡改）。
+// ErrDecryptFailed reports a failed decryption (wrong key or tampered data).
 var ErrDecryptFailed = errors.New("hash: decrypt failed or data tampered")
 
-// --- AES-GCM 对称加密 ---
+// --- AES-GCM symmetric encryption ---
 
-// AESGCMEncrypt 使用 AES-GCM 加密数据，返回 base64 编码的密文。
-// 密钥 key 长度必须为 16/24/32 字节（对应 AES-128/192/256）。
+// AESGCMEncrypt encrypts data with AES-GCM and returns a base64-encoded ciphertext.
+// The key must be 16/24/32 bytes long (corresponding to AES-128/192/256).
 //
-// 返回格式：base64( nonce || ciphertext )，nonce 为每次随机生成的 12 字节。
-// AES-GCM 是认证加密（AEAD），同时保证机密性与完整性（防篡改）。
+// Return format: base64( nonce || ciphertext ), where nonce is a randomly generated
+// 12-byte value. AES-GCM is authenticated encryption (AEAD), guaranteeing both
+// confidentiality and integrity (tamper resistance).
 func AESGCMEncrypt(key, plaintext []byte) (string, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -40,13 +41,14 @@ func AESGCMEncrypt(key, plaintext []byte) (string, error) {
 		return "", err
 	}
 
-	// Seal 追加认证标签到密文后
+	// Seal appends the authentication tag to the ciphertext
 	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
-// AESGCMDecrypt 解密 base64 编码的 AES-GCM 密文，校验认证标签（防篡改）。
-// 密钥必须与加密时一致；密钥错误或数据被篡改时返回错误。
+// AESGCMDecrypt decrypts base64-encoded AES-GCM ciphertext and verifies the
+// authentication tag (tamper resistance). The key must be the same one used for
+// encryption; a wrong key or tampered data returns an error.
 func AESGCMDecrypt(key []byte, encoded string) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -74,18 +76,18 @@ func AESGCMDecrypt(key []byte, encoded string) ([]byte, error) {
 	return plaintext, nil
 }
 
-// --- HMAC 签名 ---
+// --- HMAC signing ---
 
-// HMACSign 使用密钥对数据计算 HMAC-SHA256 签名，返回 base64 编码字符串。
-// 常用于请求签名/防篡改校验。
+// HMACSign computes an HMAC-SHA256 signature over data with the given key and returns a
+// base64-encoded string. It is commonly used for request signing / tamper checking.
 func HMACSign(key []byte, data string) string {
 	h := hmac.New(sha256.New, key)
 	_, _ = h.Write([]byte(data))
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
-// HMACVerify 校验数据的 HMAC-SHA256 签名是否匹配。
-// 使用 hmac.Equal 常量时间比较，防止时序攻击。
+// HMACVerify verifies whether the HMAC-SHA256 signature of data matches.
+// It uses hmac.Equal for a constant-time comparison, preventing timing attacks.
 func HMACVerify(key []byte, data, signature string) bool {
 	expected := HMACSign(key, data)
 	return hmac.Equal([]byte(expected), []byte(signature))

@@ -1,42 +1,42 @@
 # project-structure
 
-业务服务推荐目录结构，基于 infra-go 最佳实践总结。分层架构：**入口 → 配置 → 依赖装配 → 路由 → 处理器 → 业务逻辑 → 数据模型**。
+Recommended directory structure for a business service, distilled from infra-go best practices. Layered architecture: **entry → config → dependency assembly → route → handler → business logic → data model**.
 
-## 推荐目录结构
+## Recommended directory structure
 
 ```txt
 my-service/
-├── main.go                 # 入口：加载配置 → 创建 ServiceContext → 注册路由 → 启动服务
-├── config/                 # 配置定义（struct + json 标签默认值/校验，配合 conf 加载）
+├── main.go                 # Entry: load config → create ServiceContext → register routes → start server
+├── config/                 # Config definitions (struct + json tag defaults/validation, loaded with conf)
 │   └── config.go
-├── svc/                    # 依赖装配层：ServiceContext
+├── svc/                    # Dependency assembly layer: ServiceContext
 │   └── context.go
-├── route/                  # 路由层：统一注册路由与全局/分组中间件
+├── route/                  # Routing layer: registers all routes plus global/group middleware
 │   └── route.go
-├── middleware/             # 中间件层：认证、审计、权限、上下文注入等 HTTP 中间件
+├── middleware/             # Middleware layer: auth, audit, permissions, context injection, etc.
 │   ├── auth.go
 │   ├── audit.go
 │   └── context.go
-├── handler/                # 处理器层：参数绑定 + 调用 Logic + 统一响应（薄层）
+├── handler/                # Handler layer: bind params + call Logic + unified response (thin layer)
 │   ├── account.go
 │   └── order.go
-├── logic/                  # 业务逻辑层：核心业务、事务、规则
+├── logic/                  # Business logic layer: core business, transactions, rules
 │   ├── account.go
 │   ├── order.go
-│   └── store/              # 可选：存储接口与实现（如 KVStore 的 db/redis 后端）
-├── model/                  # 数据模型层：GORM 实体、常量、DTO
+│   └── store/              # Optional: storage interfaces and implementations (e.g. KVStore db/redis backends)
+├── model/                  # Data model layer: GORM entities, constants, DTOs
 │   ├── account.go
 │   └── order.go
-├── db/                     # 数据库层：迁移 + 种子数据
+├── db/                     # Database layer: migrations + seed data
 │   └── migrate.go
-├── docs/                   # 设计文档
-├── config.yaml             # 开发配置
-├── config.docker.yaml      # 容器环境配置（可选）
+├── docs/                   # Design documents
+├── config.yaml             # Development config
+├── config.docker.yaml      # Container environment config (optional)
 ├── Dockerfile
 └── go.mod
 ```
 
-## 分层职责与依赖方向
+## Layer responsibilities and dependency direction
 
 ```txt
 main.go ──► config ──► svc(ServiceContext) ──► route ──► middleware / handler
@@ -44,15 +44,15 @@ main.go ──► config ──► svc(ServiceContext) ──► route ──►
                     └──► db / model ◄──────────────┴──► logic ──► model / logic/store
 ```
 
-- 依赖方向**自上而下单向**：`handler` 依赖 `logic`，`logic` 依赖 `model`；禁止反向依赖。
-- `middleware` 与 `handler` 平级，均依赖 `svc` 与 `logic`。
-- `config` 是所有层的公共依赖；`svc` 把配置转成可用组件（DB/Redis/JWT/各 Logic/Handler）。
+- The dependency direction is **one-way, top-down**: `handler` depends on `logic`, `logic` depends on `model`; reverse dependencies are forbidden.
+- `middleware` and `handler` are peers, both depending on `svc` and `logic`.
+- `config` is a shared dependency of every layer; `svc` turns configuration into usable components (DB/Redis/JWT/each Logic/Handler).
 
-## 各目录说明
+## Directory details
 
-### config — 配置定义
+### config — config definitions
 
-只放配置结构体，用 `json` 标签声明默认值、范围、枚举，敏感项留空走环境变量：
+Holds only config structs; declare defaults, ranges and enums with `json` tags, and leave sensitive items empty to be supplied via environment variables:
 
 ```go
 type Config struct {
@@ -66,9 +66,9 @@ type Config struct {
 }
 ```
 
-### svc — 依赖装配（ServiceContext）
+### svc — dependency assembly (ServiceContext)
 
-创建/注入/管理各组件（DB、Redis、JWT、Logic、Handler）生命周期，`main.go` 只做三件事——加载配置、创建 ServiceContext、启动服务：
+Creates, injects and manages the lifecycle of each component (DB, Redis, JWT, Logic, Handler); `main.go` does only three things — load config, create the ServiceContext, start the server:
 
 ```go
 type ServiceContext struct {
@@ -82,15 +82,15 @@ type ServiceContext struct {
 }
 
 func NewServiceContext(c config.Config) (*ServiceContext, error) {
-    // 按依赖顺序：orm.New → db.Migrate → jwt.New → redisx.New → 各 Logic/Handler
+    // In dependency order: orm.New → db.Migrate → jwt.New → redisx.New → each Logic/Handler
 }
 
-func (sc *ServiceContext) Close() { /* 关闭 DB / Redis / 后台 worker */ }
+func (sc *ServiceContext) Close() { /* close DB / Redis / background workers */ }
 ```
 
-### route — 路由注册
+### route — route registration
 
-统一注册所有路由与中间件链：
+Registers all routes and the middleware chain in one place:
 
 ```go
 func Register(server *httpx.Server, svcCtx *svc.ServiceContext) {
@@ -105,20 +105,20 @@ func Register(server *httpx.Server, svcCtx *svc.ServiceContext) {
         Path:   "/orders",
         Handler: svcCtx.OrderHandler.Create,
     })
-    // 受保护路由：追加鉴权中间件（见下）
+    // Protected routes: append the auth middleware (see below)
 }
 ```
 
-### handler — 处理器层（薄层）
+### handler — handler layer (thin layer)
 
-只做三件事：**参数绑定 → 调用 Logic → 统一响应**：
+Does only three things: **bind params → call Logic → unified response**:
 
 ```go
 func (h *OrderHandler) Create(w http.ResponseWriter, r *http.Request) {
     ctx := r.Context()
     var req logic.CreateOrderRequest
     if err := httpx.MustBindJSON(w, r, &req); err != nil {
-        return // 已自动写 400
+        return // 400 already written automatically
     }
     order, err := h.svc.Create(ctx, &req)
     if err != nil {
@@ -129,40 +129,40 @@ func (h *OrderHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-### logic — 业务逻辑层
+### logic — business logic layer
 
-核心业务、事务、校验、规则；可依赖其他 Logic（经 ServiceContext 注入或接口解耦）。纯数据访问放 `logic/store/`。
+Core business, transactions, validation and rules; may depend on other Logic (injected via ServiceContext or decoupled through interfaces). Put pure data access in `logic/store/`.
 
-### model — 数据模型
+### model — data model
 
-GORM 实体（表名、注释、索引）、常量、DTO，与 `db.Migrate` 对应。
+GORM entities (table names, comments, indexes), constants and DTOs, matching `db.Migrate`.
 
-### db — 迁移与种子
+### db — migrations and seeds
 
-`Migrate(db)`：`AutoMigrate` 所有实体 + 种子数据（超级管理员、内置策略等）。
+`Migrate(db)`: `AutoMigrate` all entities + seed data (super admin, built-in policies, etc.).
 
-### middleware — 中间件
+### middleware — middleware
 
-业务自定义中间件（认证、审计、权限、上下文注入）实现 `httpx.Middleware`（`func(http.HandlerFunc) http.HandlerFunc`）签名，供 `route` 挂载。
+Business-specific middleware (auth, audit, permissions, context injection) implements the `httpx.Middleware` signature (`func(http.HandlerFunc) http.HandlerFunc`) for `route` to mount.
 
-- 通用能力直接用 httpx 内置：`httpx.WithJWT`（JWT 认证）、`httpx.WithRateLimit`（限流）、`httpx.WithTracing`（链路）、`httpx.WithRecovery` 等。
-- 需引入第三方标准 `func(http.Handler) http.Handler` 中间件时，用 `httpx.AsMiddleware` 包装后注册。
-- handler 内读取当前用户 claims：`jwt.ClaimsFromContext(r.Context())`。
+- For common capabilities use the httpx built-ins directly: `httpx.WithJWT` (JWT auth), `httpx.WithRateLimit` (rate limiting), `httpx.WithTracing` (tracing), `httpx.WithRecovery`, etc.
+- To bring in a third-party standard `func(http.Handler) http.Handler` middleware, wrap it with `httpx.AsMiddleware` before registering.
+- Reading the current user's claims inside a handler: `jwt.ClaimsFromContext(r.Context())`.
 
-## 与 infra-go 模块的对应
+## Mapping to infra-go modules
 
-| 目录 | 使用的 infra-go 模块 |
+| Directory | infra-go modules used |
 |------|------|
-| `config` | `conf`（加载/默认值/校验） |
-| `svc` | `orm` · `redisx` · `jwt` · `hash`（装配） |
-| `route` | `httpx`（AddRoute/Group/Use） |
-| `handler` | `httpx`（MustBind* / OkJSON / WriteHTTPError） |
-| `middleware` | `httpx.WithJWT` · `httpx.WithRateLimit` · `httpx` 内置中间件 |
+| `config` | `conf` (loading / defaults / validation) |
+| `svc` | `orm` · `redisx` · `jwt` · `hash` (assembly) |
+| `route` | `httpx` (AddRoute/Group/Use) |
+| `handler` | `httpx` (MustBind* / OkJSON / WriteHTTPError) |
+| `middleware` | `httpx.WithJWT` · `httpx.WithRateLimit` · httpx built-in middleware |
 | `logic` | `orm` · `redisx` · `retry` · `taskq` · `syncx` · `cast` · `hash` |
-| `main.go` | `conf` · `logger` · `httpx` · `service`（多服务编排） |
+| `main.go` | `conf` · `logger` · `httpx` · `service` (multi-service orchestration) |
 
-## 使用建议
+## Recommendations
 
-- 小型服务（单一业务、<10 个接口）可合并 `handler` + `logic`，但建议保留 `svc` 与 `route` 分层。
-- 有实时通信需求加 `ws/`（基于 `websocket`）；有异步任务加 `job/`（基于 `taskq`）。
-- `config.yaml` 放开发默认值；敏感配置（JWT Secret、数据库密码）不写仓库，通过 `conf.UseEnv()` 的 `${VAR}` 覆盖。
+- Small services (single domain, <10 endpoints) may merge `handler` + `logic`, but keep the `svc` and `route` layers.
+- Add `ws/` (based on `websocket`) when you need realtime communication; add `job/` (based on `taskq`) for async tasks.
+- Keep development defaults in `config.yaml`; never commit sensitive config (JWT Secret, database password) — override it with the `${VAR}` support of `conf.UseEnv()`.

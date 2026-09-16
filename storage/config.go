@@ -1,90 +1,102 @@
 package storage
 
-// Config 存储服务配置。
-// 默认值通过结构体标签 default 定义，遵循 conf 标准。
+// Config is the storage service configuration.
+// Default values are defined via the `default` struct tag, following the conf standard.
 type Config struct {
-	// Driver 存储驱动类型，支持 "local"、"oss"、"cos" 和 "kodo"，必填。
+	// Driver is the storage driver type; "local", "oss", "cos" and "kodo" are
+	// supported. Required.
 	Driver Driver `json:"driver"`
 
-	// Local 本地文件系统配置，当 Driver 为 "local" 时使用，默认空。
+	// Local is the local filesystem configuration, used when Driver is "local".
+	// Empty by default.
 	Local *LocalConfig `json:",optional"`
 
-	// OSS 阿里云 OSS 配置，当 Driver 为 "oss" 时使用，默认空。
+	// OSS is the Alibaba Cloud OSS configuration, used when Driver is "oss".
+	// Empty by default.
 	OSS *OSSConfig `json:",optional"`
 
-	// COS 腾讯云 COS 配置，当 Driver 为 "cos" 时使用，默认空。
+	// COS is the Tencent Cloud COS configuration, used when Driver is "cos".
+	// Empty by default.
 	COS *COSConfig `json:",optional"`
 
-	// KODO 七牛云 KODO 配置，当 Driver 为 "kodo" 时使用，默认空。
+	// KODO is the Qiniu Cloud KODO configuration, used when Driver is "kodo".
+	// Empty by default.
 	KODO *KODOConfig `json:",optional"`
 }
 
-// LocalConfig 本地文件系统存储配置。
+// LocalConfig is the local filesystem storage configuration.
 type LocalConfig struct {
-	// RootDir 本地存储根目录，必填。
-	// 文件将写入此目录下，path 中的子路径对应根目录下的相对目录。
+	// RootDir is the local storage root directory. Required.
+	// Files are written under this directory; sub-paths in path map to relative
+	// directories below the root.
 	RootDir string `json:"root_dir"`
 
-	// URL 访问 URL 前缀（可选），例如静态文件服务地址 "http://localhost:8080/static"。
-	// 为空时 URL() 返回 file:// 协议的本地绝对路径。
+	// URL is the access URL prefix (optional), for example the address of a
+	// static file server such as "http://localhost:8080/static".
+	// When empty, URL() returns a local absolute path with the file:// scheme.
 	URL string `json:",optional"`
 }
 
-// OSSConfig 阿里云 OSS 存储配置。
+// OSSConfig is the Alibaba Cloud OSS storage configuration.
 type OSSConfig struct {
-	// Endpoint OSS 访问域名，例如 "oss-cn-hangzhou.aliyuncs.com"，必填。
-	// 完整列表参考：https://help.aliyun.com/zh/oss/user-guide/regions-and-endpoints
+	// Endpoint is the OSS access domain, for example
+	// "oss-cn-hangzhou.aliyuncs.com". Required.
+	// Full list: https://help.aliyun.com/zh/oss/user-guide/regions-and-endpoints
 	Endpoint string `json:"endpoint"`
 
-	// AccessKeyID 阿里云 AccessKey ID，必填。
+	// AccessKeyID is the Alibaba Cloud AccessKey ID. Required.
 	AccessKeyID string `json:"access_key_id"`
 
-	// AccessKeySecret 阿里云 AccessKey Secret，必填。
+	// AccessKeySecret is the Alibaba Cloud AccessKey Secret. Required.
 	AccessKeySecret string `json:"access_key_secret"`
 
-	// Bucket 存储空间名称，必填。
+	// Bucket is the bucket name. Required.
 	Bucket string `json:"bucket"`
 
-	// URL 文件访问域名（CDN 或自定义域名），用于拼接完整访问 URL。
-	// 为空时默认使用 "https://{bucket}.{endpoint}"，默认空。
+	// URL is the file access domain (CDN or custom domain) used to build the full
+	// access URL. When empty it defaults to "https://{bucket}.{endpoint}".
+	// Empty by default.
 	URL string `json:",optional"`
 }
 
-// COSConfig 腾讯云 COS 存储配置。
+// COSConfig is the Tencent Cloud COS storage configuration.
 type COSConfig struct {
-	// BucketURL 存储桶访问地址，例如 "https://bucket-name.cos.ap-beijing.myqcloud.com"，必填。
-	// 完整列表参考：https://console.cloud.tencent.com/cos5/bucket
+	// BucketURL is the bucket access address, for example
+	// "https://bucket-name.cos.ap-beijing.myqcloud.com". Required.
+	// Full list: https://console.cloud.tencent.com/cos5/bucket
 	BucketURL string `json:"bucket_url"`
 
-	// SecretID 腾讯云 SecretID，必填。
-	// 参考：https://cloud.tencent.com/document/product/598/37140
+	// SecretID is the Tencent Cloud SecretID. Required.
+	// Reference: https://cloud.tencent.com/document/product/598/37140
 	SecretID string `json:"secret_id"`
 
-	// SecretKey 腾讯云 SecretKey，必填。
+	// SecretKey is the Tencent Cloud SecretKey. Required.
 	SecretKey string `json:"secret_key"`
 
-	// URL 文件访问域名（CDN 或自定义域名），用于拼接完整访问 URL。
-	// 为空时默认使用 BucketURL，默认空。
+	// URL is the file access domain (CDN or custom domain) used to build the full
+	// access URL. When empty it defaults to BucketURL. Empty by default.
 	URL string `json:",optional"`
 }
 
-// KODOConfig 七牛云 KODO 存储配置。
-// 默认值通过结构体标签 default 定义，遵循 conf 标准。
+// KODOConfig is the Qiniu Cloud KODO storage configuration.
+// Default values are defined via the `default` struct tag, following the conf standard.
 type KODOConfig struct {
-	// AccessKey 七牛云 AccessKey，必填。
+	// AccessKey is the Qiniu Cloud AccessKey. Required.
 	AccessKey string `json:"access_key"`
 
-	// SecretKey 七牛云 SecretKey，必填。
+	// SecretKey is the Qiniu Cloud SecretKey. Required.
 	SecretKey string `json:"secret_key"`
 
-	// Bucket 存储空间名称，必填。
+	// Bucket is the bucket name. Required.
 	Bucket string `json:"bucket"`
 
-	// Region 存储区域，例如 "z0"（华东）、"z1"（华北）、"z2"（华南），默认 "z0"。
-	// 参考：https://developer.qiniu.com/kodo/manual/1671/region-endpoint-fq
+	// Region is the storage region, for example "z0" (East China), "z1"
+	// (North China) or "z2" (South China). Defaults to "z0".
+	// Reference: https://developer.qiniu.com/kodo/manual/1671/region-endpoint-fq
 	Region string `json:",default=z0"`
 
-	// URL 文件访问域名（CDN 或绑定的自定义域名），用于拼接完整访问 URL。
-	// 七牛云必须绑定域名才能公开访问，因此调用 URL() 方法时此字段必填，默认空。
+	// URL is the file access domain (CDN or a bound custom domain) used to build
+	// the full access URL. Qiniu Cloud requires a bound domain for public access,
+	// so this field is required when calling the URL() method. Empty by default.
 	URL string `json:",optional"`
 }

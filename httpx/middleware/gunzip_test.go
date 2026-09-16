@@ -12,9 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 对应 gunzip.go：gzip 请求体自动解压中间件。
+// Covers gunzip.go: the gzip request body decompression middleware.
 
-// gzipBody 将 body 压缩为 gzip 字节流。
+// gzipBody compresses body into a gzip byte stream.
 func gzipBody(t *testing.T, body string) []byte {
 	t.Helper()
 	var buf bytes.Buffer

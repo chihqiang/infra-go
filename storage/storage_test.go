@@ -8,10 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- Storage 接口 ---
+// --- Storage interface ---
 
 func TestStorageInterface_CompileTimeCheck(t *testing.T) {
-	// 编译期验证所有实现都满足 Storage 接口
+	// Compile-time check that every implementation satisfies the Storage interface
 	var _ Storage = (*localStorage)(nil)
 	var _ Storage = (*ossStorage)(nil)
 	var _ Storage = (*cosStorage)(nil)
@@ -42,7 +42,7 @@ func TestBuildURL(t *testing.T) {
 		{"empty path", "https://cdn.example.com", "", "https://cdn.example.com/", false},
 		{"empty base", "", "path/to/file.txt", "", true},
 		{"spaces in path", "https://cdn.example.com", "path with spaces/file.txt", "https://cdn.example.com/path%20with%20spaces/file.txt", false},
-		{"chinese path", "https://cdn.example.com", "中文路径/file.txt", "https://cdn.example.com/%E4%B8%AD%E6%96%87%E8%B7%AF%E5%BE%84/file.txt", false},
+		{"non-ASCII path", "https://cdn.example.com", "путь/file.txt", "https://cdn.example.com/%D0%BF%D1%83%D1%82%D1%8C/file.txt", false},
 		{"special chars", "https://cdn.example.com", "path/file name.txt", "https://cdn.example.com/path/file%20name.txt", false},
 	}
 	for _, tt := range tests {
@@ -108,7 +108,8 @@ func TestNewOSS_MissingBucket(t *testing.T) {
 }
 
 func TestNewOSS_Success(t *testing.T) {
-	// oss.New 不会验证凭证，仅创建客户端结构，因此可以用假凭证测试
+	// oss.New does not validate the credentials, it only builds the client
+	// structure, so fake credentials are fine here
 	s, err := NewOSS(&OSSConfig{
 		Endpoint:        "oss-cn-hangzhou.aliyuncs.com",
 		AccessKeyID:     "test-access-key-id",
@@ -237,7 +238,7 @@ func TestNewCOS_InvalidBucketURL(t *testing.T) {
 }
 
 func TestNewCOS_Success(t *testing.T) {
-	// cos.NewClient 不会验证凭证，仅创建客户端结构
+	// cos.NewClient does not validate the credentials, it only builds the client structure
 	s, err := NewCOS(&COSConfig{
 		BucketURL: "https://test-bucket.cos.ap-beijing.myqcloud.com",
 		SecretID:  "test-secret-id",
@@ -358,7 +359,7 @@ func TestNewKODO_URL_CustomDomain(t *testing.T) {
 }
 
 func TestNewKODO_DefaultRegion(t *testing.T) {
-	// 不指定 Region 时应默认使用 "z0"（华东）
+	// When Region is not given it must default to "z0" (East China)
 	s, err := NewKODO(&KODOConfig{
 		AccessKey: "test-access-key",
 		SecretKey: "test-secret-key",
@@ -397,7 +398,7 @@ func TestKodoRegions_AllMapped(t *testing.T) {
 	}
 }
 
-// --- 工厂方法 ---
+// --- Factory ---
 
 func TestNew_OSS(t *testing.T) {
 	s, err := New(Config{
@@ -412,7 +413,7 @@ func TestNew_OSS(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, s)
 
-	// 验证实际类型
+	// Verify the concrete type
 	_, ok := s.(*ossStorage)
 	assert.True(t, ok)
 }
@@ -483,7 +484,7 @@ func TestNew_EmptyDriver(t *testing.T) {
 }
 
 func TestNew_OSSWithNilConfig(t *testing.T) {
-	// Driver 为 OSS 但 OSS 配置为 nil
+	// Driver is OSS but the OSS configuration is nil
 	_, err := New(Config{
 		Driver: DriverOSS,
 	})
@@ -558,7 +559,7 @@ func TestStorages_Success(t *testing.T) {
 	})
 	require.Len(t, storages, 2)
 
-	// 每个实例有独立的访问地址
+	// Each instance has its own access address
 	u, err := storages.URL(context.Background(), "images", "a.png")
 	require.NoError(t, err)
 	assert.Equal(t, "https://img.example.com/a.png", u)
@@ -609,7 +610,8 @@ func TestStorages_URLUnknownStorage(t *testing.T) {
 }
 
 func TestStorages_CompileTimeCheck(t *testing.T) {
-	// Storages 本身不需要满足 Storage，但需保证类型定义可用
+	// Storages itself does not need to satisfy Storage, but the type definition
+	// must remain usable
 	var _ map[string]Storage = Storages{}
 }
 

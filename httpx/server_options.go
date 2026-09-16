@@ -6,21 +6,23 @@ import (
 	"time"
 )
 
-// 本文件承载 Server / 路由组的各类选项（With*）与中间件包装（Apply*）：
-//   - 选项类型（RouteOption / RunOption）与 RouteOption 的作用对象 routeGroup
-//   - 路由组选项（WithPrefix / WithMiddleware / WithMiddlewares）
-//   - 独立函数形式的中间件包装（ApplyMiddleware / ApplyMiddlewares）
-//   - 标准中间件适配（AsMiddleware）
-//   - Server 选项（WithReadTimeout / WithWriteTimeout / WithIdleTimeout /
-//     WithMaxHeaderBytes / WithTLSConfig / WithShutdownTimeout）
+// This file holds the various options (With*) and middleware wrappers (Apply*) for
+// the Server / route groups:
+//   - Option types (RouteOption / RunOption) and the routeGroup that RouteOption acts on
+//   - Route group options (WithPrefix / WithMiddleware / WithMiddlewares)
+//   - Standalone middleware wrappers (ApplyMiddleware / ApplyMiddlewares)
+//   - Standard middleware adaptation (AsMiddleware)
+//   - Server options (WithReadTimeout / WithWriteTimeout / WithIdleTimeout /
+//     WithMaxHeaderBytes / WithTLSConfig / WithShutdownTimeout)
 
-// --- 选项类型 ---
+// --- Option types ---
 
-// RouteOption 用于自定义一组路由的选项，如前缀、中间件。
+// RouteOption customizes a group of routes, such as their prefix and middleware.
 type RouteOption func(*routeGroup)
 
-// RunOption 用于自定义 Server 的选项，如超时、TLS。
-// 也可直接传入闭包，在构造时注册路由、添加中间件等：
+// RunOption customizes the Server, such as its timeouts and TLS.
+// You can also pass a closure directly to register routes or add middleware at
+// construction time:
 //
 //	server := httpx.NewServer(conf, func(s *httpx.Server) {
 //	    s.Use(loggingMiddleware)
@@ -28,22 +30,23 @@ type RouteOption func(*routeGroup)
 //	})
 type RunOption func(*Server)
 
-// routeGroup 是一组路由及其配置，是 RouteOption 的作用对象。
+// routeGroup is a group of routes together with their configuration; it is what
+// RouteOption acts on.
 type routeGroup struct {
 	routes      []Route
 	middlewares []Middleware
 }
 
-// --- 路由组选项（RouteOption）---
+// --- Route group options (RouteOption) ---
 
-// WithPrefix 为路由组添加路径前缀。
+// WithPrefix adds a path prefix to the route group.
 //
 //	server.AddRoutes([]Route{
 //	    {Method: "GET", Path: "/users", Handler: listUsers},
 //	    {Method: "POST", Path: "/users", Handler: createUser},
 //	}, httpx.WithPrefix("/api/v1"))
 //
-// 注册的路由为：GET /api/v1/users, POST /api/v1/users
+// The registered routes are: GET /api/v1/users, POST /api/v1/users
 func WithPrefix(prefix string) RouteOption {
 	return func(g *routeGroup) {
 		if prefix == "" {
@@ -61,26 +64,26 @@ func WithPrefix(prefix string) RouteOption {
 	}
 }
 
-// WithMiddleware 为路由组添加一个中间件。
-// 中间件按添加顺序执行（先添加的先执行）。
+// WithMiddleware adds a single middleware to the route group.
+// Middleware runs in the order it was added (first added runs first).
 func WithMiddleware(mw Middleware) RouteOption {
 	return func(g *routeGroup) {
 		g.middlewares = append(g.middlewares, mw)
 	}
 }
 
-// WithMiddlewares 为路由组添加多个中间件。
-// 中间件按传入顺序执行（第一个先执行）。
+// WithMiddlewares adds several middleware to the route group.
+// Middleware runs in the order given (the first one runs first).
 func WithMiddlewares(mws ...Middleware) RouteOption {
 	return func(g *routeGroup) {
 		g.middlewares = append(g.middlewares, mws...)
 	}
 }
 
-// --- 独立函数形式的中间件包装 ---
+// --- Standalone middleware wrappers ---
 
-// ApplyMiddleware 将中间件应用到路由，返回包装后的路由。
-// 适用于需要在添加路由前对特定路由包装中间件的场景。
+// ApplyMiddleware applies a middleware to routes and returns the wrapped routes.
+// It suits cases where specific routes need wrapping before being added.
 //
 //	server.AddRoutes(httpx.ApplyMiddleware(authMiddleware,
 //	    httpx.Route{Method: "GET", Path: "/profile", Handler: getProfile},
@@ -98,8 +101,9 @@ func ApplyMiddleware(mw Middleware, rs ...Route) []Route {
 	return routes
 }
 
-// ApplyMiddlewares 将多个中间件应用到路由，返回包装后的路由。
-// 中间件按切片顺序执行（第一个先执行）。
+// ApplyMiddlewares applies several middleware to routes and returns the wrapped
+// routes.
+// Middleware runs in slice order (the first one runs first).
 func ApplyMiddlewares(mws []Middleware, rs ...Route) []Route {
 	for i := len(mws) - 1; i >= 0; i-- {
 		rs = ApplyMiddleware(mws[i], rs...)
@@ -107,16 +111,17 @@ func ApplyMiddlewares(mws []Middleware, rs ...Route) []Route {
 	return rs
 }
 
-// --- 标准中间件适配 ---
+// --- Standard middleware adaptation ---
 
-// AsMiddleware 将标准形式的中间件适配为 httpx.Middleware，方便快速把
-// 任意 func(http.Handler) http.Handler 中间件（如 httpx/middleware 子包的
-// NewXxx().Middleware()，或其它基于 net/http 的第三方中间件）注册到 server。
+// AsMiddleware adapts a standard middleware into httpx.Middleware, making it easy to
+// register any func(http.Handler) http.Handler middleware on the server (such as
+// NewXxx().Middleware() from the httpx/middleware subpackage, or any other third-party
+// net/http-based middleware).
 //
-//	// 自定义/第三方标准中间件 → httpx 中间件
+//	// custom/third-party standard middleware → httpx middleware
 //	server.Use(httpx.AsMiddleware(myStdMiddleware))
 //
-//	// 使用 httpx/middleware 子包（OO 形态）时亦可通过本函数接入：
+//	// the httpx/middleware subpackage (OO style) can also be wired up this way:
 //	server.Use(httpx.AsMiddleware(middleware.NewCORS("*").Middleware()))
 func AsMiddleware(mw func(http.Handler) http.Handler) Middleware {
 	return func(next http.HandlerFunc) http.HandlerFunc {
@@ -124,44 +129,47 @@ func AsMiddleware(mw func(http.Handler) http.Handler) Middleware {
 	}
 }
 
-// --- Server 选项（RunOption）---
+// --- Server options (RunOption) ---
 
-// WithReadTimeout 设置读超时。覆盖配置中的 ReadTimeout。
+// WithReadTimeout sets the read timeout. It overrides ReadTimeout from the config.
 func WithReadTimeout(d time.Duration) RunOption {
 	return func(s *Server) {
 		s.conf.ReadTimeout = d
 	}
 }
 
-// WithWriteTimeout 设置写超时。覆盖配置中的 WriteTimeout。
+// WithWriteTimeout sets the write timeout. It overrides WriteTimeout from the config.
 func WithWriteTimeout(d time.Duration) RunOption {
 	return func(s *Server) {
 		s.conf.WriteTimeout = d
 	}
 }
 
-// WithIdleTimeout 设置空闲连接超时。覆盖配置中的 IdleTimeout。
+// WithIdleTimeout sets the idle connection timeout. It overrides IdleTimeout from the
+// config.
 func WithIdleTimeout(d time.Duration) RunOption {
 	return func(s *Server) {
 		s.conf.IdleTimeout = d
 	}
 }
 
-// WithMaxHeaderBytes 设置最大请求头字节数。覆盖配置中的 MaxHeaderBytes。
+// WithMaxHeaderBytes sets the maximum request header size. It overrides
+// MaxHeaderBytes from the config.
 func WithMaxHeaderBytes(n int) RunOption {
 	return func(s *Server) {
 		s.conf.MaxHeaderBytes = n
 	}
 }
 
-// WithTLSConfig 设置 TLS 配置。
+// WithTLSConfig sets the TLS configuration.
 func WithTLSConfig(cfg *tls.Config) RunOption {
 	return func(s *Server) {
 		s.tlsConfig = cfg
 	}
 }
 
-// WithShutdownTimeout 设置优雅关闭超时时间，覆盖配置中的 ShutdownTimeout。
+// WithShutdownTimeout sets the graceful shutdown timeout, overriding ShutdownTimeout
+// from the config.
 func WithShutdownTimeout(d time.Duration) RunOption {
 	return func(s *Server) {
 		s.conf.ShutdownTimeout = d

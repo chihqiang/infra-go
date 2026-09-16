@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 对应 validator.go：DefaultValidator、SetValidateFn/validate/Validate。
+// Covers validator.go: DefaultValidator, SetValidateFn/validate/Validate.
 
 type validReq struct {
 	Name  string `binding:"required"`
@@ -21,7 +21,7 @@ func TestDefaultValidator_StructValid(t *testing.T) {
 
 func TestDefaultValidator_StructInvalid(t *testing.T) {
 	v := &DefaultValidator{}
-	require.Error(t, v.ValidateStruct(&validReq{Name: "Alice"})) // 缺 email
+	require.Error(t, v.ValidateStruct(&validReq{Name: "Alice"})) // email is missing
 }
 
 func TestDefaultValidator_ValueNotPointer(t *testing.T) {
@@ -31,25 +31,25 @@ func TestDefaultValidator_ValueNotPointer(t *testing.T) {
 
 func TestDefaultValidator_SliceAndArray(t *testing.T) {
 	v := &DefaultValidator{}
-	// 全部合法 → nil
+	// all valid → nil
 	require.NoError(t, v.ValidateStruct([]validReq{
 		{Name: "a", Email: "a@b.com"},
 		{Name: "b", Email: "c@d.com"},
 	}))
-	// 含非法元素 → 报错
+	// contains an invalid element → error
 	require.Error(t, v.ValidateStruct([]validReq{
 		{Name: "a", Email: "a@b.com"},
 		{Name: "b"},
 	}))
-	// 数组同理
+	// the same applies to arrays
 	require.Error(t, v.ValidateStruct([1]validReq{{Name: "b"}}))
 }
 
 func TestDefaultValidator_NilAndScalar(t *testing.T) {
 	v := &DefaultValidator{}
 	require.NoError(t, v.ValidateStruct(nil))
-	require.NoError(t, v.ValidateStruct(42))           // 非 struct 直接跳过
-	require.NoError(t, v.ValidateStruct("plain text")) // Ptr→非 struct → 继续解引用到 string
+	require.NoError(t, v.ValidateStruct(42))           // non-struct types are skipped directly
+	require.NoError(t, v.ValidateStruct("plain text")) // Ptr → non-struct → keep dereferencing down to string
 }
 
 func TestDefaultValidator_Engine(t *testing.T) {
@@ -58,25 +58,25 @@ func TestDefaultValidator_Engine(t *testing.T) {
 }
 
 func TestValidate_DefaultEntry(t *testing.T) {
-	// 子包未注入时默认走 DefaultValidator
+	// When no sub-package hook is installed, validation falls back to DefaultValidator
 	require.Error(t, Validate(&validReq{Name: "x"}))
 	require.NoError(t, Validate(&validReq{Name: "x", Email: "y@z.com"}))
 }
 
 func TestSetValidateFn_HookAndRestore(t *testing.T) {
-	defer SetValidateFn(nil) // 结束恢复默认
+	defer SetValidateFn(nil) // restore the default when the test ends
 
 	var called bool
 	SetValidateFn(func(any) error { called = true; return nil })
 
-	require.NoError(t, Validate(&validReq{Name: "x"})) // hook 生效，跳过真实校验
+	require.NoError(t, Validate(&validReq{Name: "x"})) // the hook takes effect and skips real validation
 	assert.True(t, called)
 
-	// 恢复默认后校验恢复
+	// Validation is restored after restoring the default
 	SetValidateFn(nil)
 	require.Error(t, Validate(&validReq{Name: "x"}))
 
-	// 显式传 nil 同恢复默认
+	// Explicitly passing nil also restores the default
 	SetValidateFn(nil)
 	require.Error(t, Validate(&validReq{Name: "x"}))
 }

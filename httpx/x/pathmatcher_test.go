@@ -16,7 +16,7 @@ func TestPathMatcher_Exact(t *testing.T) {
 }
 
 func TestPathMatcher_PrefixWildcard(t *testing.T) {
-	// 以 * 结尾：前缀匹配，可跨目录
+	// ends with *: prefix match, may cross directories
 	m := NewPathMatcher([]string{"/health*"})
 	for _, p := range []string{"/health", "/healthz", "/healthy", "/health/live", "/health/a/b"} {
 		assert.True(t, m.Match(p), "path %s should match /health*", p)
@@ -27,7 +27,8 @@ func TestPathMatcher_PrefixWildcard(t *testing.T) {
 }
 
 func TestPathMatcher_GlobWildcard(t *testing.T) {
-	// glob：* 在段中间时不跨 /，仅匹配单个路径段；支持字符类
+	// glob: * inside a segment does not cross / and matches a single path segment; character
+	// classes are supported
 	m := NewPathMatcher([]string{"/api/*/x", "/v[0-9]/info"})
 	assert.True(t, m.Match("/api/users/x"))
 	assert.False(t, m.Match("/api/users/y/x"))

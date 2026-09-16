@@ -7,9 +7,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 对应 mapping.go：mapURI/mapForm/mapHeader/mapFormByTag、setter 与映射引擎。
+// Covers mapping.go: mapURI/mapForm/mapHeader/mapFormByTag, the setter and the mapping engine.
 
-// --- map 目标直接填充 ---
+// --- Direct fill into a map target ---
 
 func TestMapForm_ToMapStringString(t *testing.T) {
 	m := map[string]string{}
@@ -18,7 +18,7 @@ func TestMapForm_ToMapStringString(t *testing.T) {
 		"b": {"x"},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "2", m["a"]) // 取最后一个值
+	assert.Equal(t, "2", m["a"]) // the last value wins
 	assert.Equal(t, "x", m["b"])
 }
 
@@ -38,16 +38,16 @@ func TestMapForm_ToBadMapTarget(t *testing.T) {
 	require.Error(t, mapForm(&m, map[string][]string{"a": {"1"}}))
 }
 
-// --- 结构体映射（匿名内嵌 / 指针字段自动分配 / 忽略） ---
+// --- Struct mapping (anonymous embedding / automatic pointer allocation / ignoring) ---
 
 type mappingInner struct {
 	X string `form:"x"`
 }
 
 type mappingOuter struct {
-	mappingInner             // 匿名内嵌，展开子字段
+	mappingInner             // anonymous embedding, expands the sub-fields
 	Y            string      `form:"y"`
-	P            *mappingPtr // 无 form 标签：命中子字段时自动分配指针
+	P            *mappingPtr // no form tag: allocated automatically when a sub-field is hit
 	Skip         string      `form:"-"`
 }
 
@@ -65,27 +65,27 @@ func TestMapForm_NestedAnonymousAndPtr(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "vx", o.X)
 	assert.Equal(t, "vy", o.Y)
-	require.NotNil(t, o.P) // 指针字段在命中子字段时自动分配
+	require.NotNil(t, o.P) // the pointer field is allocated when a sub-field is hit
 	assert.Equal(t, "vz", o.P.Z)
-	assert.Empty(t, o.Skip) // form:"-" 忽略
+	assert.Empty(t, o.Skip) // form:"-" is ignored
 }
 
-// --- header 映射走 headerSource ---
+// --- header mapping goes through headerSource ---
 
 func TestMapHeader_CanonicalKey(t *testing.T) {
 	type h struct {
-		Token string `header:"x-token"` // 小写 tag → CanonicalMIMEHeaderKey 转大写后匹配
+		Token string `header:"x-token"` // lowercase tag → matched after CanonicalMIMEHeaderKey upper-casing
 	}
 	var v h
-	// 数据源使用 canonical 键（http.Header 实际形态：X-Token）
+	// The data source uses the canonical key (the actual shape of http.Header: X-Token)
 	require.NoError(t, mapHeader(&v, map[string][]string{"X-Token": {"abc"}}))
 	assert.Equal(t, "abc", v.Token)
 }
 
-// --- setByForm 的切片/默认值分支 ---
+// --- Slice/default-value branches of setByForm ---
 
 func TestSetByForm_SliceSplitAndDefault(t *testing.T) {
-	// 单值含逗号自动拆分
+	// a single value containing commas is split automatically
 	s := &struct {
 		Tags []string
 	}{}
@@ -95,13 +95,13 @@ func TestSetByForm_SliceSplitAndDefault(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, []string{"a", "b", "c"}, s.Tags)
 
-	// 缺省时取 default 值（逗号拆分为切片）
+	// falls back to the default value when absent (split by comma into a slice)
 	ok, err = setByForm(rv, nil, map[string][]string{}, "tags", setOptions{isDefaultExists: true, defaultValue: "x,y"})
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, []string{"x", "y"}, s.Tags)
 
-	// 无数据且无默认值 → 未设置
+	// no data and no default value → not set
 	ok, err = setByForm(rv, nil, map[string][]string{}, "tags", setOptions{})
 	require.NoError(t, err)
 	assert.False(t, ok)

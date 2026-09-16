@@ -12,7 +12,7 @@ import (
 func TestNotFoundResponseWriter_Intercepts404(t *testing.T) {
 	rec := httptest.NewRecorder()
 
-	// 自定义 404 处理器
+	// Custom 404 handler
 	var called int
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		called++
@@ -23,7 +23,7 @@ func TestNotFoundResponseWriter_Intercepts404(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/missing", nil)
 	w := NewNotFoundResponseWriter(rec, r, handler)
 
-	// 模拟 ServeMux 写入 404
+	// Simulate ServeMux writing a 404
 	w.WriteHeader(http.StatusNotFound)
 	_, _ = w.Write([]byte("404 page not found\n"))
 
@@ -60,7 +60,7 @@ func TestNotFoundResponseWriter_HandlerOnlyOnce(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := NewNotFoundResponseWriter(rec, r, handler)
 
-	// 多次 WriteHeader(404)，handler 只应触发一次
+	// Even with several WriteHeader(404) calls, the handler must run only once
 	w.WriteHeader(http.StatusNotFound)
 	w.WriteHeader(http.StatusNotFound)
 	_, _ = w.Write([]byte("body"))
@@ -79,7 +79,7 @@ func TestNotFoundResponseWriter_WriteBeforeHeader(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := NewNotFoundResponseWriter(rec, r, handler)
 
-	// 直接 Write：未 suppress，透传给底层
+	// Direct Write: not suppressed, forwarded to the underlying writer
 	_, _ = w.Write([]byte("hello"))
 	assert.Equal(t, "hello", rec.Body.String())
 }

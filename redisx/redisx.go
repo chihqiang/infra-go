@@ -10,33 +10,37 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// 错误定义。
+// Error definitions.
 var (
-	// ErrLockNotAcquired 获取锁失败（锁已被其他客户端持有）。
+	// ErrLockNotAcquired means the lock was not acquired (another client holds it).
 	ErrLockNotAcquired = errors.New("redisx: lock not acquired")
-	// ErrLockOwnershipMismatch 释放锁失败（锁不属于当前持有者）。
+	// ErrLockOwnershipMismatch means the release failed (the lock does not belong to the
+	// current holder).
 	ErrLockOwnershipMismatch = errors.New("redisx: lock ownership mismatch")
-	// ErrInvalidLockTTL 锁的 TTL 非法（<= 0 或小于 minLockTTL）。
-	// TTL <= 0 时 SET NX 会写入永不过期的 key（持有者崩溃即永久死锁），
-	// 且启用自动续期时 time.NewTicker(ttl/3) 会在 goroutine 内 panic 终止进程；
-	// TTL 小于 1ms 时续期脚本的 PEXPIRE 参数会被截断为 0，直接删除锁。
+	// ErrInvalidLockTTL means the lock TTL is invalid (<= 0 or below minLockTTL).
+	// With a TTL <= 0, SET NX writes a key that never expires (a crash of the holder
+	// means a permanent deadlock) and, with automatic renewal enabled,
+	// time.NewTicker(ttl/3) panics inside the goroutine and terminates the process; with
+	// a TTL below 1ms the PEXPIRE argument of the renew script is truncated to 0 and
+	// deletes the lock outright.
 	ErrInvalidLockTTL = errors.New("redisx: invalid lock ttl")
 )
 
-// Client 封装了 redis.Client，提供便捷的 Redis 操作。
+// Client wraps redis.Client and provides convenient Redis operations.
 type Client struct {
 	client    *redis.Client
 	keyPrefix string
 }
 
-// New 根据配置创建 Redis 客户端。
-// 零值字段会自动填充默认值（通过 default 标签定义）。
+// New creates a Redis client from the configuration.
+// Zero-value fields are filled with their defaults automatically (defined through the
+// default tag).
 func New(cfg Config) (*Client, error) {
 	c := fillDefault(cfg)
 
 	var client *redis.Client
 	if c.MasterName != "" && len(c.SentinelAddrs) > 0 {
-		// 哨兵模式
+		// Sentinel mode
 		client = redis.NewFailoverClient(&redis.FailoverOptions{
 			MasterName:      c.MasterName,
 			SentinelAddrs:   c.SentinelAddrs,
@@ -53,7 +57,7 @@ func New(cfg Config) (*Client, error) {
 			ConnMaxIdleTime: c.ConnMaxIdleTime,
 		})
 	} else {
-		// 单机模式
+		// Standalone mode
 		client = redis.NewClient(&redis.Options{
 			Addr:            c.Addr,
 			Username:        c.Username,
@@ -76,7 +80,7 @@ func New(cfg Config) (*Client, error) {
 	}, nil
 }
 
-// MustNew 根据配置创建 Redis 客户端，出错时 panic。
+// MustNew creates a Redis client from the configuration and panics on error.
 func MustNew(cfg Config) *Client {
 	c, err := New(cfg)
 	if err != nil {
@@ -85,12 +89,12 @@ func MustNew(cfg Config) *Client {
 	return c
 }
 
-// Client 返回底层的 redis.Client，用于需要直接操作的场景。
+// Client returns the underlying redis.Client for cases that need direct access.
 func (c *Client) Client() *redis.Client {
 	return c.client
 }
 
-// Ping 测试 Redis 连接是否正常。
+// Ping tests whether the Redis connection is healthy.
 func (c *Client) Ping(ctx context.Context) error {
 	if err := c.client.Ping(ctx).Err(); err != nil {
 		return fmt.Errorf("redisx: ping failed: %w", err)
@@ -98,7 +102,7 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Close 关闭 Redis 连接。
+// Close closes the Redis connection.
 func (c *Client) Close() error {
 	if err := c.client.Close(); err != nil {
 		return fmt.Errorf("redisx: failed to close client: %w", err)
@@ -106,7 +110,7 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// wrapKey 为键添加前缀。
+// wrapKey adds the key prefix.
 func (c *Client) wrapKey(key string) string {
 	if c.keyPrefix == "" {
 		return key
@@ -114,7 +118,7 @@ func (c *Client) wrapKey(key string) string {
 	return c.keyPrefix + ":" + key
 }
 
-// wrapKeys 为多个键添加前缀。
+// wrapKeys adds the key prefix to several keys.
 func (c *Client) wrapKeys(keys ...string) []string {
 	if c.keyPrefix == "" {
 		return keys
@@ -126,9 +130,9 @@ func (c *Client) wrapKeys(keys ...string) []string {
 	return result
 }
 
-// --- 基础操作 ---
+// --- Basic operations ---
 
-// Get 获取字符串值。
+// Get returns the string value.
 func (c *Client) Get(ctx context.Context, key string) (string, error) {
 	val, err := c.client.Get(ctx, c.wrapKey(key)).Result()
 	if err != nil {
@@ -137,7 +141,7 @@ func (c *Client) Get(ctx context.Context, key string) (string, error) {
 	return val, nil
 }
 
-// Set 设置字符串值，带过期时间。
+// Set stores a string value with an expiration.
 func (c *Client) Set(ctx context.Context, key string, value any, expiration time.Duration) error {
 	if err := c.client.Set(ctx, c.wrapKey(key), value, expiration).Err(); err != nil {
 		return wrapErr(err)
@@ -145,8 +149,10 @@ func (c *Client) Set(ctx context.Context, key string, value any, expiration time
 	return nil
 }
 
-// SetNX 仅当键不存在时设置值，带过期时间，返回是否设置成功。
-// 常用于分布式锁、防缓存穿透的占位符写入等场景。
+// SetNX sets the value only when the key does not exist, with an expiration, and
+// reports whether it was set.
+// It is commonly used for distributed locks and for writing the placeholders that
+// prevent cache penetration.
 func (c *Client) SetNX(ctx context.Context, key string, value any, expiration time.Duration) (bool, error) {
 	ok, err := c.client.SetNX(ctx, c.wrapKey(key), value, expiration).Result()
 	if err != nil {
@@ -155,7 +161,7 @@ func (c *Client) SetNX(ctx context.Context, key string, value any, expiration ti
 	return ok, nil
 }
 
-// Del 删除一个或多个键。
+// Del removes one or more keys.
 func (c *Client) Del(ctx context.Context, keys ...string) (int64, error) {
 	if len(keys) == 0 {
 		return 0, nil
@@ -167,7 +173,7 @@ func (c *Client) Del(ctx context.Context, keys ...string) (int64, error) {
 	return n, nil
 }
 
-// Exists 检查键是否存在，返回存在的键数量。
+// Exists checks whether keys exist and returns the number of existing keys.
 func (c *Client) Exists(ctx context.Context, keys ...string) (int64, error) {
 	if len(keys) == 0 {
 		return 0, nil
@@ -179,7 +185,7 @@ func (c *Client) Exists(ctx context.Context, keys ...string) (int64, error) {
 	return n, nil
 }
 
-// Expire 为键设置过期时间。
+// Expire sets the expiration of a key.
 func (c *Client) Expire(ctx context.Context, key string, expiration time.Duration) (bool, error) {
 	ok, err := c.client.Expire(ctx, c.wrapKey(key), expiration).Result()
 	if err != nil {
@@ -188,7 +194,7 @@ func (c *Client) Expire(ctx context.Context, key string, expiration time.Duratio
 	return ok, nil
 }
 
-// TTL 获取键的剩余过期时间。
+// TTL returns the remaining time to live of a key.
 func (c *Client) TTL(ctx context.Context, key string) (time.Duration, error) {
 	d, err := c.client.TTL(ctx, c.wrapKey(key)).Result()
 	if err != nil {
@@ -197,7 +203,7 @@ func (c *Client) TTL(ctx context.Context, key string) (time.Duration, error) {
 	return d, nil
 }
 
-// Incr 将键的值递增 1。
+// Incr increments the value of a key by 1.
 func (c *Client) Incr(ctx context.Context, key string) (int64, error) {
 	n, err := c.client.Incr(ctx, c.wrapKey(key)).Result()
 	if err != nil {
@@ -206,7 +212,7 @@ func (c *Client) Incr(ctx context.Context, key string) (int64, error) {
 	return n, nil
 }
 
-// IncrBy 将键的值递增指定数量。
+// IncrBy increments the value of a key by the given amount.
 func (c *Client) IncrBy(ctx context.Context, key string, value int64) (int64, error) {
 	n, err := c.client.IncrBy(ctx, c.wrapKey(key), value).Result()
 	if err != nil {
@@ -215,9 +221,9 @@ func (c *Client) IncrBy(ctx context.Context, key string, value int64) (int64, er
 	return n, nil
 }
 
-// --- Hash 操作 ---
+// --- Hash operations ---
 
-// HGet 获取哈希表中指定字段的值。
+// HGet returns the value of the given field of a hash.
 func (c *Client) HGet(ctx context.Context, key, field string) (string, error) {
 	val, err := c.client.HGet(ctx, c.wrapKey(key), field).Result()
 	if err != nil {
@@ -226,7 +232,7 @@ func (c *Client) HGet(ctx context.Context, key, field string) (string, error) {
 	return val, nil
 }
 
-// HSet 设置哈希表字段的值。
+// HSet sets the value of a hash field.
 func (c *Client) HSet(ctx context.Context, key string, values ...any) (int64, error) {
 	n, err := c.client.HSet(ctx, c.wrapKey(key), values...).Result()
 	if err != nil {
@@ -235,7 +241,7 @@ func (c *Client) HSet(ctx context.Context, key string, values ...any) (int64, er
 	return n, nil
 }
 
-// HGetAll 获取哈希表中所有字段和值。
+// HGetAll returns all fields and values of a hash.
 func (c *Client) HGetAll(ctx context.Context, key string) (map[string]string, error) {
 	m, err := c.client.HGetAll(ctx, c.wrapKey(key)).Result()
 	if err != nil {
@@ -244,7 +250,7 @@ func (c *Client) HGetAll(ctx context.Context, key string) (map[string]string, er
 	return m, nil
 }
 
-// HDel 删除哈希表中的一个或多个字段。
+// HDel removes one or more fields from a hash.
 func (c *Client) HDel(ctx context.Context, key string, fields ...string) (int64, error) {
 	n, err := c.client.HDel(ctx, c.wrapKey(key), fields...).Result()
 	if err != nil {
@@ -253,9 +259,9 @@ func (c *Client) HDel(ctx context.Context, key string, fields ...string) (int64,
 	return n, nil
 }
 
-// --- List 操作 ---
+// --- List operations ---
 
-// LPush 将值插入列表头部。
+// LPush inserts values at the head of a list.
 func (c *Client) LPush(ctx context.Context, key string, values ...any) (int64, error) {
 	n, err := c.client.LPush(ctx, c.wrapKey(key), values...).Result()
 	if err != nil {
@@ -264,7 +270,7 @@ func (c *Client) LPush(ctx context.Context, key string, values ...any) (int64, e
 	return n, nil
 }
 
-// RPush 将值插入列表尾部。
+// RPush inserts values at the tail of a list.
 func (c *Client) RPush(ctx context.Context, key string, values ...any) (int64, error) {
 	n, err := c.client.RPush(ctx, c.wrapKey(key), values...).Result()
 	if err != nil {
@@ -273,7 +279,7 @@ func (c *Client) RPush(ctx context.Context, key string, values ...any) (int64, e
 	return n, nil
 }
 
-// LPop 移除并返回列表头部元素。
+// LPop removes and returns the head element of a list.
 func (c *Client) LPop(ctx context.Context, key string) (string, error) {
 	val, err := c.client.LPop(ctx, c.wrapKey(key)).Result()
 	if err != nil {
@@ -282,7 +288,7 @@ func (c *Client) LPop(ctx context.Context, key string) (string, error) {
 	return val, nil
 }
 
-// RPop 移除并返回列表尾部元素。
+// RPop removes and returns the tail element of a list.
 func (c *Client) RPop(ctx context.Context, key string) (string, error) {
 	val, err := c.client.RPop(ctx, c.wrapKey(key)).Result()
 	if err != nil {
@@ -291,7 +297,7 @@ func (c *Client) RPop(ctx context.Context, key string) (string, error) {
 	return val, nil
 }
 
-// LRange 获取列表指定范围内的元素。
+// LRange returns the elements of a list within the given range.
 func (c *Client) LRange(ctx context.Context, key string, start, stop int64) ([]string, error) {
 	vals, err := c.client.LRange(ctx, c.wrapKey(key), start, stop).Result()
 	if err != nil {
@@ -300,9 +306,9 @@ func (c *Client) LRange(ctx context.Context, key string, start, stop int64) ([]s
 	return vals, nil
 }
 
-// --- Set 操作 ---
+// --- Set operations ---
 
-// SAdd 向集合添加一个或多个成员。
+// SAdd adds one or more members to a set.
 func (c *Client) SAdd(ctx context.Context, key string, members ...any) (int64, error) {
 	n, err := c.client.SAdd(ctx, c.wrapKey(key), members...).Result()
 	if err != nil {
@@ -311,7 +317,7 @@ func (c *Client) SAdd(ctx context.Context, key string, members ...any) (int64, e
 	return n, nil
 }
 
-// SMembers 获取集合所有成员。
+// SMembers returns all members of a set.
 func (c *Client) SMembers(ctx context.Context, key string) ([]string, error) {
 	members, err := c.client.SMembers(ctx, c.wrapKey(key)).Result()
 	if err != nil {
@@ -320,7 +326,7 @@ func (c *Client) SMembers(ctx context.Context, key string) ([]string, error) {
 	return members, nil
 }
 
-// SIsMember 判断成员是否在集合中。
+// SIsMember reports whether member is in the set.
 func (c *Client) SIsMember(ctx context.Context, key string, member any) (bool, error) {
 	ok, err := c.client.SIsMember(ctx, c.wrapKey(key), member).Result()
 	if err != nil {
@@ -329,7 +335,7 @@ func (c *Client) SIsMember(ctx context.Context, key string, member any) (bool, e
 	return ok, nil
 }
 
-// SRem 从集合移除一个或多个成员。
+// SRem removes one or more members from a set.
 func (c *Client) SRem(ctx context.Context, key string, members ...any) (int64, error) {
 	n, err := c.client.SRem(ctx, c.wrapKey(key), members...).Result()
 	if err != nil {
@@ -338,10 +344,10 @@ func (c *Client) SRem(ctx context.Context, key string, members ...any) (int64, e
 	return n, nil
 }
 
-// --- Scan 操作 ---
+// --- Scan operations ---
 
-// Scan 迭代键，返回匹配 pattern 的键。
-// 使用游标迭代，每次返回一批键和下一次的游标。
+// Scan iterates over keys and returns the keys matching pattern.
+// It iterates with a cursor, returning a batch of keys and the next cursor each time.
 func (c *Client) Scan(ctx context.Context, cursor uint64, match string, count int64) ([]string, uint64, error) {
 	var keys []string
 	var newCursor uint64
@@ -350,7 +356,7 @@ func (c *Client) Scan(ctx context.Context, cursor uint64, match string, count in
 	if c.keyPrefix == "" {
 		keys, newCursor, err = c.client.Scan(ctx, cursor, match, count).Result()
 	} else {
-		// 有前缀时，自动加上前缀匹配
+		// With a prefix, add it to the match pattern automatically
 		wrappedMatch := c.keyPrefix + ":" + match
 		if match == "" {
 			wrappedMatch = c.keyPrefix + ":*"
@@ -358,7 +364,7 @@ func (c *Client) Scan(ctx context.Context, cursor uint64, match string, count in
 		rawKeys, c2, e := c.client.Scan(ctx, cursor, wrappedMatch, count).Result()
 		err = e
 		newCursor = c2
-		// 移除前缀
+		// Strip the prefix
 		prefix := c.keyPrefix + ":"
 		for _, k := range rawKeys {
 			keys = append(keys, strings.TrimPrefix(k, prefix))
@@ -370,9 +376,9 @@ func (c *Client) Scan(ctx context.Context, cursor uint64, match string, count in
 	return keys, newCursor, nil
 }
 
-// --- 辅助函数 ---
+// --- Helper functions ---
 
-// wrapErr 将 redis 错误转换为更友好的错误信息。
+// wrapErr converts a redis error into a friendlier error message.
 func wrapErr(err error) error {
 	if err == nil {
 		return nil
@@ -383,5 +389,5 @@ func wrapErr(err error) error {
 	return err
 }
 
-// ErrNil 表示键不存在。
+// ErrNil means the key does not exist.
 var ErrNil = errors.New("redisx: key not found")

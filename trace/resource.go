@@ -8,24 +8,26 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
-// fillDefaultUnmarshaler 用于填充默认值的反序列化器。
+// fillDefaultUnmarshaler is the unmarshaler used to fill in default values.
 var fillDefaultUnmarshaler = mapping.NewDefaultUnmarshaler()
 
-// fillDefault 填充默认值，然后用用户配置中的非零字段覆盖，最后应用 opts。
+// fillDefault fills in the defaults, then overrides them with the non-zero fields of
+// the user config and finally applies opts.
 //
-// 局限：非零字段覆盖的规则无法区分"未设置"与"显式设为 0"，
-// 需要表达显式 0（如 Sampler = 0）时通过 opts 传入，见 Option。
+// Limitation: the non-zero-field override rule cannot tell "unset" apart from
+// "explicitly set to 0"; to express an explicit 0 (such as Sampler = 0) pass it through
+// opts, see Option.
 func fillDefault(cfg Config, opts ...Option) Config {
 	var c Config
 	if err := fillDefaultUnmarshaler.Unmarshal(map[string]any{}, &c); err != nil {
 		panic(err)
 	}
 
-	// 用用户配置中的非零字段覆盖默认值
+	// Override the defaults with the non-zero fields of the user config
 	if cfg.Name != "" {
 		c.Name = cfg.Name
 	}
-	// Endpoint：空字符串也是有效值
+	// Endpoint: the empty string is a valid value too
 	c.Endpoint = cfg.Endpoint
 	if cfg.Sampler > 0 {
 		c.Sampler = cfg.Sampler
@@ -49,7 +51,7 @@ func fillDefault(cfg Config, opts ...Option) Config {
 		c.Disabled = cfg.Disabled
 	}
 
-	// Option 最后应用：可覆盖上面「零值即未设置」的判定结果。
+	// Options are applied last: they can override the "zero means unset" decision above
 	for _, opt := range opts {
 		opt(&c)
 	}
@@ -57,23 +59,26 @@ func fillDefault(cfg Config, opts ...Option) Config {
 	return c
 }
 
-// --- 资源管理 ---
+// --- Resource management ---
 
 var (
-	// attrResources 会附加到所有 span 的 Resource 上。
+	// attrResources is attached to the Resource of every span.
 	//
-	// 用锁保护：AddResources 可能被业务在运行期调用（动态打标签），
-	// 而 startAgent 会读取它构造 Resource；无保护时 -race 可检出数据竞争。
+	// Guarded by a lock: AddResources may be called by business code at runtime
+	// (dynamic tagging) while startAgent reads it to build the Resource; without the
+	// lock -race detects a data race.
 	attrResourcesLk sync.RWMutex
 	attrResources   = make([]attribute.KeyValue, 0)
 )
 
-// AddResources 添加额外的资源属性。
-// 资源属性会附加到所有链路 span 上，用于标识服务来源。
-// 使用 AttrString / AttrInt 等函数创建属性，无需导入 otel/attribute。
+// AddResources adds extra resource attributes.
+// Resource attributes are attached to every span and identify the service origin.
+// Create attributes with the AttrString / AttrInt helpers, no need to import
+// otel/attribute.
 //
-// 并发安全。注意：属性是在 TracerProvider 创建时快照的，
-// 因此 **启动后添加的属性不会生效**（需要重新 StartAgent）。
+// Concurrency-safe. Note: attributes are snapshotted when the TracerProvider is
+// created, so **attributes added after startup have no effect** (a new StartAgent is
+// required).
 func AddResources(attrs ...Attr) {
 	if len(attrs) == 0 {
 		return
@@ -83,7 +88,7 @@ func AddResources(attrs ...Attr) {
 	attrResourcesLk.Unlock()
 }
 
-// resourceAttrs 返回资源属性副本，供构造 Resource 使用。
+// resourceAttrs returns a copy of the resource attributes, used to build a Resource.
 func resourceAttrs() []attribute.KeyValue {
 	attrResourcesLk.RLock()
 	defer attrResourcesLk.RUnlock()
@@ -92,9 +97,10 @@ func resourceAttrs() []attribute.KeyValue {
 	return out
 }
 
-// openFileForExporter 打开文件用于 file 类型导出器。
-// 返回文件及其关闭函数：调用方负责在 agent 停止时关闭，
-// 避免把 closer 存在包级变量里（多实例会互相覆盖，且 StopAgent 无法释放）。
+// openFileForExporter opens a file for the file exporter.
+// It returns the file and its close function: the caller is responsible for closing it
+// when the agent stops, instead of keeping the closer in a package-level variable
+// (multiple instances overwrite each other and StopAgent could not release it).
 func openFileForExporter(path string) (*os.File, func() error, error) {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
 	if err != nil {

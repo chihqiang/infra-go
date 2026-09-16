@@ -9,35 +9,43 @@ import (
 	"github.com/chihqiang/infra-go/jwt"
 )
 
-// 本文件提供内置 HTTP 中间件的 httpx 适配层（转发 httpx/middleware 子包）。
-// 核心逻辑统一在 httpx/middleware 子包实现：一个中间件一个文件、面向对象
-// （NewXxx + Middleware()），返回标准形式 func(http.Handler) http.Handler，
-// 不依赖 httpx，可被 gin / echo 等其它 net/http 兼容框架复用。
+// This file provides the httpx adapter layer for the built-in HTTP middleware
+// (it forwards to the httpx/middleware subpackage).
+// The core logic lives in the httpx/middleware subpackage: one file per middleware,
+// object-oriented (NewXxx + Middleware()), returning the standard
+// func(http.Handler) http.Handler shape, with no dependency on httpx so it can be
+// reused by other net/http-compatible frameworks such as gin / echo.
 //
-// 本文件仅把标准中间件适配为 httpx.Middleware（func(http.HandlerFunc) http.HandlerFunc）
-// 供 server.Use / WithMiddleware / ApplyMiddleware 注册，方法签名保持不变。
+// This file only adapts the standard middleware to httpx.Middleware
+// (func(http.HandlerFunc) http.HandlerFunc) so it can be registered via
+// server.Use / WithMiddleware / ApplyMiddleware; the method signatures are unchanged.
 //
-// 中间件清单：CORS（WithCors）、Recovery、RequestID、链路追踪（WithTracing）、访问日志、
-// 熔断（全局/按路由）、超时、请求体大小限制、gzip 解压、并发连接数限制、限流（WithRateLimit）、
-// JWT 认证（WithJWT，转发 jwt.AuthMiddleware）、请求/响应加密、内容安全校验。
+// Middleware inventory: CORS (WithCors), Recovery, RequestID, tracing (WithTracing),
+// access logging, circuit breaking (global/per-route), timeout, request body size limit,
+// gzip decompression, concurrent connection limit, rate limiting (WithRateLimit),
+// JWT authentication (WithJWT, forwarding to jwt.AuthMiddleware), request/response
+// encryption, and content security verification.
 
-// middlewareErrorHandler 把 httpx/middleware 子包产生的错误按 httpx 统一响应格式写入。
+// middlewareErrorHandler writes errors produced by the httpx/middleware subpackage
+// using the unified httpx response format.
 //
-// 为什么不用 init 注入全局：那样会让“仅 import httpx”这一动作静默改变同进程内
-// gin/echo 路由的错误响应格式（它们同样在用 httpx/middleware 子包），
-// 而 import 与调用顺序无关，使用者无法 opt-out。
-// 改为由 Server 在每个请求的 context 上注入（见 server.go 的 buildGlobalHandler），
-// 使作用域限定在经 httpx 分发的请求；jwt 等经由请求 context 调用
-// middleware.WriteError / WriteUnauthorized 的组件会自动继承该格式。
+// Why not inject a global handler from init: that would make merely importing httpx
+// silently change the error response format of gin/echo routes in the same process
+// (they use the httpx/middleware subpackage too), and since imports are independent of
+// call order, users could not opt out.
+// Instead the Server injects it into each request's context (see buildGlobalHandler in
+// server.go), scoping it to requests dispatched through httpx; components such as jwt
+// that call middleware.WriteError / WriteUnauthorized via the request context
+// automatically inherit this format.
 func middlewareErrorHandler(ctx context.Context, w http.ResponseWriter, status int, msg string) {
 	WriteHTTPErrorCtx(ctx, w, status, msg)
 }
 
-// WithCors 返回一个为响应设置 CORS 头的中间件。
+// WithCors returns a middleware that sets CORS headers on responses.
 //
-// allowOrigins 为允许的来源列表；传入 "*" 表示允许所有来源。
-// 同源请求（Origin 与 Host 一致）不设置 CORS 头；
-// 未授权来源返回 403；OPTIONS 预检请求返回 204。
+// allowOrigins is the list of allowed origins; passing "*" allows all origins.
+// Same-origin requests (Origin matching Host) get no CORS headers;
+// unauthorized origins get 403; OPTIONS preflight requests get 204.
 //
 //	server.Use(httpx.WithCors("*"))
 //	server.Use(httpx.WithCors("http://a.com", "http://b.com"))
@@ -45,194 +53,237 @@ func WithCors(allowOrigins ...string) Middleware {
 	return AsMiddleware(middleware.NewCORS(allowOrigins...).Middleware())
 }
 
-// WithRecovery 返回一个 panic 恢复中间件。
-// 捕获 handler 中的 panic，记录堆栈并返回 500，防止进程崩溃。
+// WithRecovery returns a panic recovery middleware.
+// It catches panics in handlers, logs the stack trace and returns 500, preventing
+// the process from crashing.
 //
 //	server.Use(httpx.WithRecovery())
 func WithRecovery() Middleware {
 	return AsMiddleware(middleware.NewRecovery().Middleware())
 }
 
-// WithRequestID 返回一个 request_id 中间件。
-// 从 X-Request-Id 请求头读取，不存在则自动生成（google/uuid），
-// 注入 context 并回写响应头 X-Request-Id。
+// WithRequestID returns a request_id middleware.
+// It reads the X-Request-Id request header and generates one (google/uuid) when
+// absent, injects it into the context and writes it back to the X-Request-Id
+// response header.
 //
 //	server.Use(httpx.WithRequestID())
 //
-// 配合 OkJSONCtx / OkXMLCtx / WriteHTTPErrorCtx 使用，request_id 会自动出现在响应中。
+// Used together with OkJSONCtx / OkXMLCtx / WriteHTTPErrorCtx, the request_id
+// automatically appears in the response.
 func WithRequestID() Middleware {
 	return AsMiddleware(middleware.NewRequestID().Middleware())
 }
 
-// WithTracing 返回一个 HTTP 服务端链路追踪中间件（转发 middleware.NewTracing）。
+// WithTracing returns an HTTP server-side tracing middleware (forwards to
+// middleware.NewTracing).
 //
-// 功能：
-//   - 从请求头提取上游传播的 span 上下文（W3C traceparent）
-//   - 为每个请求创建服务端 span（携带 method/path/status 等 HTTP 语义属性）
-//   - 将 span 注入 context，供下游 logger/orm/redisx 等模块自动关联 trace_id
+// Features:
+//   - Extracts the upstream-propagated span context (W3C traceparent) from headers
+//   - Creates a server span per request (carrying HTTP semantics such as
+//     method/path/status)
+//   - Injects the span into the context so downstream modules such as
+//     logger/orm/redisx can correlate trace_id automatically
 //
-// 默认使用全局 TracerProvider（经 trace.StartAgent 装配）；请求 context 中已有
-// 有效 span 时沿用其 TracerProvider（支持嵌套追踪）。
+// It uses the global TracerProvider by default (assembled via trace.StartAgent);
+// when the request context already holds a valid span, that span's TracerProvider
+// is reused (supporting nested tracing).
 //
-// ignorePaths 为不追踪的路径列表（健康检查、探针等），命中直接放行、不创建 span。
-// 匹配方式与 WithLogger 一致：精确匹配（如 "/health"）或以 "*" 结尾的前缀通配
-// （如 "/health*" 命中 /health、/healthz、/health/live）。
+// ignorePaths is the list of paths not to trace (health checks, probes, etc.);
+// matching paths pass straight through without creating a span.
+// Matching works the same as WithLogger: exact match (e.g. "/health") or a prefix
+// wildcard ending in "*" (e.g. "/health*" matches /health, /healthz, /health/live).
 //
-//	server.Use(httpx.WithTracing())                    // 追踪所有请求
-//	server.Use(httpx.WithTracing("/health*", "/metrics/*")) // 跳过探活
+//	server.Use(httpx.WithTracing())                    // trace all requests
+//	server.Use(httpx.WithTracing("/health*", "/metrics/*")) // skip probes
 func WithTracing(ignorePaths ...string) Middleware {
 	return AsMiddleware(middleware.NewTracing(ignorePaths...).Middleware())
 }
 
-// WithLogger 返回一个请求日志中间件。
-// 记录每个请求的方法、路径、状态码、响应字节数和耗时。
-// 配合 trace 包使用时，logger 的 Ctx 提取器会自动带上 trace_id/span_id。
+// WithLogger returns a request logging middleware.
+// It records the method, path, status code, response byte count and latency of
+// every request.
+// When used with the trace package, the logger's Ctx extractor automatically
+// includes trace_id/span_id.
 //
-// skipPaths 为不记录日志的路径列表，常用于健康检查、心跳等高频探活接口。
-// 支持两种匹配方式：
+// skipPaths is the list of paths not to log, commonly used for high-frequency probe
+// endpoints such as health checks and heartbeats.
+// Two matching modes are supported:
 //
-//   - 精确匹配：如 "/healthz"，仅命中该路径；
+//   - Exact match: e.g. "/healthz", matching only that path;
 //
-//   - 前缀通配：以 "*" 结尾，如 "/internal/*"，命中以该前缀开头的所有路径。
+//   - Prefix wildcard: ending in "*", e.g. "/internal/*", matching every path with
+//     that prefix.
 //
-//     server.Use(httpx.WithLogger())                       // 记录所有请求
-//     server.Use(httpx.WithLogger("/healthz", "/metrics")) // 精确跳过
-//     server.Use(httpx.WithLogger("/internal/*"))          // 前缀通配跳过
+//     server.Use(httpx.WithLogger())                       // log all requests
+//     server.Use(httpx.WithLogger("/healthz", "/metrics")) // exact skip
+//     server.Use(httpx.WithLogger("/internal/*"))          // prefix wildcard skip
 func WithLogger(skipPaths ...string) Middleware {
 	return AsMiddleware(middleware.NewAccessLogger(skipPaths...).Middleware())
 }
 
-// WithBreaker 返回一个熔断中间件，保护下游 handler 不被级联拖垮。
-// 基于 breaker 模块的 Google SRE 算法，所有请求共享同一熔断器实例；
-// 如需按路由隔离请使用 WithRouteBreaker。
+// WithBreaker returns a circuit breaking middleware that protects downstream
+// handlers from cascading failure.
+// It is based on the breaker module's Google SRE algorithm, and all requests share a
+// single breaker instance; use WithRouteBreaker if you need per-route isolation.
 //
-// 熔断打开时返回 503 Service Unavailable；请求成功（<500）上报 Accept，
-// 请求失败（>=500）上报 Reject，用于驱动熔断状态。
+// When the circuit is open it returns 503 Service Unavailable; successful requests
+// (<500) report Accept and failed requests (>=500) report Reject, driving the
+// breaker state.
 //
 //	server.Use(httpx.WithBreaker())
 func WithBreaker() Middleware {
 	return AsMiddleware(middleware.NewBreaker().Middleware())
 }
 
-// WithRouteBreaker 返回一个按路由隔离的熔断中间件。
-// 每个路由（METHOD:path）拥有独立的熔断器，统计互不影响，
-// 避免单个路由的失败拉低其他路由的通过率。
+// WithRouteBreaker returns a per-route isolated circuit breaking middleware.
+// Each route (METHOD:path) has its own breaker so statistics do not interfere,
+// preventing failures in one route from lowering the pass rate of others.
 //
-// 熔断器通过 breaker.GetBreaker 按名称缓存，同名路由共享同一实例。
-// 熔断打开时返回 503 Service Unavailable；请求成功（<500）上报 Accept，
-// 请求失败（>=500）上报 Reject。
+// Breakers are cached by name via breaker.GetBreaker, so routes with the same name
+// share one instance.
+// When the circuit is open it returns 503 Service Unavailable; successful requests
+// (<500) report Accept and failed requests (>=500) report Reject.
 //
 //	server.Use(httpx.WithRouteBreaker())
 func WithRouteBreaker() Middleware {
 	return AsMiddleware(middleware.NewRouteBreaker().Middleware())
 }
 
-// WithTimeout 返回一个请求超时中间件。
-// 每个请求最多执行 duration，超时返回 503 Service Unavailable。
-// 客户端主动断开返回 499；WebSocket / SSE 请求不受超时限制。
+// WithTimeout returns a request timeout middleware.
+// Each request may run for at most duration; on timeout it returns
+// 503 Service Unavailable.
+// A client-initiated disconnect returns 499; WebSocket / SSE requests are not
+// subject to the timeout.
 //
-//	duration <= 0 时中间件不生效（直接放行）。
+//	When duration <= 0 the middleware is a no-op (passes through).
 //
 //	server.Use(httpx.WithTimeout(5 * time.Second))
 func WithTimeout(duration time.Duration) Middleware {
 	return AsMiddleware(middleware.NewTimeout(duration).Middleware())
 }
 
-// WithMaxBytes 返回一个限制请求体大小的中间件。
-// 请求体 Content-Length 超过 n 字节时直接返回 413 Request Entity Too Large。
-// 对分块传输（无 Content-Length）的请求，用 http.MaxBytesReader 在读取时限制。
+// WithMaxBytes returns a middleware that limits the request body size.
+// When the request body Content-Length exceeds n bytes it immediately returns
+// 413 Request Entity Too Large.
+// For chunked transfers (no Content-Length), http.MaxBytesReader enforces the limit
+// while reading.
 //
-//	n <= 0 表示不限制。
+//	n <= 0 means no limit.
 //
-//	server.Use(httpx.WithMaxBytes(1 << 20)) // 限制 1MB
+//	server.Use(httpx.WithMaxBytes(1 << 20)) // limit to 1MB
 func WithMaxBytes(n int64) Middleware {
 	return AsMiddleware(middleware.NewMaxBytes(n).Middleware())
 }
 
-// WithGunzip 返回一个自动解压 gzip 请求体的中间件。
-// 请求头 Content-Encoding 含 "gzip" 时，将请求体包装为 gzip 读取器。
-// 解压失败返回 400 Bad Request。
+// WithGunzip returns a middleware that automatically decompresses gzip request
+// bodies.
+// When the Content-Encoding header contains "gzip", the request body is wrapped in a
+// gzip reader.
+// A decompression failure returns 400 Bad Request.
 //
 //	server.Use(httpx.WithGunzip())
 func WithGunzip() Middleware {
 	return AsMiddleware(middleware.NewGunzip().Middleware())
 }
 
-// WithMaxConns 返回一个限制同时处理请求数的中间件。
-// 并发数超过 n 时直接返回 503 Service Unavailable，防止连接耗尽。
+// WithMaxConns returns a middleware that limits the number of concurrently handled
+// requests.
+// When concurrency exceeds n it immediately returns 503 Service Unavailable,
+// preventing connection exhaustion.
 //
-//	n <= 0 表示不限制。
+//	n <= 0 means no limit.
 //
 //	server.Use(httpx.WithMaxConns(1000))
 func WithMaxConns(n int) Middleware {
 	return AsMiddleware(middleware.NewMaxConns(n).Middleware())
 }
 
-// WithRateLimit 返回一个基于限流器的 HTTP 限流中间件（转发 middleware.NewRateLimit）。
+// WithRateLimit returns an HTTP rate limiting middleware backed by a limiter
+// (forwards to middleware.NewRateLimit).
 //
-// 每个请求先向限流器申请配额，允许则放行；被限流返回 429 Too Many Requests。
-// limiter 由 ratelimit 包提供（ratelimit.NewTokenBucket / NewSlidingWindow / Redis 限流器等），
-// 方法集与 middleware.RateLimiter 一致，可直接传入；nil 时降级为不限流（fail-open）。
+// Each request first asks the limiter for a quota and passes when allowed; throttled
+// requests get 429 Too Many Requests.
+// The limiter comes from the ratelimit package (ratelimit.NewTokenBucket /
+// NewSlidingWindow / Redis limiters, etc.); its method set matches
+// middleware.RateLimiter so it can be passed directly; nil degrades to no rate
+// limiting (fail-open).
 //
-// skipPaths 为不参与限流的路径列表，命中直接放行（常用于健康检查等高频探活接口）。
-// 匹配方式与 WithLogger 一致：精确匹配（如 "/healthz"）或以 "*" 结尾的前缀通配
-// （如 "/internal/*"）。
+// skipPaths is the list of paths exempt from rate limiting; matching paths pass
+// straight through (commonly used for high-frequency probe endpoints such as health
+// checks).
+// Matching works the same as WithLogger: exact match (e.g. "/healthz") or a prefix
+// wildcard ending in "*" (e.g. "/internal/*").
 //
-//	server.Use(httpx.WithRateLimit(ratelimit.NewTokenBucket(100, 200)))          // 每秒 100 次、突发 200
-//	server.Use(httpx.WithRateLimit(ratelimit.NewSlidingWindow(10, time.Minute))) // 每分钟 10 次
-//	server.Use(httpx.WithRateLimit(redisLimiter, "/healthz", "/metrics"))      // 跳过探活接口
+//	server.Use(httpx.WithRateLimit(ratelimit.NewTokenBucket(100, 200)))          // 100/s, burst 200
+//	server.Use(httpx.WithRateLimit(ratelimit.NewSlidingWindow(10, time.Minute))) // 10 per minute
+//	server.Use(httpx.WithRateLimit(redisLimiter, "/healthz", "/metrics"))      // skip probe endpoints
 func WithRateLimit(limiter middleware.RateLimiter, skipPaths ...string) Middleware {
 	return AsMiddleware(middleware.NewRateLimit(limiter, skipPaths...).Middleware())
 }
 
-// WithCryption 返回一个 AES-GCM 请求/响应加密中间件。
-// 请求体需为 base64 编码的 AES-GCM 密文（nonce || ciphertext），
-// 中间件解密后交给 handler（兼容 chunked 请求，密文默认上限 4MB，超限返回 413）；
-// 响应体**仅 2xx（且非 204/205、非 HEAD）加密**，错误/重定向等非 2xx 及无 body
-// 场景明文透传并保留原始状态码，便于客户端排查与 HTTP 语义正确。
+// WithCryption returns an AES-GCM request/response encryption middleware.
+// The request body must be base64-encoded AES-GCM ciphertext (nonce || ciphertext);
+// the middleware decrypts it and hands it to the handler (chunked requests are
+// supported; ciphertext defaults to a 4MB cap and returns 413 when exceeded).
+// The response body is **encrypted only for 2xx (excluding 204/205 and HEAD)**;
+// non-2xx outcomes such as errors and redirects, plus bodyless responses, pass
+// through in plaintext keeping the original status code, which eases client
+// debugging and preserves correct HTTP semantics.
 //
-// 采用 AES-GCM 认证加密（AEAD），同时保证机密性与完整性（防篡改），
-// nonce 每次随机生成；响应超过 1MB 时自动回退为明文输出（不加密），
-// 避免大响应导致 OOM。密钥 key 长度必须为 16/24/32 字节（对应 AES-128/192/256）。
+// It uses AES-GCM authenticated encryption (AEAD), guaranteeing both confidentiality
+// and integrity (tamper resistance), with a fresh random nonce per message; responses
+// larger than 1MB automatically fall back to plaintext (unencrypted) output to avoid
+// OOM from large responses. The key must be 16/24/32 bytes long (matching
+// AES-128/192/256).
 //
-// skipPaths 为不进行请求/响应加解密的路径列表，命中路径以明文透传
-// （常用于回调、静态资源等无法加密的场景）。匹配方式与 WithLogger 一致：
-// 精确匹配（如 "/callback"）或以 "*" 结尾的前缀通配（如 "/public/*"）。
+// skipPaths is the list of paths exempt from request/response encryption; matching
+// paths pass through in plaintext (commonly used for callbacks, static assets and
+// other cases that cannot be encrypted). Matching works the same as WithLogger:
+// exact match (e.g. "/callback") or a prefix wildcard ending in "*"
+// (e.g. "/public/*").
 //
-//	server.Use(httpx.WithCryption([]byte("0123456789abcdef")))               // 全部加解密
-//	server.Use(httpx.WithCryption([]byte("0123456789abcdef"), "/callback"))  // 精确跳过
-//	server.Use(httpx.WithCryption([]byte("0123456789abcdef"), "/public/*"))  // 前缀通配跳过
+//	server.Use(httpx.WithCryption([]byte("0123456789abcdef")))               // encrypt everything
+//	server.Use(httpx.WithCryption([]byte("0123456789abcdef"), "/callback"))  // exact skip
+//	server.Use(httpx.WithCryption([]byte("0123456789abcdef"), "/public/*"))  // prefix wildcard skip
 func WithCryption(key []byte, skipPaths ...string) Middleware {
 	return AsMiddleware(middleware.NewCryption(key, skipPaths...).Middleware())
 }
 
-// WithContentSecurity 返回一个内容安全校验中间件（防篡改 + 防重放）。
-// 客户端需在 `X-Content-Security` 头携带签名：
+// WithContentSecurity returns a content security verification middleware
+// (tamper-proof + replay-proof).
+// The client must carry a signature in the `X-Content-Security` header:
 //
-//	X-Content-Security: time=<unix秒>; signature=<base64 HMAC-SHA256>
+//	X-Content-Security: time=<unix seconds>; signature=<base64 HMAC-SHA256>
 //
-// 签名内容为：`timestamp\nmethod\npath\nquery\nbodySha256Hex`
-// （timestamp 为请求头中的时间戳，bodySha256Hex 为请求体的 SHA-256 十六进制摘要）。
+// The signed content is: `timestamp\nmethod\npath\nquery\nbodySha256Hex`
+// (timestamp is the timestamp from the request header, bodySha256Hex is the SHA-256
+// hex digest of the request body).
 //
-// 校验规则：
-//   - 签名有效（HMAC-SHA256 匹配）且时间戳在 tolerance 容差内 → 放行
-//   - 签名无效 → 返回 401
-//   - 时间戳超出容差（防重放）→ 返回 403
+// Verification rules:
+//   - Valid signature (HMAC-SHA256 match) and timestamp within the tolerance window
+//     → pass
+//   - Invalid signature → 401
+//   - Timestamp outside the tolerance (replay protection) → 403
 //
-// key 为双方共享的 HMAC 密钥。
+// key is the HMAC secret shared by both parties.
 //
 //	server.Use(httpx.WithContentSecurity([]byte("shared-secret"), 5*time.Minute))
 func WithContentSecurity(key []byte, tolerance time.Duration) Middleware {
 	return AsMiddleware(middleware.NewContentSecurity(key, tolerance).Middleware())
 }
 
-// WithJWT 返回一个基于 JWT 的 HTTP 认证中间件（转发 jwt.JWT.AuthMiddleware）。
+// WithJWT returns a JWT-based HTTP authentication middleware (forwards to
+// jwt.JWT.AuthMiddleware).
 //
-// j 为 *jwt.JWT；getToken 由调用方提供，从请求中提取 token（如从 Header/Cookie/Query），
-// 中间件只负责解析验证与注入业务 claims，不关心 token 来源。
-// 验证失败返回 401；成功时将业务 claims（排除标准声明与 token_type）注入 context，
-// 下游 handler 通过 jwt.ClaimsFromContext 读取。
-// 错误响应经 httpx/middleware 统一错误机制输出（即本包统一 JSON 响应）。
+// j is *jwt.JWT; getToken is supplied by the caller and extracts the token from the
+// request (e.g. from a Header/Cookie/Query), so the middleware only parses, verifies
+// and injects business claims and does not care where the token comes from.
+// A failed verification returns 401; on success the business claims (excluding
+// standard claims and token_type) are injected into the context and read by
+// downstream handlers via jwt.ClaimsFromContext.
+// Error responses are emitted through the unified httpx/middleware error mechanism
+// (i.e. this package's unified JSON response).
 //
 //	j := jwt.MustNew(jwt.Config{Secret: "..."})
 //	server.Use(httpx.WithJWT(j, func(r *http.Request) string {

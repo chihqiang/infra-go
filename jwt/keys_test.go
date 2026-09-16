@@ -6,10 +6,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// --- 声明键常量测试 ---
+// --- Claim key constant tests ---
 
 func TestClaimKeyConstants(t *testing.T) {
-	// 标准声明
+	// Standard claims
 	assert.Equal(t, "iss", ClaimKeyIssuer)
 	assert.Equal(t, "sub", ClaimKeySubject)
 	assert.Equal(t, "aud", ClaimKeyAudience)
@@ -18,10 +18,10 @@ func TestClaimKeyConstants(t *testing.T) {
 	assert.Equal(t, "iat", ClaimKeyIssuedAt)
 	assert.Equal(t, "jti", ClaimKeyJWTID)
 
-	// 自定义声明
+	// Custom claims
 	assert.Equal(t, "token_type", ClaimKeyTokenType)
 
-	// 常用业务声明
+	// Common business claims
 	assert.Equal(t, "user_id", ClaimKeyUserID)
 	assert.Equal(t, "username", ClaimKeyUsername)
 	assert.Equal(t, "role", ClaimKeyRole)

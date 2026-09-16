@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// 对应 timeout.go：请求超时中间件。
+// Covers timeout.go: the request timeout middleware.
 
 func TestTimeout_DisabledWhenNonPositive(t *testing.T) {
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
@@ -20,7 +20,7 @@ func TestTimeout_DisabledWhenNonPositive(t *testing.T) {
 
 func TestTimeout_CompletesWithinDeadline(t *testing.T) {
 	ok := func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(20 * time.Millisecond) // 小于超时
+		time.Sleep(20 * time.Millisecond) // shorter than the timeout
 		w.WriteHeader(http.StatusOK)
 	}
 
@@ -42,15 +42,16 @@ func TestTimeout_TimesOutSlowHandler(t *testing.T) {
 func TestTimeout_WebSocketExempt(t *testing.T) {
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 
-	// WebSocket 升级请求豁免超时：即使耗时超限也直接透传（此用例验证不触发超时写入）
+	// WebSocket upgrade requests are exempt from the timeout: they pass straight through even
+	// past the deadline (this case verifies no timeout write is triggered)
 	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
 	req.Header.Set("Upgrade", "websocket")
 	rec := perform(NewTimeout(1*time.Millisecond).Middleware(), ok, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
-// TestTimeout_StreamingPreservesStatusCode 验证流式 handler（显式状态码 + Flush）
-// 的状态码不会被隐式 200 覆盖。
+// TestTimeout_StreamingPreservesStatusCode verifies that a streaming handler (explicit status
+// code + Flush) does not have its status code overwritten by an implicit 200.
 func TestTimeout_StreamingPreservesStatusCode(t *testing.T) {
 	stream := func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -66,7 +67,8 @@ func TestTimeout_StreamingPreservesStatusCode(t *testing.T) {
 	assert.Equal(t, "boom", rec.Body.String())
 }
 
-// TestTimeout_StreamingChunkedWrites 验证多次 Write+Flush 的流式响应内容完整、状态码正确。
+// TestTimeout_StreamingChunkedWrites verifies that a streamed response with several
+// Write+Flush calls keeps its full body and correct status code.
 func TestTimeout_StreamingChunkedWrites(t *testing.T) {
 	stream := func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusPartialContent)

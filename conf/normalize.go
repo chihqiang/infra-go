@@ -1,10 +1,11 @@
 package conf
 
-// 本文件负责将解析出的配置 map 规整到可反序列化状态：
-//   - normalizeMap/normalizeValue/...：把 YAML 产生的各类值统一为 json.Number
-//   - unmarshalMap：规整后的 map 反序列化到目标结构体
-//     （字段名大小写不敏感匹配由 mapping 的 canonicalKey 完成，
-//     不在这里改写 map 的键，以免破坏 map 字段的数据）
+// This file normalises a parsed config map into an unmarshallable state:
+//   - normalizeMap/normalizeValue/...: unify every kind of value produced by YAML
+//     into json.Number
+//   - unmarshalMap: unmarshal the normalised map into the target struct
+//     (case-insensitive field name matching is done by mapping's canonicalKey;
+//     map keys are not rewritten here so that map field data is not damaged)
 
 import (
 	"encoding/json"
@@ -15,9 +16,9 @@ import (
 	"github.com/chihqiang/infra-go/mapping"
 )
 
-// normalizeMap 递归地将 map 中的值规范化：
-// - 将各种数值类型（int, int64, float64 等）统一转为 json.Number
-// - 确保所有嵌套的 map 键为 string 类型
+// normalizeMap recursively normalises the values in a map:
+// - converts every numeric type (int, int64, float64, ...) to json.Number
+// - ensures every nested map key is of type string
 func normalizeMap(m map[string]any) map[string]any {
 	if m == nil {
 		return nil
@@ -29,7 +30,7 @@ func normalizeMap(m map[string]any) map[string]any {
 	return result
 }
 
-// normalizeValue 递归规范化值。
+// normalizeValue recursively normalises a value.
 func normalizeValue(v any) any {
 	if v == nil {
 		return nil
@@ -86,7 +87,7 @@ func normalizeValue(v any) any {
 	}
 }
 
-// normalizeAnyKeyMap 将 map[any]any 转换为 map[string]any。
+// normalizeAnyKeyMap converts a map[any]any into a map[string]any.
 func normalizeAnyKeyMap(m map[any]any) map[string]any {
 	if m == nil {
 		return nil
@@ -98,7 +99,7 @@ func normalizeAnyKeyMap(m map[any]any) map[string]any {
 	return result
 }
 
-// normalizeSlice 规范化切片中的每个元素。
+// normalizeSlice normalises every element of a slice.
 func normalizeSlice(s []any) []any {
 	if s == nil {
 		return nil
@@ -110,14 +111,15 @@ func normalizeSlice(s []any) []any {
 	return result
 }
 
-// unmarshalMap 将解析后的配置 map 反序列化到 v。
-// 内部通过 mapping.WithCanonicalKeyFunc 实现字段名大小写不敏感匹配，
-// 供 Load / LoadFromJSONBytes / LoadFromYAMLBytes 复用。
+// unmarshalMap unmarshals a parsed config map into v.
+// It uses mapping.WithCanonicalKeyFunc for case-insensitive field name matching and is
+// shared by Load / LoadFromJSONBytes / LoadFromYAMLBytes.
 //
-// 注意：这里刻意**不**预先小写化输入 map 的键。map 的键同时也是
-// map 类型字段的数据，整体小写化会静默破坏用户数据
-// （labels: {AppName: x} 会被写成 appname，且 AppName/appname 并存时
-// 因 map 遍历顺序不同而结果不确定）。大小写不敏感匹配由 mapping 侧完成。
+// Note: the keys of the input map are deliberately **not** lowercased up front. Map keys
+// are also the data of map-typed fields, and lowercasing everything would silently
+// corrupt user data (labels: {AppName: x} would be written as appname, and when both
+// AppName and appname exist the outcome depends on map iteration order).
+// Case-insensitive matching is done on the mapping side.
 func unmarshalMap(m map[string]any, v any) error {
 	return mapping.UnmarshalJsonMap(m, v, mapping.WithCanonicalKeyFunc(strings.ToLower))
 }

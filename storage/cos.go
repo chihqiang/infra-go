@@ -11,13 +11,13 @@ import (
 	"github.com/tencentyun/cos-go-sdk-v5"
 )
 
-// cosStorage 腾讯云 COS 存储实现。
+// cosStorage is the Tencent Cloud COS storage implementation.
 type cosStorage struct {
 	client *cos.Client
 	url    string
 }
 
-// NewCOS 根据配置创建腾讯云 COS 存储实例。
+// NewCOS creates a Tencent Cloud COS storage instance from the configuration.
 func NewCOS(cfg *COSConfig) (Storage, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("storage: COS config is nil")
@@ -55,8 +55,9 @@ func NewCOS(cfg *COSConfig) (Storage, error) {
 	}, nil
 }
 
-// resolveCOSURL 解析 COS 文件访问域名。
-// 优先使用配置中的 URL（CDN 域名），为空时默认使用 BucketURL。
+// resolveCOSURL resolves the COS file access domain.
+// It prefers the URL from the configuration (CDN domain) and falls back to
+// BucketURL when that is empty.
 func resolveCOSURL(cfg *COSConfig) string {
 	if cfg.URL != "" {
 		return cfg.URL
@@ -64,7 +65,7 @@ func resolveCOSURL(cfg *COSConfig) string {
 	return cfg.BucketURL
 }
 
-// Write 将内容写入 COS 指定路径。
+// Write writes content to the given COS path.
 func (s *cosStorage) Write(ctx context.Context, path string, content []byte) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("storage: write COS object %q: %w", path, err)
@@ -76,7 +77,7 @@ func (s *cosStorage) Write(ctx context.Context, path string, content []byte) err
 	return nil
 }
 
-// Read 读取 COS 指定路径对象的完整内容。
+// Read reads the full content of the object at the given COS path.
 func (s *cosStorage) Read(ctx context.Context, path string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("storage: read COS object %q: %w", path, err)
@@ -93,7 +94,7 @@ func (s *cosStorage) Read(ctx context.Context, path string) ([]byte, error) {
 	return data, nil
 }
 
-// Exists 判断 COS 指定路径的对象是否存在。
+// Exists reports whether the object at the given COS path exists.
 func (s *cosStorage) Exists(ctx context.Context, path string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, fmt.Errorf("storage: check COS object %q: %w", path, err)
@@ -105,7 +106,8 @@ func (s *cosStorage) Exists(ctx context.Context, path string) (bool, error) {
 	return found, nil
 }
 
-// Delete 删除 COS 指定路径的对象，返回删除的对象数量。
+// Delete removes the object at the given COS path and returns the number of
+// removed objects.
 func (s *cosStorage) Delete(ctx context.Context, path string) (int64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, fmt.Errorf("storage: delete COS object %q: %w", path, err)
@@ -114,15 +116,16 @@ func (s *cosStorage) Delete(ctx context.Context, path string) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("storage: failed to delete COS object %q: %w", path, err)
 	}
-	// COS 删除成功返回 204 No Content（SDK 已把 >=300 视为错误），
-	// 因此这里必须是 2xx 语义，不能只认 200，否则删除成功会被误报为失败。
+	// A successful COS delete returns 204 No Content (the SDK already treats
+	// >=300 as an error), so the semantics here must be 2xx rather than 200 only;
+	// otherwise a successful delete would be reported as a failure.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return 0, fmt.Errorf("storage: failed to delete COS object %q, status code: %d", path, resp.StatusCode)
 	}
 	return 1, nil
 }
 
-// URL 根据路径拼接完整的 COS 访问 URL。
+// URL builds the full COS access URL from the given path.
 func (s *cosStorage) URL(_ context.Context, path string) (string, error) {
 	return buildURL(s.url, path)
 }

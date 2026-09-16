@@ -7,23 +7,26 @@ import (
 	"github.com/chihqiang/infra-go/logger"
 )
 
-// maxConnsRetryAfter 是并发超限时的默认重试提示间隔。
+// maxConnsRetryAfter is the default retry hint interval used when the concurrency limit is
+// exceeded.
 //
-// 并发占用通常是短时堆积，因此给出较短的提示值；
-// RFC 9110 §15.6.4 建议 503 响应附带 Retry-After。
+// Concurrency saturation is usually a short-lived pile-up, hence the short hint value;
+// RFC 9110 §15.6.4 suggests attaching Retry-After to a 503 response.
 const maxConnsRetryAfter = time.Second
 
-// MaxConns 是并发连接数限制中间件。
-// 基于带缓冲 channel 的轻量信号量，仅用于并发计数（不需要 Wait 语义）；
-// 并发数超过上限时直接返回 503 Service Unavailable，防止连接耗尽。
+// MaxConns is a concurrency limiting middleware.
+// It is a lightweight semaphore built on a buffered channel, used purely for counting (no Wait
+// semantics are needed); when concurrency exceeds the limit it immediately returns 503 Service
+// Unavailable to prevent connection exhaustion.
 type MaxConns struct {
 	sem chan struct{}
-	// retryAfter 为并发超限时提示客户端的重试间隔，默认 maxConnsRetryAfter。
+	// retryAfter is the retry interval advertised to clients when the limit is exceeded; it
+	// defaults to maxConnsRetryAfter.
 	retryAfter time.Duration
 }
 
-// NewMaxConns 创建并发连接数限制中间件。
-// n <= 0 表示不限制。
+// NewMaxConns creates the concurrency limiting middleware.
+// n <= 0 means unlimited.
 func NewMaxConns(n int) *MaxConns {
 	if n <= 0 {
 		return &MaxConns{}
@@ -31,16 +34,17 @@ func NewMaxConns(n int) *MaxConns {
 	return &MaxConns{sem: make(chan struct{}, n), retryAfter: maxConnsRetryAfter}
 }
 
-// WithRetryAfter 设置并发超限时的 Retry-After 提示间隔（RFC 9110 §10.2.3）。
-// d <= 0 表示不发送该头。
+// WithRetryAfter sets the Retry-After hint interval used when the concurrency limit is exceeded
+// (RFC 9110 §10.2.3). d <= 0 means the header is not sent.
 func (m *MaxConns) WithRetryAfter(d time.Duration) *MaxConns {
 	m.retryAfter = d
 	return m
 }
 
-// Middleware 返回标准形式 func(http.Handler) http.Handler 的并发数限制中间件。
+// Middleware returns the concurrency limiting middleware in the standard func(http.Handler)
+// http.Handler form.
 func (m *MaxConns) Middleware() func(http.Handler) http.Handler {
-	// n <= 0：不限制，直接透传
+	// n <= 0: unlimited, pass straight through
 	if m.sem == nil {
 		return func(next http.Handler) http.Handler {
 			return next
@@ -58,7 +62,7 @@ func (m *MaxConns) Middleware() func(http.Handler) http.Handler {
 					logger.Int("limit", cap(m.sem)),
 					logger.String("path", r.URL.Path),
 				)
-				// RFC 9110 §15.6.4：服务器过载导致的 503 SHOULD 给出 Retry-After
+				// RFC 9110 §15.6.4: a 503 caused by server overload SHOULD provide Retry-After
 				WriteRetryAfter(r.Context(), w, http.StatusServiceUnavailable,
 					m.retryAfter, "too many concurrent connections")
 			}

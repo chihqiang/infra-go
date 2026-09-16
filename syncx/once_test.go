@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- OnceValue 测试 ---
+// --- OnceValue tests ---
 
 func TestOnceValue(t *testing.T) {
 	var count int32
@@ -20,7 +20,7 @@ func TestOnceValue(t *testing.T) {
 		return 42
 	})
 
-	// 多次调用只执行一次
+	// Repeated calls run the function only once
 	assert.Equal(t, 42, ov.Get())
 	assert.Equal(t, 42, ov.Get())
 	assert.Equal(t, 42, ov.Get())
@@ -53,7 +53,7 @@ func TestOnceValue_Panic(t *testing.T) {
 		panic("load failed")
 	})
 
-	// panic 应传播给调用方，而不是静默返回零值
+	// The panic must propagate to the caller instead of silently returning zero
 	for i := 0; i < 2; i++ {
 		func() {
 			defer func() {
@@ -66,7 +66,7 @@ func TestOnceValue_Panic(t *testing.T) {
 	}
 }
 
-// --- OnceError 测试 ---
+// --- OnceError tests ---
 
 func TestOnceError(t *testing.T) {
 	var count int32

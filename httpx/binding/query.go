@@ -2,15 +2,15 @@ package binding
 
 import "net/http"
 
-// QueryBinding 基于 URL query 参数的绑定器。
+// QueryBinding is a binder based on URL query parameters.
 type QueryBinding struct{}
 
-// Name 返回绑定器名称。
+// Name returns the binder name.
 func (QueryBinding) Name() string {
 	return "query"
 }
 
-// Bind 将 URL query 参数绑定到 obj，并校验。
+// Bind binds the URL query parameters into obj and validates it.
 func (QueryBinding) Bind(req *http.Request, obj any) error {
 	if err := mapForm(obj, req.URL.Query()); err != nil {
 		return err

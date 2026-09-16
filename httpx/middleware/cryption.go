@@ -11,43 +11,54 @@ import (
 	"github.com/chihqiang/infra-go/logger"
 )
 
-// defaultMaxBytes 默认密文请求体上限与加密响应缓冲上限（统一 5MB）。
-// 请求体超限返回 413；响应超限回退为明文输出，避免大响应导致内存暴涨。
+// defaultMaxBytes is the default limit for the encrypted request body and the buffer for the
+// encrypted response (both 5MB).
+// An oversized request body returns 413; an oversized response falls back to plaintext output so
+// that a large response cannot blow up memory.
 const defaultMaxBytes = 5 << 20 // 5 MB
 
-// Cryption 是请求/响应 AES-GCM 加解密中间件。
-// 请求体需为 base64 编码的 AES-GCM 密文（nonce || ciphertext），中间件解密后
-// 交给 handler；handler 写入的 2xx 响应会被加密后返回给客户端。
+// Cryption is a request/response AES-GCM encryption middleware.
+// The request body must be base64-encoded AES-GCM ciphertext (nonce || ciphertext), which the
+// middleware decrypts before handing it to the handler; a 2xx response written by the handler is
+// encrypted before being returned to the client.
 //
-// 采用 AES-GCM 认证加密（AEAD），同时保证机密性与完整性（防篡改），nonce 每次
-// 随机生成；相比常见的 AES-ECB 等非认证模式，GCM 能抵御篡改与重放，安全性更高。
+// It uses AES-GCM authenticated encryption (AEAD), guaranteeing confidentiality and integrity
+// (tamper-proof) at the same time, with a fresh random nonce for every message; compared with
+// common unauthenticated modes such as AES-ECB, GCM resists tampering and replay and is therefore
+// more secure.
 //
-// 响应加密策略：
-//   - 仅 2xx（且非 204/205、非 HEAD）的成功响应体加密；
-//   - 错误响应（4xx/5xx）、重定向（3xx）、204/205 及 HEAD 请求保持明文透传，
-//     并保留原始状态码，便于客户端排查与 HTTP 语义正确（无 body 的状态码不输出密文 body）。
-//   - 响应超过缓冲上限时回退为明文输出（不加密），避免大响应导致 OOM。
+// Response encryption policy:
+//   - only 2xx (and neither 204/205 nor HEAD) successful response bodies are encrypted;
+//   - error responses (4xx/5xx), redirects (3xx), 204/205 and HEAD requests keep passing through
+//     as plaintext, preserving the original status code for easy client diagnosis and correct
+//     HTTP semantics (a status code without a body must not emit an encrypted body).
+//   - a response exceeding the buffer limit falls back to plaintext output (unencrypted) to avoid
+//     OOM on large responses.
 type Cryption struct {
 	key              []byte
 	matcher          *x.PathMatcher
-	maxRequestBytes  int64 // 密文请求体上限
-	maxResponseBytes int   // 加密响应缓冲上限
+	maxRequestBytes  int64 // encrypted request body limit
+	maxResponseBytes int   // encrypted response buffer limit
 }
 
-// NewCryption 创建请求/响应加解密中间件。
-// key 长度必须为 16/24/32 字节（对应 AES-128/192/256）。
-// skipPaths 为不进行请求/响应加解密的路径列表，命中路径以明文透传（常用于回调、
-// 静态资源等无法加密的场景）。匹配方式：精确匹配（如 "/callback"）或以 "*" 结尾
-// 的前缀通配（如 "/public/*"）。
-// 密文请求体与加密响应默认上限均为 5MB，超限分别返回 413 / 回退明文；
-// 需要调整请用 NewCryptionWithLimit。
+// NewCryption creates the request/response encryption middleware.
+// key must be 16/24/32 bytes long (corresponding to AES-128/192/256).
+// skipPaths lists the paths that are neither decrypted nor encrypted; a matching path passes
+// through as plaintext (commonly used for callbacks, static assets and other scenarios that
+// cannot be encrypted). Matching is either exact (e.g. "/callback") or a prefix wildcard ending
+// in "*" (e.g. "/public/*").
+// The default limits for the encrypted request body and the encrypted response are both 5MB;
+// exceeding them returns 413 / falls back to plaintext respectively. Use NewCryptionWithLimit to
+// change them.
 func NewCryption(key []byte, skipPaths ...string) *Cryption {
 	return NewCryptionWithLimit(key, defaultMaxBytes, defaultMaxBytes, skipPaths...)
 }
 
-// NewCryptionWithLimit 创建加解密中间件，并指定密文请求体与加密响应的最大字节数。
-// maxRequestBytes 为密文请求体上限（超出返回 413）；maxResponseBytes 为加密响应缓冲上限
-// （超出回退明文输出，避免 OOM）。任一参数 <= 0 时使用默认值 5MB。
+// NewCryptionWithLimit creates the encryption middleware with explicit maximum byte sizes for the
+// encrypted request body and the encrypted response.
+// maxRequestBytes is the encrypted request body limit (413 when exceeded); maxResponseBytes is the
+// encrypted response buffer limit (falls back to plaintext output when exceeded, avoiding OOM).
+// Any parameter <= 0 uses the default of 5MB.
 func NewCryptionWithLimit(key []byte, maxRequestBytes int64, maxResponseBytes int, skipPaths ...string) *Cryption {
 	if maxRequestBytes <= 0 {
 		maxRequestBytes = defaultMaxBytes
@@ -63,18 +74,21 @@ func NewCryptionWithLimit(key []byte, maxRequestBytes int64, maxResponseBytes in
 	}
 }
 
-// Middleware 返回标准形式 func(http.Handler) http.Handler 的加解密中间件。
+// Middleware returns the encryption middleware in the standard func(http.Handler) http.Handler
+// form.
 func (c *Cryption) Middleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// 命中跳过规则的路径不做请求/响应加解密，明文透传（业务照常处理）
+			// A path matching a skip rule is neither decrypted nor encrypted; it passes through as
+			// plaintext (the business logic still runs as usual)
 			if c.matcher.Match(r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			// 解密请求体。按"是否存在 body"判断（而非 ContentLength>0），
-			// 以兼容 Transfer-Encoding: chunked（ContentLength == -1）的请求。
+			// Decrypt the request body. The check is "is there a body" rather than
+			// ContentLength > 0, so that requests with Transfer-Encoding: chunked
+			// (ContentLength == -1) work too.
 			if r.Body != nil && r.Body != http.NoBody {
 				body, err := io.ReadAll(io.LimitReader(r.Body, c.maxRequestBytes+1))
 				if err != nil {
@@ -104,11 +118,12 @@ func (c *Cryption) Middleware() func(http.Handler) http.Handler {
 				}
 			}
 
-			// 缓冲 handler 的响应，结束后统一决定"加密输出"还是"明文透传"。
+			// Buffer the handler's response and decide at the end between "encrypted output" and
+			// "plaintext pass-through".
 			cw := respw.NewCryptionWriter(w, c.maxResponseBytes)
 			next.ServeHTTP(cw, r)
 
-			// handler 未显式 WriteHeader 时按 200 处理。
+			// A handler that never calls WriteHeader explicitly is treated as 200.
 			code := cw.StatusCode()
 			if code == 0 {
 				code = http.StatusOK
@@ -118,10 +133,12 @@ func (c *Cryption) Middleware() func(http.Handler) http.Handler {
 				code != http.StatusNoContent && code != http.StatusResetContent &&
 				r.Method != http.MethodHead
 
-			// 缓冲超限：CryptionWriter 已切换为明文透传模式，
-			// 响应头与（已缓冲 + 后续的）完整正文都已写入底层，此处不可再写，
-			// 否则会产生重复响应。历史缺陷：此处只写出截断的缓冲前缀，
-			// 导致超限响应被静默截断，客户端拿到残缺数据且无任何错误信号。
+			// Buffer overflow: CryptionWriter has already switched to plaintext pass-through mode,
+			// and the response headers plus the complete body (buffered + subsequent) have been
+			// written to the underlying writer, so nothing more may be written here — doing so would
+			// duplicate the response. Historical defect: only the truncated buffered prefix was
+			// written here, which silently truncated the overflow response so that the client
+			// received incomplete data with no error signal at all.
 			if cw.Overflowed() {
 				logger.WarnCtx(r.Context(), "encrypted response exceeds max buffer, falling back to plaintext",
 					logger.String("path", r.URL.Path),
@@ -130,12 +147,14 @@ func (c *Cryption) Middleware() func(http.Handler) http.Handler {
 				return
 			}
 
-			// 明文透传分支：
-			//  1) 非 2xx（错误/重定向响应明文，便于客户端直接读取与排错）；
-			//  2) 204/205（HTTP 规定无响应体，不得输出密文 body）；
-			//  3) HEAD 请求（无响应体）。
+			// Plaintext pass-through branches:
+			//  1) not 2xx (error/redirect responses stay plaintext so clients can read and debug them
+			//     directly);
+			//  2) 204/205 (HTTP defines no response body, so an encrypted body must not be emitted);
+			//  3) HEAD requests (no response body).
 			if !encryptable {
-				// Content-Length 交由 net/http 按实际 body 自动计算，避免与透传内容不一致
+				// Let net/http compute Content-Length from the actual body so that it cannot disagree
+				// with the pass-through content
 				w.Header().Del("Content-Length")
 				w.WriteHeader(code)
 				if r.Method != http.MethodHead && len(cw.Buffered()) > 0 {
@@ -144,7 +163,7 @@ func (c *Cryption) Middleware() func(http.Handler) http.Handler {
 				return
 			}
 
-			// 加密 2xx 成功响应体并输出。
+			// Encrypt the 2xx success response body and write it out.
 			encrypted, err := hash.AESGCMEncrypt(c.key, cw.Buffered())
 			if err != nil {
 				logger.ErrorCtx(r.Context(), "encrypt response failed",
@@ -154,7 +173,8 @@ func (c *Cryption) Middleware() func(http.Handler) http.Handler {
 				writeError(r.Context(), w, http.StatusInternalServerError, "encrypt response failed")
 				return
 			}
-			// 密文为 base64 文本；清理可能与密文长度冲突的响应头后输出
+			// The ciphertext is base64 text; drop the headers that could conflict with its length
+			// before writing it out
 			h := w.Header()
 			h.Del("Content-Length")
 			h.Set("Content-Type", "text/plain; charset=utf-8")

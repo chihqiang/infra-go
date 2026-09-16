@@ -1,26 +1,26 @@
 # hash
 
-常用哈希算法封装包，提供 MD5、SHA1、SHA256、SHA512、SHA3、HMAC、Bcrypt 等哈希方法。基础/文件哈希统一返回十六进制字符串；AES-GCM 与 `HMACSign` 返回 base64，Bcrypt 返回 `$2a$` 格式哈希，均无需手动处理编码。
+A package wrapping common hashing algorithms: MD5, SHA1, SHA256, SHA512, SHA3, HMAC, Bcrypt and more. Basic/file hashes all return a hexadecimal string; AES-GCM and `HMACSign` return base64; Bcrypt returns a `$2a$`-format hash — no manual encoding needed in any case.
 
-## 特性
+## Features
 
-- **基础哈希**：MD5、SHA1、SHA224、SHA256、SHA384、SHA512、SHA512/224、SHA512/256
-- **SHA3 系列**：SHA3-256、SHA3-512
-- **HMAC**：HMAC-SHA1、HMAC-SHA256、HMAC-SHA512、HMAC-SHA3-256、HMAC-SHA3-512
-- **AES-GCM 加密**：认证加密（AEAD），同时保证机密性与完整性
-- **HMAC 签名/校验**：`HMACSign` / `HMACVerify`，base64 编码，常量时间比较
-- **密码哈希**：Bcrypt（带成本参数，支持验证、格式检测）
-- **文件哈希**：大文件流式计算 MD5、SHA1、SHA256、SHA512
-- **安全比较**：恒定时间比较，防止时序攻击
-- **输出约定**：基础/文件哈希返回十六进制字符串；AES-GCM 与 `HMACSign` 返回 base64；Bcrypt 返回 `$2a$` 哈希——均无需手动处理编码
+- **Basic hashing**: MD5, SHA1, SHA224, SHA256, SHA384, SHA512, SHA512/224, SHA512/256
+- **SHA3 family**: SHA3-256, SHA3-512
+- **HMAC**: HMAC-SHA1, HMAC-SHA256, HMAC-SHA512, HMAC-SHA3-256, HMAC-SHA3-512
+- **AES-GCM encryption**: authenticated encryption (AEAD), guaranteeing both confidentiality and integrity
+- **HMAC sign/verify**: `HMACSign` / `HMACVerify`, base64-encoded, constant-time comparison
+- **Password hashing**: Bcrypt (with cost parameter, supports verification and format detection)
+- **File hashing**: streaming MD5, SHA1, SHA256, SHA512 for large files
+- **Secure comparison**: constant-time comparison to prevent timing attacks
+- **Output convention**: basic/file hashes return hexadecimal strings; AES-GCM and `HMACSign` return base64; Bcrypt returns a `$2a$` hash — no manual encoding needed in any case
 
-## 安装
+## Installation
 
 ```bash
 go get github.com/chihqiang/infra-go/hash
 ```
 
-## 快速开始
+## Quick start
 
 ```go
 package main
@@ -32,17 +32,17 @@ import (
 )
 
 func main() {
-    // 基础哈希
+    // basic hashing
     fmt.Println(hash.MD5String("hello"))
-    // 输出: 5d41402abc4b2a76b9719d911017c592
+    // output: 5d41402abc4b2a76b9719d911017c592
 
     fmt.Println(hash.SHA256String("hello"))
-    // 输出: 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+    // output: 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
 
     // HMAC
     fmt.Println(hash.HMACSHA256String("secret-key", "hello world"))
 
-    // 密码哈希
+    // password hashing
     hashed, _ := hash.BcryptHashDefault("myPassword123")
     fmt.Println(hash.BcryptMatch(hashed, "myPassword123")) // true
 }
@@ -50,37 +50,37 @@ func main() {
 
 ## API
 
-### 基础哈希
+### Basic hashing
 
-每个算法提供 `[]byte` 和 `string` 两个版本：
+Each algorithm comes in both a `[]byte` and a `string` version:
 
-| 函数 | 输入 | 输出长度 |
+| Function | Input | Output length |
 | ------ | ------ | ------ |
-| `MD5` / `MD5String` | `[]byte` / `string` | 32 字符 |
-| `SHA1` / `SHA1String` | `[]byte` / `string` | 40 字符 |
-| `SHA224` / `SHA224String` | `[]byte` / `string` | 56 字符 |
-| `SHA256` / `SHA256String` | `[]byte` / `string` | 64 字符 |
-| `SHA384` / `SHA384String` | `[]byte` / `string` | 96 字符 |
-| `SHA512` / `SHA512String` | `[]byte` / `string` | 128 字符 |
-| `SHA512_224` / `SHA512_224String` | `[]byte` / `string` | 56 字符 |
-| `SHA512_256` / `SHA512_256String` | `[]byte` / `string` | 64 字符 |
-| `SHA3_256` / `SHA3_256String` | `[]byte` / `string` | 64 字符 |
-| `SHA3_512` / `SHA3_512String` | `[]byte` / `string` | 128 字符 |
+| `MD5` / `MD5String` | `[]byte` / `string` | 32 chars |
+| `SHA1` / `SHA1String` | `[]byte` / `string` | 40 chars |
+| `SHA224` / `SHA224String` | `[]byte` / `string` | 56 chars |
+| `SHA256` / `SHA256String` | `[]byte` / `string` | 64 chars |
+| `SHA384` / `SHA384String` | `[]byte` / `string` | 96 chars |
+| `SHA512` / `SHA512String` | `[]byte` / `string` | 128 chars |
+| `SHA512_224` / `SHA512_224String` | `[]byte` / `string` | 56 chars |
+| `SHA512_256` / `SHA512_256String` | `[]byte` / `string` | 64 chars |
+| `SHA3_256` / `SHA3_256String` | `[]byte` / `string` | 64 chars |
+| `SHA3_512` / `SHA3_512String` | `[]byte` / `string` | 128 chars |
 
 ```go
-// []byte 版本
+// []byte version
 hash.MD5([]byte("hello"))
 
-// string 版本
+// string version
 hash.MD5String("hello")
 
-// 通用哈希（自定义算法）
+// generic hash (custom algorithm)
 hash.Hash([]byte("hello"), sha256.New())
 ```
 
-### 文件哈希
+### File hashing
 
-支持大文件流式计算，不会一次性加载到内存：
+Supports streaming computation for large files, never loading the whole file into memory:
 
 ```go
 md5sum, err := hash.FileMD5("/path/to/file")
@@ -91,106 +91,106 @@ sha512sum, err := hash.FileSHA512("/path/to/file")
 
 ### HMAC
 
-| 函数 | 算法 |
+| Function | Algorithm |
 | ------ | ------ |
 | `HMACSHA1` / `HMACSHA1String` | HMAC-SHA1 |
 | `HMACSHA256` / `HMACSHA256String` | HMAC-SHA256 |
 | `HMACSHA512` / `HMACSHA512String` | HMAC-SHA512 |
 | `HMACSHA3_256` | HMAC-SHA3-256 |
 | `HMACSHA3_512` | HMAC-SHA3-512 |
-| `HMAC` / `HMACHex` | 通用 HMAC（自定义算法） |
+| `HMAC` / `HMACHex` | generic HMAC (custom algorithm) |
 
 ```go
-// 使用字符串密钥
+// string key
 sig := hash.HMACSHA256String("secret-key", "hello world")
 
-// 使用字节数组密钥
+// byte-slice key
 sig := hash.HMACSHA256([]byte("secret-key"), []byte("hello world"))
 
-// 通用 HMAC
+// generic HMAC
 sig := hash.HMACHex(sha256.New, []byte("key"), []byte("data"))
 ```
 
-### AES-GCM 加密
+### AES-GCM encryption
 
-AES-GCM 是认证加密（AEAD），同时保证机密性与完整性（防篡改），nonce 每次随机生成。返回 base64 编码的 `nonce || ciphertext`：
+AES-GCM is authenticated encryption (AEAD) guaranteeing both confidentiality and integrity (tamper resistance); the nonce is randomly generated each time. It returns the base64-encoded `nonce || ciphertext`:
 
 ```go
-// 密钥必须为 16/24/32 字节（AES-128/192/256）
+// the key must be 16/24/32 bytes (AES-128/192/256)
 key := []byte("0123456789abcdef")
 
-// 加密：返回 base64 编码密文
+// encrypt: returns the base64-encoded ciphertext
 encrypted, err := hash.AESGCMEncrypt(key, []byte("hello"))
 
-// 解密：密钥错误或数据被篡改时返回错误
+// decrypt: returns an error on a wrong key or tampered data
 decrypted, err := hash.AESGCMDecrypt(key, encrypted)
 ```
 
-### HMAC 签名/校验
+### HMAC sign/verify
 
-`HMACSign` / `HMACVerify` 用于请求签名与防篡改校验（如 `httpx.WithContentSecurity`）。签名返回 base64 编码，校验使用常量时间比较（`hmac.Equal`），防止时序攻击：
+`HMACSign` / `HMACVerify` are used for request signing and tamper detection (e.g. `httpx.WithContentSecurity`). The signature is base64-encoded and verification uses constant-time comparison (`hmac.Equal`) to prevent timing attacks:
 
 ```go
-// 签名：返回 base64 编码的 HMAC-SHA256
+// sign: returns the base64-encoded HMAC-SHA256
 sig := hash.HMACSign(key, "timestamp\nmethod\npath")
 
-// 校验：返回是否匹配
+// verify: returns whether it matches
 ok := hash.HMACVerify(key, "timestamp\nmethod\npath", sig)
 ```
 
-### Bcrypt 密码哈希
+### Bcrypt password hashing
 
-Bcrypt 是专为密码设计的哈希算法，自带盐值，抗彩虹表攻击：
+Bcrypt is a hash algorithm designed specifically for passwords; it includes its own salt and resists rainbow-table attacks:
 
 ```go
-// 哈希密码（使用默认成本 10）
+// hash a password (default cost 10)
 hashed, err := hash.BcryptHashDefault("myPassword123")
 
-// 哈希密码（自定义成本，4~31，推荐 10 或 12）
+// hash a password (custom cost, 4~31; 10 or 12 recommended)
 hashed, err := hash.BcryptHash("myPassword123", 12)
 
-// 验证密码
+// verify a password
 ok := hash.BcryptMatch(hashed, "myPassword123")  // true
 ok = hash.BcryptMatch(hashed, "wrongPassword")   // false
 
-// 验证密码（返回 error）
-err := hash.BcryptCompare(hashed, "myPassword123") // nil = 匹配
+// verify a password (returns an error)
+err := hash.BcryptCompare(hashed, "myPassword123") // nil = match
 
-// 检查字符串是否为 bcrypt 哈希
+// check whether a string is a bcrypt hash
 hash.BcryptIsHashed("$2a$10$abc...") // true
 ```
 
-**成本参数说明**：
+**Cost parameter reference**:
 
-| 常量 | 值 | 说明 |
+| Constant | Value | Description |
 | ------ | ------ | ------ |
-| `BcryptCostMin` | 4 | 最小成本（最快，安全性最低） |
-| `BcryptCostDefault` | 10 | 默认成本 |
-| `BcryptCostMax` | 31 | 最大成本（最慢，安全性最高） |
+| `BcryptCostMin` | 4 | Minimum cost (fastest, least secure) |
+| `BcryptCostDefault` | 10 | Default cost |
+| `BcryptCostMax` | 31 | Maximum cost (slowest, most secure) |
 
-### 安全比较
+### Secure comparison
 
-使用恒定时间比较，防止时序攻击：
+Uses constant-time comparison to prevent timing attacks:
 
 ```go
-// 比较字节数组
+// compare byte slices
 hash.Equal([]byte("hash1"), []byte("hash2"))
 
-// 比较十六进制字符串
+// compare hex strings
 hash.EqualHex("aaf4c61d...", "aaf4c61d...")
 ```
 
-### 编码辅助
+### Encoding helpers
 
 ```go
-// 编码
+// encode
 hexStr := hash.HexEncode([]byte("hello")) // "68656c6c6f"
 
-// 解码
+// decode
 data, err := hash.HexDecode("68656c6c6f") // []byte("hello")
 ```
 
-## 完整示例
+## Complete example
 
 ```go
 package main
@@ -204,8 +204,8 @@ import (
 )
 
 func main() {
-    // --- 基础哈希 ---
-    fmt.Println("=== 基础哈希 ===")
+    // --- basic hashing ---
+    fmt.Println("=== Basic hashing ===")
     fmt.Println("MD5:    ", hash.MD5String("hello"))
     fmt.Println("SHA1:   ", hash.SHA1String("hello"))
     fmt.Println("SHA256: ", hash.SHA256String("hello"))
@@ -216,7 +216,7 @@ func main() {
     fmt.Println("\n=== HMAC ===")
     fmt.Println("HMAC-SHA256:", hash.HMACSHA256String("secret", "hello world"))
 
-    // --- Bcrypt 密码哈希 ---
+    // --- Bcrypt password hashing ---
     fmt.Println("\n=== Bcrypt ===")
     password := "mySecretPassword"
     hashed, err := hash.BcryptHashDefault(password)
@@ -226,8 +226,8 @@ func main() {
     fmt.Println("Hashed:", hashed)
     fmt.Println("Match: ", hash.BcryptMatch(hashed, password))
 
-    // --- 文件哈希 ---
-    fmt.Println("\n=== 文件哈希 ===")
+    // --- file hashing ---
+    fmt.Println("\n=== File hashing ===")
     tmpFile := "/tmp/test.txt"
     os.WriteFile(tmpFile, []byte("hello world"), 0o644)
 
@@ -240,10 +240,10 @@ func main() {
 }
 ```
 
-## 安全建议
+## Security recommendations
 
-- **密码存储**：使用 `BcryptHashDefault`，不要用 MD5/SHA256 存密码
-- **MD5/SHA1**：已不安全，仅用于数据校验、去重等非安全场景
-- **HMAC**：用于 API 签名、Webhook 验签等场景
-- **Bcrypt 成本**：生产环境建议 12 或更高
-- **哈希比较**：始终使用 `Equal` / `EqualHex`，不要用 `==`
+- **Password storage**: use `BcryptHashDefault`; never store passwords with MD5/SHA256
+- **MD5/SHA1**: no longer secure; use them only for non-security purposes such as data checks and deduplication
+- **HMAC**: use it for API signing, webhook signature verification, etc.
+- **Bcrypt cost**: 12 or higher is recommended in production
+- **Hash comparison**: always use `Equal` / `EqualHex`, never `==`

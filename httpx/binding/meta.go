@@ -9,53 +9,54 @@ import (
 	"time"
 )
 
-// --- 结构体字段元信息缓存 ---
+// --- Struct field metadata cache ---
 
-// 类型预判用到的标准类型。
+// Standard types used for type pre-detection.
 var (
 	timeType       = reflect.TypeOf(time.Time{})
 	durationType   = reflect.TypeOf(time.Duration(0))
 	fileHeaderType = reflect.TypeOf(multipart.FileHeader{})
 )
 
-// structMeta 结构体的预解析字段元信息。
+// structMeta holds the pre-parsed field metadata of a struct.
 type structMeta struct {
 	fields []fieldMeta
 }
 
-// fieldMeta 预解析的结构体字段元信息。
-// 绑定热路径使用缓存信息，避免每次请求重复的 Tag 解析与类型断言。
+// fieldMeta holds the pre-parsed metadata of a struct field.
+// The binding hot path uses cached information to avoid repeated tag parsing
+// and type assertions on every request.
 type fieldMeta struct {
-	sf           reflect.StructField // 原始字段信息（供 setter 使用）
-	name         string              // 字段名
-	tagKey       string              // 标签键名（未设置标签时为空，回退用字段名）
-	skip         bool                // 标签为 "-"，忽略
-	hasDefault   bool                // 是否有 default 选项
-	defaultValue string              // default 选项值
-	anonymous    bool                // 是否匿名（内嵌）字段
-	index        int                 // 字段在结构体中的索引
+	sf           reflect.StructField // original field information (used by the setter)
+	name         string              // field name
+	tagKey       string              // tag key (empty when no tag is set; falls back to the field name)
+	skip         bool                // tag is "-", ignore the field
+	hasDefault   bool                // whether a default option exists
+	defaultValue string              // value of the default option
+	anonymous    bool                // whether the field is anonymous (embedded)
+	index        int                 // index of the field in the struct
 
-	// 类型预判，替代运行时 value.Interface().(type) 断言
+	// Type pre-detection, replacing the runtime value.Interface().(type) assertion
 	isTime       bool
 	isDuration   bool
 	isFileHeader bool
 
-	// time_format / time_utc / time_location 标签缓存
+	// Cache for the time_format / time_utc / time_location tags
 	timeFormat   string
 	timeUTC      bool
 	timeLocation string
 }
 
-// metaCacheKey 结构体元信息缓存键：类型 + 绑定标签。
+// metaCacheKey is the struct metadata cache key: type + binding tag.
 type metaCacheKey struct {
 	typ reflect.Type
 	tag string
 }
 
-// structMetaCache 结构体元信息缓存。
+// structMetaCache caches struct metadata.
 var structMetaCache sync.Map
 
-// getStructMeta 获取（或解析并缓存）指定标签下的结构体字段元信息。
+// getStructMeta returns (parsing and caching if needed) the struct field metadata for the given tag.
 func getStructMeta(typ reflect.Type, tag string) *structMeta {
 	key := metaCacheKey{typ: typ, tag: tag}
 	if v, ok := structMetaCache.Load(key); ok {
@@ -66,14 +67,14 @@ func getStructMeta(typ reflect.Type, tag string) *structMeta {
 	return actual.(*structMeta)
 }
 
-// parseStructMeta 解析结构体字段元信息。
+// parseStructMeta parses the struct field metadata.
 func parseStructMeta(typ reflect.Type, tag string) *structMeta {
 	meta := &structMeta{}
 	n := typ.NumField()
 	meta.fields = make([]fieldMeta, 0, n)
 	for i := 0; i < n; i++ {
 		sf := typ.Field(i)
-		// 跳过未导出的非匿名字段
+		// Skip unexported non-anonymous fields
 		if sf.PkgPath != "" && !sf.Anonymous {
 			continue
 		}
@@ -94,7 +95,7 @@ func parseStructMeta(typ reflect.Type, tag string) *structMeta {
 		tagValue, opts := head(tagRaw, ",")
 		fm.tagKey = tagValue
 
-		// 解析标签选项（default 等）
+		// Parse tag options (default, etc.)
 		var opt string
 		for len(opts) > 0 {
 			opt, opts = head(opts, ",")
@@ -104,7 +105,7 @@ func parseStructMeta(typ reflect.Type, tag string) *structMeta {
 			}
 		}
 
-		// 类型预判（解引用指针后的基础类型）
+		// Type pre-detection (the base type after dereferencing pointers)
 		base := sf.Type
 		for base.Kind() == reflect.Ptr {
 			base = base.Elem()
@@ -118,7 +119,7 @@ func parseStructMeta(typ reflect.Type, tag string) *structMeta {
 			fm.isFileHeader = true
 		}
 
-		// 时间标签缓存
+		// Cache the time-related tags
 		if fm.isTime {
 			fm.timeFormat = sf.Tag.Get("time_format")
 			fm.timeUTC, _ = strconv.ParseBool(sf.Tag.Get("time_utc"))
@@ -130,7 +131,7 @@ func parseStructMeta(typ reflect.Type, tag string) *structMeta {
 	return meta
 }
 
-// head 返回分隔符前的部分和剩余部分。
+// head returns the part before the separator and the remainder.
 func head(str, sep string) (head string, tail string) {
 	head, tail, _ = strings.Cut(str, sep)
 	return head, tail

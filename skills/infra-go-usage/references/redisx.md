@@ -1,24 +1,27 @@
 # redisx
 
-基于 [go-redis/v9](https://github.com/redis/go-redis) 的 Redis 客户端封装，提供连接池管理、键名前缀、分布式锁等功能。
+A Redis client wrapper built on [go-redis/v9](https://github.com/redis/go-redis), providing
+connection pool management, key prefixes, distributed locks, and more.
 
-## 特性
+## Features
 
-- **连接池管理**：可配置连接池大小、超时时间等
-- **哨兵模式**：支持 Redis Sentinel 高可用
-- **键名前缀**：所有操作自动添加前缀，方便多服务共享 Redis
-- **分布式锁**：基于 SET NX EX + Lua 脚本实现，支持自动续期，传入的 context 取消时自动停止续期 goroutine，防止泄漏
-- **完整 API**：覆盖 String、Hash、List、Set 等常用操作
-- **配置驱动**：Config 通过 `default` 结构体标签定义默认值，遵循 conf 标准
-- **统一错误**：提供语义化错误（`ErrNil`、`ErrLockNotAcquired` 等）
+- **Connection pool management**: configurable pool size, timeouts, and more
+- **Sentinel mode**: supports Redis Sentinel for high availability
+- **Key prefix**: every operation gets the prefix automatically, so several services can share
+  one Redis instance easily
+- **Distributed lock**: built on SET NX EX + Lua scripts, with auto-renewal; when the supplied
+  context is cancelled the renewal goroutine stops automatically, preventing leaks
+- **Complete API**: covers the common String, Hash, List, and Set operations
+- **Config-driven**: Config defines defaults through `default` struct tags, following the conf standard
+- **Unified errors**: semantic errors (`ErrNil`, `ErrLockNotAcquired`, etc.)
 
-## 安装
+## Installation
 
 ```bash
 go get github.com/chihqiang/infra-go/redisx
 ```
 
-## 快速开始
+## Quick start
 
 ```go
 package main
@@ -32,7 +35,7 @@ import (
 )
 
 func main() {
-    // 初始化客户端
+    // initialize the client
     client := redisx.MustNew(redisx.Config{
         Addr:      "127.0.0.1:6379",
         Password:  "secret",
@@ -43,12 +46,12 @@ func main() {
 
     ctx := context.Background()
 
-    // 基础操作
+    // basic operations
     client.Set(ctx, "hello", "world", 10*time.Minute)
     val, _ := client.Get(ctx, "hello")
-    fmt.Println(val) // 输出: world（实际存储的键为 myapp:hello）
+    fmt.Println(val) // Output: world (the key actually stored is myapp:hello)
 
-    // 分布式锁
+    // distributed lock
     lock, err := client.Locker("order:123", 10*time.Second).TryLock(ctx)
     if err != nil {
         fmt.Println("lock not acquired")
@@ -56,43 +59,43 @@ func main() {
     }
     defer lock.Unlock(ctx)
 
-    // 执行业务逻辑
+    // run the business logic
     fmt.Println("doing work with lock held")
 }
 ```
 
 ## API
 
-### 创建客户端
+### Creating a client
 
 ```go
-// 创建客户端（返回 error）
+// create a client (returns an error)
 client, err := redisx.New(redisx.Config{
     Addr:     "127.0.0.1:6379",
     Password: "secret",
 })
 
-// 创建客户端（出错 panic，适合全局初始化）
+// create a client (panics on error, suited to global initialization)
 client := redisx.MustNew(redisx.Config{Addr: "127.0.0.1:6379"})
 ```
 
-### 基础操作
+### Basic operations
 
 ```go
-// String 操作
+// String operations
 client.Set(ctx, "key", "value", 10*time.Minute)
 val, err := client.Get(ctx, "key")
 n, _ := client.Incr(ctx, "counter")
 n, _ := client.IncrBy(ctx, "counter", 5)
 
-// 通用操作
+// Generic operations
 n, _ := client.Del(ctx, "key1", "key2")
 exists, _ := client.Exists(ctx, "key")
 ok, _ := client.Expire(ctx, "key", 5*time.Minute)
 ttl, _ := client.TTL(ctx, "key")
 ```
 
-### Hash 操作
+### Hash operations
 
 ```go
 client.HSet(ctx, "user:1", "name", "alice", "age", 30)
@@ -101,7 +104,7 @@ all, _ := client.HGetAll(ctx, "user:1")
 n, _ := client.HDel(ctx, "user:1", "age")
 ```
 
-### List 操作
+### List operations
 
 ```go
 client.LPush(ctx, "queue", "task1", "task2")
@@ -110,7 +113,7 @@ val, _ := client.LPop(ctx, "queue")
 items, _ := client.LRange(ctx, "queue", 0, -1)
 ```
 
-### Set 操作
+### Set operations
 
 ```go
 client.SAdd(ctx, "tags", "go", "redis")
@@ -119,92 +122,98 @@ ok, _ := client.SIsMember(ctx, "tags", "go")
 n, _ := client.SRem(ctx, "tags", "go")
 ```
 
-### Scan 操作
+### Scan operations
 
 ```go
-// 迭代键，自动处理前缀
+// iterate keys; the prefix is handled automatically
 keys, cursor, err := client.Scan(ctx, 0, "user:*", 100)
 ```
 
-### 分布式锁
+### Distributed lock
 
 ```go
-// 尝试获取锁（非阻塞）
-// 传入的 ctx 用于控制自动续期 goroutine 的生命周期：
-// 当 ctx 取消时，续期 goroutine 会自动停止，防止泄漏
+// Try to acquire the lock (non-blocking)
+// The ctx passed in controls the lifetime of the auto-renewal goroutine:
+// when ctx is cancelled, the renewal goroutine stops automatically, preventing leaks
 lock, err := client.Locker("resource:1", 10*time.Second).TryLock(ctx)
 if err != nil {
-    // 锁已被持有
+    // lock already held
     return
 }
 defer lock.Unlock(ctx)
 
-// 阻塞式获取锁（自动重试）
+// Acquire the lock in blocking mode (retries automatically)
 lock, err = client.Locker("resource:1", 10*time.Second).Lock(ctx, 500*time.Millisecond)
 defer lock.Unlock(ctx)
 
-// 自动续期（防止业务执行时间超过锁过期时间）
-// 开启方式：在 Locker 上追加选项，例如
+// Auto-renewal (keeps the business logic from outliving the lock TTL)
+// Enable it by appending options to Locker, for example
 //     client.Locker(key, 0, redisx.WithTTL(10*time.Second), redisx.WithAutoRenew())
-// 不存在单独的 LockerWithTTL API；TTL 通过 Locker 第二参或 WithTTL 选项指定
-// 续期 goroutine 监听 ctx.Done()，即使调用方忘记 Unlock 也不会泄漏
+// There is no separate LockerWithTTL API; the TTL comes from Locker's 2nd arg or WithTTL
+// The renewal goroutine watches ctx.Done(), so nothing leaks even if the caller forgets Unlock
 ```
 
-> **TTL 必须大于 0**：`Locker` 的 TTL（或其被 `WithTTL` 覆盖后的值）小于 `1ms` 时，`TryLock`/`Lock` 会直接返回 `redisx.ErrInvalidLockTTL`，不会写入 Redis。这是因为 TTL <= 0 会被 Redis 视为**永不过期**（持有者崩溃即永久死锁），且启用 `WithAutoRenew` 时会在续期 goroutine 内触发 `time.NewTicker(0)` panic（无法被 recover，直接终止进程）；TTL < 1ms 则会被续期脚本的毫秒取整截断为 0，执行 `PEXPIRE key 0` 立即删除锁。
+> **TTL must be greater than 0**: when the `Locker` TTL (or the value after `WithTTL` overrides
+> it) is below `1ms`, `TryLock`/`Lock` return `redisx.ErrInvalidLockTTL` immediately without
+> writing to Redis. This is because a TTL <= 0 counts as **never expiring** in Redis (a crashed
+> holder means a permanent deadlock), and enabling `WithAutoRenew` would trigger a
+> `time.NewTicker(0)` panic inside the renewal goroutine (which cannot be recovered and kills the
+> process); a TTL < 1ms would be truncated to 0 by the millisecond rounding in the renewal
+> script, running `PEXPIRE key 0` and deleting the lock instantly.
 
-### 便捷方法
+### Convenience method
 
 ```go
-// 使用分布式锁执行函数，执行完自动释放锁
+// Run a function under a distributed lock; the lock is released when it returns
 err := client.SetNXWithLock(ctx, "task:1", 30*time.Second, func(ctx context.Context) error {
-    // 在锁保护下执行
+    // run with the lock held
     return doWork(ctx)
 })
 ```
 
-## 配置
+## Configuration
 
-### 配置项说明
+### Configuration fields
 
-| 字段 | 类型 | 默认值 | 说明 |
+| Field | Type | Default | Description |
 | ------ | ------ | -------- | ------ |
-| `Addr` | `string` | `127.0.0.1:6379` | Redis 服务器地址 |
-| `Username` | `string` | `""` | 用户名（Redis 6.0+ ACL） |
-| `Password` | `string` | `""` | 密码 |
-| `DB` | `int` | `0` | 数据库编号 |
-| `MasterName` | `string` | `""` | 哨兵主节点名称 |
-| `SentinelAddrs` | `[]string` | `nil` | 哨兵节点地址列表 |
-| `PoolSize` | `int` | `10` | 连接池大小 |
-| `MinIdleConns` | `int` | `2` | 最小空闲连接数 |
-| `MaxRetries` | `int` | `3` | 命令最大重试次数 |
-| `DialTimeout` | `time.Duration` | `5s` | 连接超时 |
-| `ReadTimeout` | `time.Duration` | `3s` | 读取超时 |
-| `WriteTimeout` | `time.Duration` | `3s` | 写入超时 |
-| `PoolTimeout` | `time.Duration` | `4s` | 连接池获取超时 |
-| `ConnMaxIdleTime` | `time.Duration` | `5m` | 连接最大空闲时间 |
-| `KeyPrefix` | `string` | `""` | 键名前缀 |
+| `Addr` | `string` | `127.0.0.1:6379` | Redis server address |
+| `Username` | `string` | `""` | Username (Redis 6.0+ ACL) |
+| `Password` | `string` | `""` | Password |
+| `DB` | `int` | `0` | Database number |
+| `MasterName` | `string` | `""` | Sentinel master name |
+| `SentinelAddrs` | `[]string` | `nil` | List of sentinel addresses |
+| `PoolSize` | `int` | `10` | Connection pool size |
+| `MinIdleConns` | `int` | `2` | Minimum number of idle connections |
+| `MaxRetries` | `int` | `3` | Maximum number of command retries |
+| `DialTimeout` | `time.Duration` | `5s` | Dial timeout |
+| `ReadTimeout` | `time.Duration` | `3s` | Read timeout |
+| `WriteTimeout` | `time.Duration` | `3s` | Write timeout |
+| `PoolTimeout` | `time.Duration` | `4s` | Timeout for taking a connection from the pool |
+| `ConnMaxIdleTime` | `time.Duration` | `5m` | Maximum idle time for a connection |
+| `KeyPrefix` | `string` | `""` | Key prefix |
 
-## 错误处理
+## Error handling
 
 ```go
 val, err := client.Get(ctx, "key")
 switch {
 case err == nil:
-    // 成功
+    // success
 case errors.Is(err, redisx.ErrNil):
-    // 键不存在
+    // key does not exist
 default:
-    // 其他错误
+    // other errors
 }
 
 lock, err := client.Locker("key", 10*time.Second).TryLock(ctx)
 if redisx.IsLockNotAcquired(err) {
-    // 锁已被持有
+    // lock already held
 }
 ```
 
-| 错误 | 说明 |
+| Error | Description |
 | ------ | ------ |
-| `ErrNil` | 键不存在 |
-| `ErrLockNotAcquired` | 获取锁失败（锁已被持有） |
-| `ErrLockOwnershipMismatch` | 释放锁失败（锁不属于当前持有者） |
+| `ErrNil` | Key does not exist |
+| `ErrLockNotAcquired` | Failed to acquire the lock (already held) |
+| `ErrLockOwnershipMismatch` | Failed to release the lock (not owned by the current holder) |

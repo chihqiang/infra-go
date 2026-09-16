@@ -10,13 +10,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 本文件覆盖 MemCache 后台 goroutine 的回收（回归）。
-// 历史缺陷：scanLoop/statLoop 只监听 Close 关闭的 stop channel，
-// 完全不理会构造时传入的 ctx；调用方忘记 Close 时 goroutine 永久泄漏
-// （按请求/租户创建缓存实例的场景会持续累积）。
+// This file covers the reclamation of MemCache background goroutines (regression).
+// Historical defect: scanLoop/statLoop only watched the stop channel closed by Close
+// and ignored the ctx passed at construction time entirely; when the caller forgot to
+// call Close the goroutines leaked forever (and kept accumulating in setups that
+// create a cache instance per request/tenant).
 
-// waitGoroutinesSettle 等待 goroutine 数量回落到阈值以内。
-// 后台 goroutine 退出存在调度延迟，因此轮询等待而非立即断言。
+// waitGoroutinesSettle waits for the goroutine count to fall back to the threshold.
+// Background goroutines take some scheduling delay to exit, so this polls instead of
+// asserting immediately.
 func waitGoroutinesSettle(t *testing.T, max int, timeout time.Duration) int {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -33,10 +35,12 @@ func waitGoroutinesSettle(t *testing.T, max int, timeout time.Duration) int {
 	}
 }
 
-// TestMemCache_CtxCancelStopsBackgroundGoroutines 回归测试：
-// 取消构造时传入的 ctx 应回收后台 goroutine，无需调用 Close。
+// TestMemCache_CtxCancelStopsBackgroundGoroutines is a regression test:
+// cancelling the ctx passed at construction time must reclaim the background
+// goroutines without calling Close.
 func TestMemCache_CtxCancelStopsBackgroundGoroutines(t *testing.T) {
-	// 先建立基线（含统计 goroutine 的稳态数量）
+	// Establish a baseline first (the steady-state count including the statistics
+	// goroutine).
 	baseline := runtime.NumGoroutine()
 
 	const instances = 10
@@ -44,19 +48,19 @@ func TestMemCache_CtxCancelStopsBackgroundGoroutines(t *testing.T) {
 
 	caches := make([]*MemCache, 0, instances)
 	for i := 0; i < instances; i++ {
-		// expire > 0 才会启动 scanLoop；statLoop 始终启动
+		// scanLoop only starts when expire > 0; statLoop always starts
 		caches = append(caches, NewMemCache(ctx, time.Minute))
 	}
 
-	// 此时应有约 2*instances 个后台 goroutine
+	// There should now be about 2*instances background goroutines
 	running := runtime.NumGoroutine()
 	require.Greater(t, running, baseline,
 		"background goroutines should be running after creation")
 
-	// 仅取消 ctx，不调用 Close
+	// Cancel only the ctx, without calling Close
 	cancel()
 
-	// 所有后台 goroutine 都应退出
+	// Every background goroutine should exit
 	got := waitGoroutinesSettle(t, baseline+2, 3*time.Second)
 	t.Logf("goroutines: baseline=%d running=%d after cancel=%d (instances=%d)",
 		baseline, running, got, instances)
@@ -64,18 +68,19 @@ func TestMemCache_CtxCancelStopsBackgroundGoroutines(t *testing.T) {
 	assert.LessOrEqual(t, got, baseline+2,
 		"cancelling ctx must stop scanLoop/statLoop; leaked goroutines indicate a leak")
 
-	// 清理（Close 是幂等的，与 ctx 取消叠加也不应 panic）
+	// Cleanup (Close is idempotent; overlapping with the ctx cancellation must not
+	// panic).
 	for _, c := range caches {
 		c.Close()
 	}
 }
 
-// TestMemCache_CloseStillWorks 验证原有的 Close 语义未被破坏。
+// TestMemCache_CloseStillWorks verifies that the original Close semantics are intact.
 func TestMemCache_CloseStillWorks(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 
 	const instances = 10
-	ctx := context.Background() // 不取消
+	ctx := context.Background() // not cancelled
 
 	caches := make([]*MemCache, 0, instances)
 	for i := 0; i < instances; i++ {
@@ -90,7 +95,7 @@ func TestMemCache_CloseStillWorks(t *testing.T) {
 	assert.LessOrEqual(t, got, baseline+2, "Close must stop the background goroutines")
 }
 
-// TestMemCache_CloseIsIdempotent 验证 Close 可重复调用。
+// TestMemCache_CloseIsIdempotent verifies that Close can be called repeatedly.
 func TestMemCache_CloseIsIdempotent(t *testing.T) {
 	c := NewMemCache(context.Background(), time.Minute)
 	require.NotPanics(t, func() {
@@ -100,11 +105,12 @@ func TestMemCache_CloseIsIdempotent(t *testing.T) {
 	})
 }
 
-// TestMemCache_NilCtxDoesNotPanic 验证 ctx 为 nil 时仍可用（不监听 ctx）。
+// TestMemCache_NilCtxDoesNotPanic verifies that a nil ctx still works (ctx is not
+// watched).
 func TestMemCache_NilCtxDoesNotPanic(t *testing.T) {
 	var c *MemCache
 	require.NotPanics(t, func() {
-		//nolint:staticcheck // 显式验证 nil ctx 的容错
+		//nolint:staticcheck // explicitly verifying tolerance of a nil ctx
 		c = NewMemCache(nil, time.Minute)
 	})
 	defer c.Close()
@@ -116,9 +122,10 @@ func TestMemCache_NilCtxDoesNotPanic(t *testing.T) {
 	assert.Equal(t, "v", v)
 }
 
-// TestMemCache_NoExpireStartsNoScanLoop 验证未配置过期时间时不启动扫描 goroutine。
+// TestMemCache_NoExpireStartsNoScanLoop verifies that no scan goroutine is started
+// when no expiry is configured.
 func TestMemCache_NoExpireStartsNoScanLoop(t *testing.T) {
-	c := NewMemCache(context.Background(), 0) // expire<=0：无 scanLoop
+	c := NewMemCache(context.Background(), 0) // expire <= 0: no scanLoop
 	defer c.Close()
 
 	assert.Equal(t, time.Duration(0), c.scanInterval, "no expiry means no scan interval")

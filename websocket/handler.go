@@ -5,52 +5,53 @@ import (
 	"sync"
 )
 
-// 消息类型常量（对应 RFC 6455 定义，与 gorilla/websocket 一致）。
+// Message type constants (as defined by RFC 6455, matching gorilla/websocket).
 const (
-	// TextMessage 文本消息。
+	// TextMessage is a text message.
 	TextMessage = 1
-	// BinaryMessage 二进制消息。
+	// BinaryMessage is a binary message.
 	BinaryMessage = 2
-	// CloseMessage 关闭消息。
+	// CloseMessage is a close message.
 	CloseMessage = 3
-	// PingMessage Ping 消息。
+	// PingMessage is a ping message.
 	PingMessage = 9
-	// PongMessage Pong 消息。
+	// PongMessage is a pong message.
 	PongMessage = 10
 )
 
-// Handler WebSocket 连接生命周期处理器接口。
-// 用户实现此接口来处理连接事件，或使用默认的 EventHandler。
+// Handler is the WebSocket connection lifecycle handler interface.
+// Implement it to handle connection events, or use the default EventHandler.
 type Handler interface {
-	// HandleOpen 连接建立时调用。
+	// HandleOpen is called when the connection is established.
 	HandleOpen(conn *Conn)
-	// HandleMessage 收到消息时调用。
-	// messageType 取值为 TextMessage、BinaryMessage 等。
+	// HandleMessage is called when a message arrives.
+	// messageType is one of TextMessage, BinaryMessage, etc.
 	HandleMessage(conn *Conn, messageType int, data []byte)
-	// HandleClose 连接关闭时调用。
-	// err 为关闭原因，正常关闭时为 nil。
+	// HandleClose is called when the connection is closed.
+	// err is the close reason and is nil for a normal close.
 	HandleClose(conn *Conn, err error)
-	// HandleError 发生错误时调用。
+	// HandleError is called when an error occurs.
 	HandleError(conn *Conn, err error)
 }
 
-// EventHandler 默认的事件驱动处理器。
-// 自动将文本消息解码为 Event{type, data}，并根据 type 分发到注册的处理器。
+// EventHandler is the default event-driven handler.
+// It decodes text messages into Event{type, data} automatically and dispatches them
+// to the registered handlers based on type.
 //
-// 用法：
+// Usage:
 //
 //	h := websocket.NewEventHandler()
 //	h.OnOpen(func(conn *websocket.Conn) {
-//	    log.Printf("连接建立: %d", conn.ID())
+//	    log.Printf("connection opened: %d", conn.ID())
 //	})
 //	h.Handle("chat", func(conn *websocket.Conn, data json.RawMessage) {
 //	    var msg struct{ Text string `json:"text"` }
 //	    json.Unmarshal(data, &msg)
-//	    // 广播给所有人
+//	    // broadcast to everyone
 //	    conn.Server().Broadcast([]byte(msg.Text))
 //	})
 //	h.OnClose(func(conn *websocket.Conn, err error) {
-//	    log.Printf("连接关闭: %d", conn.ID())
+//	    log.Printf("connection closed: %d", conn.ID())
 //	})
 type EventHandler struct {
 	mu             sync.RWMutex
@@ -61,14 +62,14 @@ type EventHandler struct {
 	handlers       map[string]func(*Conn, json.RawMessage)
 }
 
-// NewEventHandler 创建一个事件驱动处理器。
+// NewEventHandler creates an event-driven handler.
 func NewEventHandler() *EventHandler {
 	return &EventHandler{
 		handlers: make(map[string]func(*Conn, json.RawMessage)),
 	}
 }
 
-// OnOpen 设置连接建立回调，支持链式调用。
+// OnOpen sets the connection-opened callback; it is chainable.
 func (h *EventHandler) OnOpen(fn func(*Conn)) *EventHandler {
 	h.mu.Lock()
 	h.onOpenHandler = fn
@@ -76,7 +77,7 @@ func (h *EventHandler) OnOpen(fn func(*Conn)) *EventHandler {
 	return h
 }
 
-// OnClose 设置连接关闭回调，支持链式调用。
+// OnClose sets the connection-closed callback; it is chainable.
 func (h *EventHandler) OnClose(fn func(*Conn, error)) *EventHandler {
 	h.mu.Lock()
 	h.onCloseHandler = fn
@@ -84,7 +85,7 @@ func (h *EventHandler) OnClose(fn func(*Conn, error)) *EventHandler {
 	return h
 }
 
-// OnError 设置错误回调，支持链式调用。
+// OnError sets the error callback; it is chainable.
 func (h *EventHandler) OnError(fn func(*Conn, error)) *EventHandler {
 	h.mu.Lock()
 	h.onErrorHandler = fn
@@ -92,8 +93,8 @@ func (h *EventHandler) OnError(fn func(*Conn, error)) *EventHandler {
 	return h
 }
 
-// OnMessage 设置原始消息回调。
-// 对每条消息（在事件分发之前）调用，支持链式调用。
+// OnMessage sets the raw message callback.
+// It is invoked for every message (before event dispatch) and is chainable.
 func (h *EventHandler) OnMessage(fn func(*Conn, []byte)) *EventHandler {
 	h.mu.Lock()
 	h.onRawMessage = fn
@@ -101,9 +102,9 @@ func (h *EventHandler) OnMessage(fn func(*Conn, []byte)) *EventHandler {
 	return h
 }
 
-// Handle 注册事件处理器。
-// 当收到 {"type": eventType, "data": ...} 格式的消息时，调用对应的处理器。
-// 支持链式调用。
+// Handle registers an event handler.
+// When a message in the form {"type": eventType, "data": ...} arrives, the matching
+// handler is invoked. It is chainable.
 func (h *EventHandler) Handle(eventType string, fn func(*Conn, json.RawMessage)) *EventHandler {
 	h.mu.Lock()
 	h.handlers[eventType] = fn
@@ -111,9 +112,9 @@ func (h *EventHandler) Handle(eventType string, fn func(*Conn, json.RawMessage))
 	return h
 }
 
-// --- Handler 接口实现 ---
+// --- Handler interface implementation ---
 
-// HandleOpen 实现 Handler 接口。
+// HandleOpen implements the Handler interface.
 func (h *EventHandler) HandleOpen(conn *Conn) {
 	h.mu.RLock()
 	fn := h.onOpenHandler
@@ -123,8 +124,9 @@ func (h *EventHandler) HandleOpen(conn *Conn) {
 	}
 }
 
-// HandleMessage 实现 Handler 接口。
-// 先调用原始消息回调，然后尝试将文本消息解码为 Event 并分发。
+// HandleMessage implements the Handler interface.
+// It first invokes the raw message callback, then tries to decode text messages into
+// an Event and dispatch them.
 func (h *EventHandler) HandleMessage(conn *Conn, messageType int, data []byte) {
 	h.mu.RLock()
 	rawHandler := h.onRawMessage
@@ -133,7 +135,7 @@ func (h *EventHandler) HandleMessage(conn *Conn, messageType int, data []byte) {
 		rawHandler(conn, data)
 	}
 
-	// 仅处理文本消息的事件分发
+	// Only text messages take part in event dispatch
 	if messageType != TextMessage {
 		return
 	}
@@ -154,7 +156,7 @@ func (h *EventHandler) HandleMessage(conn *Conn, messageType int, data []byte) {
 	}
 }
 
-// HandleClose 实现 Handler 接口。
+// HandleClose implements the Handler interface.
 func (h *EventHandler) HandleClose(conn *Conn, err error) {
 	h.mu.RLock()
 	fn := h.onCloseHandler
@@ -164,7 +166,7 @@ func (h *EventHandler) HandleClose(conn *Conn, err error) {
 	}
 }
 
-// HandleError 实现 Handler 接口。
+// HandleError implements the Handler interface.
 func (h *EventHandler) HandleError(conn *Conn, err error) {
 	h.mu.RLock()
 	fn := h.onErrorHandler

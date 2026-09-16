@@ -7,56 +7,59 @@ import (
 	"github.com/chihqiang/infra-go/mapping"
 )
 
-// --- 默认常量 ---
+// --- Default constants ---
 
 const (
-	// defaultQueuePriority 默认队列优先级。
+	// defaultQueuePriority is the default queue priority.
 	defaultQueuePriority = 1
 )
 
-// Config 任务队列配置。
+// Config is the task queue configuration.
 type Config struct {
-	// RedisAddr Redis 地址，默认 "127.0.0.1:6379"。
+	// RedisAddr is the Redis address, default "127.0.0.1:6379".
 	RedisAddr string `json:",default=127.0.0.1:6379"`
-	// RedisPassword Redis 密码，默认空。
+	// RedisPassword is the Redis password, empty by default.
 	RedisPassword string `json:",optional"`
-	// RedisDB Redis 数据库编号，默认 0。
+	// RedisDB is the Redis database number, 0 by default.
 	RedisDB int `json:",optional"`
 
-	// Concurrency 消费者并发数，默认 10。
+	// Concurrency is the number of concurrent consumers, 10 by default.
 	Concurrency int `json:",default=10"`
-	// Queues 队列名与优先级映射，默认 {"default": 1}。
+	// Queues maps queue names to priorities, {"default": 1} by default.
 	Queues map[string]int `json:",optional"`
-	// ShutdownTimeout 优雅关闭超时，默认 8 秒。
+	// ShutdownTimeout is the graceful shutdown timeout, 8 seconds by default.
 	ShutdownTimeout time.Duration `json:",default=8s"`
 
-	// DefaultMaxRetry 默认最大重试次数，默认 25。
-	// 无法用本字段表达"不重试"：0 会被视为未设置并填充为 25。
-	// 需要不重试请用 WithDefaultMaxRetry(0)。
+	// DefaultMaxRetry is the default maximum number of retries, 25 by default.
+	// This field cannot express "no retry": 0 is treated as unset and filled with 25.
+	// Use WithDefaultMaxRetry(0) when no retry is wanted.
 	DefaultMaxRetry int `json:",default=25"`
-	// DefaultTimeout 默认任务超时，默认 30 分钟。
+	// DefaultTimeout is the default task timeout, 30 minutes by default.
 	//
-	// 本字段没有对应的 Option，因为 asynq 本身就无法表达"不限制超时"：
-	// 其入队逻辑把 Timeout(0) 视为未设置并回落 30 分钟默认值
-	// （见 asynq.EnqueueContext 对 noTimeout 的处理）。
-	// 因此本字段传 0 与不传的最终结果完全相同，无需区分。
+	// This field has no matching Option, because asynq itself cannot express
+	// "no timeout": its enqueue logic treats Timeout(0) as unset and falls back to
+	// the 30 minute default (see how asynq.EnqueueContext handles noTimeout).
+	// Passing 0 or leaving the field unset therefore yields exactly the same
+	// result, so the two cases need no distinction.
 	DefaultTimeout time.Duration `json:",default=30m"`
-	// DefaultQueue 默认队列名，默认 "default"。
+	// DefaultQueue is the default queue name, "default" by default.
 	DefaultQueue string `json:",default=default"`
 }
 
-// Option 覆盖配置项，用于表达 Config 结构体无法表达的显式零值。
+// Option overrides a configuration entry; it is used to express explicit zero
+// values that the Config struct cannot represent.
 //
-// 为什么需要：fillDefault 遵循「字段 == 0 视为未设置」的规则，
-// 而 asynq.MaxRetry(0) 是一个有别于默认值 25 的有效取值——任务失败后不重试。
-// 通过 Option 传入的 0 会在默认值填充之后应用，因此能够生效：
+// Why it is needed: fillDefault follows the rule "field == 0 means unset", while
+// asynq.MaxRetry(0) is a valid value distinct from the default 25 -- no retry
+// after a task fails. A 0 passed through an Option is applied after the defaults
+// are filled in, so it does take effect:
 //
 //	taskq.NewProducer(cfg, taskq.WithDefaultMaxRetry(0))
 type Option func(*Config)
 
-// WithDefaultMaxRetry 显式设置默认最大重试次数。
-// 与 Config.DefaultMaxRetry 的区别：传 0 不会被填充为默认值 25，
-// 而是表示 asynq.MaxRetry(0)，即任务失败后不重试。
+// WithDefaultMaxRetry explicitly sets the default maximum number of retries.
+// The difference from Config.DefaultMaxRetry: passing 0 is not filled with the
+// default 25 but means asynq.MaxRetry(0), that is, no retry after a task fails.
 func WithDefaultMaxRetry(n int) Option {
 	return func(c *Config) { c.DefaultMaxRetry = n }
 }
@@ -79,8 +82,9 @@ func fillDefault(cfg Config, opts ...Option) Config {
 		c.Concurrency = cfg.Concurrency
 	}
 	if len(cfg.Queues) > 0 {
-		// 必须拷贝：asynq 会直接持有该 map 并并发读取，
-		// 与调用方共享同一实例会在调用方后续修改时构成数据竞争。
+		// A copy is mandatory: asynq holds this map directly and reads it
+		// concurrently, so sharing the same instance with the caller would become a
+		// data race once the caller mutates it.
 		c.Queues = make(map[string]int, len(cfg.Queues)+1)
 		for name, priority := range cfg.Queues {
 			c.Queues[name] = priority
@@ -99,23 +103,28 @@ func fillDefault(cfg Config, opts ...Option) Config {
 		c.DefaultQueue = cfg.DefaultQueue
 	}
 
-	// Option 最后应用：可覆盖上面「零值即未设置」的填充结果，
-	// 从而表达 Config 结构体无法表达的显式 0（如不重试、不限制超时）。
+	// Options are applied last: they may override the "zero means unset" results
+	// filled in above, and thus express an explicit 0 (such as no retry or no
+	// timeout limit) that the Config struct cannot represent.
 	for _, opt := range opts {
 		opt(&c)
 	}
 
-	// 保证生产者投递的队列（DefaultQueue）确实被消费者订阅。
+	// Make sure the queue the producer enqueues to (DefaultQueue) is actually
+	// subscribed by the consumer.
 	//
-	// 若只配了 Queues 而 DefaultQueue 不在其中（默认 "default"），
-	// 生产者会把任务投到一个无人消费的队列：Enqueue 返回成功、任务永久滞留，
-	// 且没有任何错误提示。这里自动补上该队列，避免静默丢任务。
+	// If only Queues is set and DefaultQueue is not part of it (the default is
+	// "default"), the producer would enqueue tasks to a queue nobody consumes:
+	// Enqueue returns success, the tasks stay there forever, and no error is
+	// reported. Add that queue automatically here to avoid silently losing tasks.
 	c = ensureDefaultQueueConsumed(c)
 	return c
 }
 
-// ensureDefaultQueueConsumed 保证 DefaultQueue 出现在消费者订阅的队列列表中。
-// Queues 为空时本函数不做处理（toAsynqConfig 会自行兵底为 {DefaultQueue: 1}）。
+// ensureDefaultQueueConsumed makes sure DefaultQueue appears in the list of
+// queues the consumer subscribes to.
+// When Queues is empty this function does nothing (toAsynqConfig falls back to
+// {DefaultQueue: 1} on its own).
 func ensureDefaultQueueConsumed(c Config) Config {
 	if len(c.Queues) == 0 {
 		return c
@@ -124,7 +133,7 @@ func ensureDefaultQueueConsumed(c Config) Config {
 		return c
 	}
 
-	// 拷贝后再改，避免与调用方共享底层数据
+	// Copy before mutating, to avoid sharing the underlying data with the caller
 	queues := make(map[string]int, len(c.Queues)+1)
 	for name, priority := range c.Queues {
 		queues[name] = priority

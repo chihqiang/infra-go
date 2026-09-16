@@ -7,48 +7,55 @@ import (
 	"time"
 )
 
-// 错误定义。
+// Error definitions.
 var (
-	// ErrMaxRetries 超过最大重试次数。
+	// ErrMaxRetries means the maximum number of retries was exceeded.
 	ErrMaxRetries = errors.New("retry: max retries exceeded")
-	// ErrNoRetry 不再重试（用于 RetryIf 返回 false 时包装最终错误）。
+	// ErrNoRetry means no further retry is made (used to wrap the final error when RetryIf
+	// returns false).
 	ErrNoRetry = errors.New("retry: no retry")
 )
 
-// Do 执行函数，失败时根据配置自动重试。
-// 使用默认配置。
+// Do runs the function and retries automatically on failure, using the default configuration.
 func Do(ctx context.Context, fn func(ctx context.Context) error) error {
 	c := defaultConfig()
 	return doRetry(ctx, fn, c)
 }
 
-// DoWithConfig 执行函数，失败时根据配置自动重试。
+// DoWithConfig runs the function and retries automatically on failure according to the given
+// options.
 func DoWithConfig(ctx context.Context, fn func(ctx context.Context) error, opts ...Option) error {
 	c := defaultConfig(opts...)
 	return doRetry(ctx, fn, c)
 }
 
-// DoWithRetryConfig 执行函数，失败时根据指定配置自动重试。
+// DoWithRetryConfig runs the function and retries automatically on failure according to the
+// given configuration.
 //
-// 字段式配置无法区分"未设置"与"显式设为 0"，因此 MaxRetries/Delay/MaxDelay
-// 为 0 时一律视为未设置并填充默认值（见 normalize）。
-// 需要显式表示"不重试"或"零延迟"时，在 opts 中传入对应 Option
-// （Option 在默认值填充之后应用，因此能生效）：
+// A field-based configuration cannot tell "unset" from "explicitly set to 0", so a
+// MaxRetries/Delay/MaxDelay of 0 is always treated as unset and filled with the default (see
+// normalize).
+// To express "no retry" or "zero delay" explicitly, pass the matching Option in opts
+// (Options are applied after the defaults have been filled in, so they do take effect):
 //
 //	retry.DoWithRetryConfig(ctx, fn, c, retry.WithMaxRetries(0), retry.WithDelay(0))
 func DoWithRetryConfig(ctx context.Context, fn func(ctx context.Context) error, c Config, opts ...Option) error {
 	return doRetry(ctx, fn, normalize(c, opts...))
 }
 
-// normalize 为未显式设置的字段填充默认值，最后应用 opts 覆盖。
-// DoWithRetryConfig 与 Attempts 共用本函数，保证"实际执行次数"与声明一致。
+// normalize fills in the default values for the fields that were not set explicitly and then
+// applies the opts on top.
+// DoWithRetryConfig and Attempts share this function, which keeps "the number of executions"
+// consistent with what was declared.
 //
-// 局限：无法区分"未设置"与"显式设为 0"，0 值一律按未设置处理。
-// 需要表达显式 0 时通过 opts 传入——它们在默认值填充之后应用：
+// Limitation: "unset" cannot be told apart from "explicitly set to 0", so a 0 value is always
+// treated as unset.
+// To express an explicit 0, pass it through opts - they are applied after the defaults have
+// been filled in:
 //
-//	retry.WithMaxRetries(0) // 不重试，仅执行一次
-//	retry.WithDelay(0)      // 立即重试，不等待
-//	retry.WithMaxDelay(0)   // 不限制延迟上限（见 capDelay）
+//	retry.WithMaxRetries(0) // no retry, execute only once
+//	retry.WithDelay(0)      // retry immediately, without waiting
+//	retry.WithMaxDelay(0)   // no delay ceiling (see capDelay)
 func normalize(c Config, opts ...Option) Config {
 	if c.RetryIf == nil {
 		c.RetryIf = func(error) bool { return true }
@@ -62,52 +69,55 @@ func normalize(c Config, opts ...Option) Config {
 	if c.MaxDelay == 0 {
 		c.MaxDelay = defaultMaxDelay
 	}
-	// Option 在默认值填充之后应用：调用方可借此表达显式 0。
+	// Options are applied after the defaults have been filled in: callers use this to express
+	// an explicit 0.
 	for _, opt := range opts {
 		opt(&c)
 	}
 	return c
 }
 
-// doRetry 重试核心逻辑。
+// doRetry is the core retry logic.
 func doRetry(ctx context.Context, fn func(ctx context.Context) error, c Config) error {
 	var lastErr error
 	var delay time.Duration
 
 	for attempt := 0; attempt <= c.MaxRetries; attempt++ {
-		// 检查 context 是否已取消
+		// Check whether the context is already cancelled
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("retry: context cancelled: %w", err)
 		}
 
-		// 执行函数
+		// Run the function
 		err := fn(ctx)
 		if err == nil {
 			return nil
 		}
 		lastErr = err
 
-		// 最后一次不再重试
+		// Do not retry after the last attempt
 		if attempt >= c.MaxRetries {
 			break
 		}
 
-		// 检查是否需要重试
+		// Check whether a retry is needed
 		if !c.RetryIf(err) {
-			// 用 %w 同时包装哨兵与原始错误，使 errors.Is/As 能识别原始错误类型
-			// （旧实现用 %s 拼接，错误链在此断掉，上层无法区分超时/业务错误）。
+			// %w wraps both the sentinel and the original error so that errors.Is/As can
+			// recognise the original error type (the old implementation formatted with %s,
+			// which broke the error chain here and left callers unable to tell a timeout
+			// from a business error).
 			return fmt.Errorf("%w: %w", ErrNoRetry, err)
 		}
 
-		// 计算延迟
+		// Compute the delay
 		delay = computeDelay(c, attempt+1, delay)
 
-		// 回调
+		// Invoke the callback
 		if c.OnRetry != nil {
 			c.OnRetry(attempt+1, err)
 		}
 
-		// 等待延迟（复用单个 Timer，避免每次创建）
+		// Wait for the delay (a single Timer is reused, avoiding a new one per attempt)
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
@@ -117,29 +127,32 @@ func doRetry(ctx context.Context, fn func(ctx context.Context) error, c Config) 
 		}
 	}
 
-	// 保留原始错误链（多重 %w），既有信息不变且 errors.Is/As 可用。
+	// Keep the original error chain (multiple %w), so the existing information is unchanged
+	// and errors.Is/As keep working.
 	return fmt.Errorf("%w: last error: %w", ErrMaxRetries, lastErr)
 }
 
-// --- 辅助函数 ---
+// --- Helper functions ---
 
-// IsMaxRetries 判断错误是否为超过最大重试次数。
+// IsMaxRetries reports whether the error means the maximum number of retries was exceeded.
 func IsMaxRetries(err error) bool {
 	return errors.Is(err, ErrMaxRetries)
 }
 
-// IsNoRetry 判断错误是否为不再重试。
+// IsNoRetry reports whether the error means no further retry is made.
 func IsNoRetry(err error) bool {
 	return errors.Is(err, ErrNoRetry)
 }
 
-// Attempts 返回重试配置生效后的总执行次数（首次 + 重试）。
+// Attempts returns the total number of executions (first attempt plus retries) once the retry
+// configuration takes effect.
 //
-// 与 DoWithRetryConfig 使用同一套默认值与 Option 规则（normalize），
-// 因此返回值就是 fn 的最大实际执行次数。
-// 旧实现直接返回 c.MaxRetries+1，对零值配置会声称 1 次而实际执行 4 次。
+// It uses the same defaults and Option rules as DoWithRetryConfig (normalize), so the return
+// value is the maximum number of times fn is actually executed.
+// The old implementation returned c.MaxRetries+1 directly, claiming 1 execution for a
+// zero-valued configuration while 4 actually happened.
 //
-// 若调用 DoWithRetryConfig 时传了 opts，这里应传同一组 opts 以保持一致：
+// When opts were passed to DoWithRetryConfig, pass the same set here to stay consistent:
 //
 //	retry.Attempts(c, retry.WithMaxRetries(0)) // 1
 func Attempts(c Config, opts ...Option) int {

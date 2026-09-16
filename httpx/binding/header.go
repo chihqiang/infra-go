@@ -6,15 +6,15 @@ import (
 	"reflect"
 )
 
-// HeaderBinding 基于 HTTP header 的绑定器。
+// HeaderBinding is a binder based on HTTP headers.
 type HeaderBinding struct{}
 
-// Name 返回绑定器名称。
+// Name returns the binder name.
 func (HeaderBinding) Name() string {
 	return "header"
 }
 
-// Bind 将 HTTP header 绑定到 obj，并校验。
+// Bind binds the HTTP headers into obj and validates it.
 func (HeaderBinding) Bind(req *http.Request, obj any) error {
 	if err := mapHeader(obj, req.Header); err != nil {
 		return err
@@ -22,12 +22,12 @@ func (HeaderBinding) Bind(req *http.Request, obj any) error {
 	return validate(obj)
 }
 
-// headerSource HTTP header 数据源。
+// headerSource is an HTTP header data source.
 type headerSource map[string][]string
 
 var _ setter = headerSource(nil)
 
-// TrySet 从 header 数据源设置值，key 转为 Canonical MIME 格式。
+// TrySet sets the value from the header data source, converting the key to canonical MIME form.
 func (hs headerSource) TrySet(value reflect.Value, fm *fieldMeta, key string, opt setOptions) (bool, error) {
 	return setByForm(value, fm, hs, textproto.CanonicalMIMEHeaderKey(key), opt)
 }

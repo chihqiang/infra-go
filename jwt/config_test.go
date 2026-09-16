@@ -6,14 +6,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// --- 令牌类型常量测试 ---
+// --- Token type constant tests ---
 
 func TestTokenTypeConstants(t *testing.T) {
 	assert.Equal(t, "access", TokenTypeAccess)
 	assert.Equal(t, "refresh", TokenTypeRefresh)
 }
 
-// --- 算法常量测试 ---
+// --- Algorithm constant tests ---
 
 func TestAlgorithmConstants(t *testing.T) {
 	assert.Equal(t, Algorithm("HS256"), AlgorithmHS256)

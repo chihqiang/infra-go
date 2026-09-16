@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// --- 默认配置测试 ---
+// --- Default configuration tests ---
 
 func TestDefaultConfig(t *testing.T) {
 	c := defaultConfig()

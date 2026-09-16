@@ -12,8 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newMiniClient 创建基于 miniredis 的测试客户端。
-// keyPrefix 为空时返回无前缀客户端，否则返回带前缀客户端。
+// newMiniClient creates a test client backed by miniredis.
+// An empty keyPrefix returns a client without a prefix, otherwise a client carrying the
+// given prefix is returned.
 func newMiniClient(t *testing.T, keyPrefix string) (*Client, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
@@ -39,11 +40,11 @@ func TestMustNew(t *testing.T) {
 }
 
 func TestWrapKey(t *testing.T) {
-	// 无前缀
+	// No prefix
 	c := &Client{keyPrefix: ""}
 	assert.Equal(t, "foo", c.wrapKey("foo"))
 
-	// 有前缀
+	// With prefix
 	c = &Client{keyPrefix: "myapp"}
 	assert.Equal(t, "myapp:foo", c.wrapKey("foo"))
 }
@@ -53,19 +54,20 @@ func TestWrapKeys(t *testing.T) {
 	result := c.wrapKeys("foo", "bar", "baz")
 	assert.Equal(t, []string{"myapp:foo", "myapp:bar", "myapp:baz"}, result)
 
-	// 无前缀
+	// No prefix
 	c = &Client{keyPrefix: ""}
 	result = c.wrapKeys("foo", "bar")
 	assert.Equal(t, []string{"foo", "bar"}, result)
 }
 
-// --- 基础字符串操作 ---
+// --- Basic string operations ---
 
 func TestGetSet(t *testing.T) {
 	ctx := context.Background()
 	c, _ := newMiniClient(t, "")
 
-	// 不存在返回 ErrNil（wrapErr 已将 redis.Nil 转成自定义 ErrNil）
+	// A missing key returns ErrNil (wrapErr already converts redis.Nil into the custom
+	// ErrNil)
 	_, err := c.Get(ctx, "k")
 	assert.ErrorIs(t, err, ErrNil)
 
@@ -74,7 +76,7 @@ func TestGetSet(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "v", val)
 
-	// 覆盖
+	// Overwrite
 	require.NoError(t, c.Set(ctx, "k", "v2", 0))
 	val, _ = c.Get(ctx, "k")
 	assert.Equal(t, "v2", val)
@@ -98,7 +100,7 @@ func TestSetNX(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, ok)
 
-	// 再次设置失败
+	// A second SetNX fails
 	ok, err = c.SetNX(ctx, "k", "v2", 0)
 	require.NoError(t, err)
 	assert.False(t, ok)
@@ -118,7 +120,7 @@ func TestDel(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), n)
 
-	// 空 keys 不报错
+	// Empty keys must not error
 	n, err = c.Del(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), n)
@@ -133,7 +135,7 @@ func TestExists(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), n)
 
-	// 空 keys
+	// Empty keys
 	n, err = c.Exists(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), n)
@@ -152,7 +154,7 @@ func TestExpireTTL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, ttl, 5*time.Second)
 
-	// 不存在键
+	// A missing key
 	ok, err = c.Expire(ctx, "missing", 10*time.Second)
 	require.NoError(t, err)
 	assert.False(t, ok)
@@ -171,7 +173,7 @@ func TestIncr(t *testing.T) {
 	assert.Equal(t, int64(11), n)
 }
 
-// --- Hash 操作 ---
+// --- Hash operations ---
 
 func TestHashOps(t *testing.T) {
 	ctx := context.Background()
@@ -186,7 +188,7 @@ func TestHashOps(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "v1", val)
 
-	// 不存在的 field
+	// A missing field
 	_, err = c.HGet(ctx, "h", "missing")
 	assert.ErrorIs(t, err, ErrNil)
 
@@ -203,7 +205,7 @@ func TestHashOps(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNil)
 }
 
-// --- List 操作 ---
+// --- List operations ---
 
 func TestListOps(t *testing.T) {
 	ctx := context.Background()
@@ -227,7 +229,7 @@ func TestListOps(t *testing.T) {
 	assert.Equal(t, "c", v)
 }
 
-// --- Set 操作 ---
+// --- Set operations ---
 
 func TestSetOps(t *testing.T) {
 	ctx := context.Background()
@@ -237,7 +239,7 @@ func TestSetOps(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), n)
 
-	// 重复添加
+	// Adding a duplicate
 	n, _ = c.SAdd(ctx, "s", "m1")
 	assert.Equal(t, int64(0), n)
 
@@ -257,11 +259,12 @@ func TestSetOps(t *testing.T) {
 	assert.Equal(t, int64(1), n)
 }
 
-// --- Scan 操作 ---
+// --- Scan operations ---
 
-// scanAll 循环迭代直到游标归零，模拟真实 SCAN 用法。
-// 注意：miniredis 对带 MATCH 的 SCAN 每次只返回 1 个 key 且游标恒为 0（已知限制），
-// 因此本辅助仅用于空 match（全量）场景。
+// scanAll iterates until the cursor returns to zero, mimicking real SCAN usage.
+// Note: for SCAN with MATCH, miniredis returns only 1 key per call and always keeps the
+// cursor at 0 (a known limitation), so this helper is only used with an empty match
+// (full scan).
 func scanAll(t *testing.T, c *Client, ctx context.Context) []string {
 	t.Helper()
 	var all []string
@@ -289,8 +292,9 @@ func TestScan_NoPrefix(t *testing.T) {
 }
 
 func TestScan_NoPrefix_Match(t *testing.T) {
-	// miniredis 对 MATCH 的 SCAN 每次只返回 1 个匹配 key（游标恒 0），
-	// 无法验证"返回全部匹配"；此处仅验证 match 过滤确实生效且无前缀时键原样返回。
+	// For SCAN with MATCH, miniredis returns only 1 matching key per call (the cursor
+	// stays 0), so "returns all matches" cannot be verified; this only verifies that the
+	// match filter really works and that keys come back unchanged when there is no prefix.
 	ctx := context.Background()
 	c, _ := newMiniClient(t, "")
 	for i := 0; i < 10; i++ {
@@ -309,14 +313,15 @@ func TestScan_WithPrefix(t *testing.T) {
 	ctx := context.Background()
 	c, mr := newMiniClient(t, "app")
 
-	// 直接写入原始 redis 以绕过前缀
+	// Write to raw redis directly to bypass the prefix
 	raw := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	require.NoError(t, raw.Set(ctx, "app:user:1", "u1", 0).Err())
 	require.NoError(t, raw.Set(ctx, "app:order:1", "o1", 0).Err())
 	require.NoError(t, raw.Set(ctx, "other:key", "x", 0).Err())
 
-	// 无前缀键的全量扫描应只命中 app:*（空 match → 自动 app:*）
-	// 由于 miniredis MATCH 限制，分次收集并断言都不含 other:key 且前缀被剥离
+	// A full scan without a prefix key should only hit app:* (empty match -> app:*
+	// automatically). Because of the miniredis MATCH limitation, keys are collected
+	// across calls and asserted to exclude other:key with the prefix stripped.
 	keys := scanAll(t, c, ctx)
 	require.NotEmpty(t, keys)
 	for _, k := range keys {
@@ -334,7 +339,8 @@ func TestScan_WithPrefix_Match(t *testing.T) {
 	require.NoError(t, raw.Set(ctx, "app:user:2", "u2", 0).Err())
 	require.NoError(t, raw.Set(ctx, "app:order:1", "o1", 0).Err())
 
-	// match=user:* → 自动 app:user:*，返回的键应剥离 app: 前缀
+	// match=user:* -> app:user:* automatically, and the returned keys have the app: prefix
+	// stripped
 	keys, _, err := c.Scan(ctx, 0, "user:*", 100)
 	require.NoError(t, err)
 	require.NotEmpty(t, keys)
@@ -353,14 +359,14 @@ func TestPing(t *testing.T) {
 }
 
 func TestWrapErr(t *testing.T) {
-	// nil 错误
+	// nil error
 	assert.Nil(t, wrapErr(nil))
 
-	// redis.Nil → ErrNil
+	// redis.Nil -> ErrNil
 	err := wrapErr(redis.Nil)
 	assert.ErrorIs(t, err, ErrNil)
 
-	// 其他错误原样返回
+	// Other errors are returned as they are
 	other := errors.New("boom")
 	assert.Same(t, other, wrapErr(other))
 }
@@ -371,7 +377,7 @@ func TestErrorConstants(t *testing.T) {
 	assert.Equal(t, "redisx: key not found", ErrNil.Error())
 }
 
-// --- 带前缀的端到端 ---
+// --- End to end with a key prefix ---
 
 func TestKeyPrefix_EndToEnd(t *testing.T) {
 	ctx := context.Background()
@@ -379,18 +385,18 @@ func TestKeyPrefix_EndToEnd(t *testing.T) {
 
 	require.NoError(t, c.Set(ctx, "greeting", "hello", 0))
 
-	// 前缀键实际写入
+	// The prefixed key is actually written
 	raw := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	val, err := raw.Get(ctx, "app:greeting").Result()
 	require.NoError(t, err)
 	assert.Equal(t, "hello", val)
 
-	// 通过封装读回
+	// Read it back through the wrapper
 	got, err := c.Get(ctx, "greeting")
 	require.NoError(t, err)
 	assert.Equal(t, "hello", got)
 
-	// 不带前缀的键不可见
+	// The key without the prefix is invisible
 	_, err = c.Get(ctx, "app:greeting")
 	assert.ErrorIs(t, err, ErrNil)
 }

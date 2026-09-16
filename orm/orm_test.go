@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// User 测试用模型。
+// User is the model used by the tests.
 type User struct {
 	gorm.Model
 	Name  string `gorm:"size:128;not null"`
@@ -21,7 +21,7 @@ type User struct {
 func TestFillDefault_AllDefaults(t *testing.T) {
 	c := fillDefault(Config{})
 
-	assert.Equal(t, Driver(""), c.Driver) // Driver 必填，无默认值
+	assert.Equal(t, Driver(""), c.Driver) // Driver is required and has no default
 	assert.Equal(t, "127.0.0.1", c.Host)
 	assert.Equal(t, "root", c.Username)
 	assert.Equal(t, "", c.Password)
@@ -104,7 +104,8 @@ func TestBuildPostgresDSN(t *testing.T) {
 }
 
 func TestBuildSQLiteDSN(t *testing.T) {
-	// 空数据库路径使用内存数据库，且每次调用生成唯一库名（实例间不共享）
+	// An empty database path uses an in-memory database, and every call generates a unique
+	// database name (instances do not share it)
 	dsn := buildSQLiteDSN(Config{})
 	assert.Contains(t, dsn, "mode=memory")
 	assert.Contains(t, dsn, "cache=shared", "shared cache is required for pool connections to see the same DB")
@@ -112,17 +113,18 @@ func TestBuildSQLiteDSN(t *testing.T) {
 	dsn2 := buildSQLiteDSN(Config{})
 	assert.NotEqual(t, dsn, dsn2, "each instance must get its own in-memory database")
 
-	// 指定文件路径时原样使用
+	// A file path is used as is
 	dsn = buildSQLiteDSN(Config{Database: "/tmp/test.db"})
 	assert.Equal(t, "/tmp/test.db", dsn)
 }
 
-// TestSQLite_MemoryDBNotSharedBetweenInstances 回归测试：两个默认配置的 SQLite 实例
-// 必须拥有各自独立的内存库。
+// TestSQLite_MemoryDBNotSharedBetweenInstances is a regression test: two SQLite instances
+// created with the default configuration must each own an independent in-memory database.
 //
-// 历史缺陷：空 Database 固定返回 "file::memory:?cache=shared"，
-// 该 DSN 在**整个进程内共享同一个数据库**，导致一个实例建的表/写入的数据
-// 会被另一个实例看到（组件间数据串扰），且进程退出即丢失。
+// Historical defect: an empty Database always returned "file::memory:?cache=shared", and
+// that DSN shares **one single database across the whole process**, so a table created or
+// data written by one instance was visible to the other (data bleeding between components)
+// and everything was lost when the process exited.
 func TestSQLite_MemoryDBNotSharedBetweenInstances(t *testing.T) {
 	open := func() *gorm.DB {
 		db, err := New(Config{Driver: DriverSQLite})
@@ -137,18 +139,18 @@ func TestSQLite_MemoryDBNotSharedBetweenInstances(t *testing.T) {
 	require.NoError(t, db1.Exec("CREATE TABLE only_in_db1 (id INTEGER)").Error)
 	require.NoError(t, db1.Exec("INSERT INTO only_in_db1 (id) VALUES (1)").Error)
 
-	// db1 自己可以读到
+	// db1 can read it back itself
 	var count int64
 	require.NoError(t, db1.Raw("SELECT COUNT(*) FROM only_in_db1").Scan(&count).Error)
 	assert.Equal(t, int64(1), count)
 
-	// db2 不能看到 db1 的表
+	// db2 must not see the table created by db1
 	err := db2.Raw("SELECT COUNT(*) FROM only_in_db1").Scan(&count).Error
 	assert.Error(t, err, "instances must not share an in-memory database")
 }
 
-// TestSQLite_MemoryDBPoolsShareWithinInstance 验证同一实例内的多个连接
-// 看到同一个库（cache=shared 的作用）。
+// TestSQLite_MemoryDBPoolsShareWithinInstance verifies that several connections of the same
+// instance see the same database (which is what cache=shared provides).
 func TestSQLite_MemoryDBPoolsShareWithinInstance(t *testing.T) {
 	db, err := New(Config{Driver: DriverSQLite})
 	require.NoError(t, err)
@@ -158,7 +160,8 @@ func TestSQLite_MemoryDBPoolsShareWithinInstance(t *testing.T) {
 
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
-	// 开多个连接，确认都能看到该表（匿名 :memory: 会各自独立，导致这里失败）
+	// Open several connections and confirm they all see the table (an anonymous :memory:
+	// would keep them separate, making this fail)
 	sqlDB.SetMaxOpenConns(4)
 	for i := 0; i < 8; i++ {
 		var n int
@@ -176,18 +179,18 @@ func TestNewSQLite_MemoryDB(t *testing.T) {
 	require.NotNil(t, db)
 	defer func() { _ = Close(db) }()
 
-	// 自动迁移
+	// Auto-migrate
 	err = db.AutoMigrate(&User{})
 	require.NoError(t, err)
 
-	// 插入数据
+	// Insert data
 	user := User{Name: "alice", Email: "alice@example.com", Age: 30}
 	result := db.Create(&user)
 	require.NoError(t, result.Error)
 	assert.Equal(t, int64(1), result.RowsAffected)
 	assert.NotZero(t, user.ID)
 
-	// 查询数据
+	// Query the data
 	var found User
 	err = db.First(&found, user.ID).Error
 	require.NoError(t, err)
@@ -210,11 +213,11 @@ func TestNewSQLite_FileDB(t *testing.T) {
 	err = db.AutoMigrate(&User{})
 	require.NoError(t, err)
 
-	// 插入并查询
+	// Insert and query
 	user := User{Name: "bob", Email: "bob@example.com", Age: 25}
 	require.NoError(t, db.Create(&user).Error)
 
-	// 关闭后重新打开，验证数据持久化
+	// Reopen after closing to verify that the data is persisted
 	require.NoError(t, Close(db))
 
 	db2, err := New(Config{
@@ -241,7 +244,7 @@ func TestNewSQLite_WithDSN(t *testing.T) {
 }
 
 func TestNewSQLite_EmptyDatabase_UsesMemory(t *testing.T) {
-	// 不指定 Database 时应使用内存数据库
+	// An in-memory database must be used when Database is not set
 	db, err := New(Config{
 		Driver: DriverSQLite,
 	})
@@ -271,7 +274,7 @@ func TestMustNewSQLite_Success(t *testing.T) {
 }
 
 func TestMustNewSQLite_Panic(t *testing.T) {
-	// 无效路径应 panic
+	// An invalid path must panic
 	assert.Panics(t, func() {
 		MustNewSQLite(Config{
 			Database: "/nonexistent_dir/deep/path/test.db",
@@ -294,7 +297,7 @@ func TestMustNew_UnsupportedDriver_Panic(t *testing.T) {
 }
 
 func TestMustNewMySQL_Panic(t *testing.T) {
-	// 连接不存在的 MySQL 应 panic
+	// Connecting to a MySQL instance that does not exist must panic
 	assert.Panics(t, func() {
 		MustNewMySQL(Config{
 			Host:     "127.0.0.1",
@@ -307,7 +310,7 @@ func TestMustNewMySQL_Panic(t *testing.T) {
 }
 
 func TestMustNewPostgres_Panic(t *testing.T) {
-	// 连接不存在的 Postgres 应 panic
+	// Connecting to a Postgres instance that does not exist must panic
 	assert.Panics(t, func() {
 		MustNewPostgres(Config{
 			Host:     "127.0.0.1",
@@ -393,7 +396,8 @@ func TestConnectionPool(t *testing.T) {
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 
-	// 验证连接池设置生效（通过 stats 可访问且不报错）
+	// Verify that the connection pool settings took effect (Stats is reachable and does not
+	// error out)
 	_ = sqlDB.Stats()
 	assert.NotNil(t, sqlDB)
 }
@@ -410,7 +414,7 @@ func TestTablePrefix(t *testing.T) {
 
 	require.NoError(t, db.AutoMigrate(&User{}))
 
-	// 验证表名前缀
+	// Verify the table name prefix
 	tableName := db.NamingStrategy.TableName("User")
 	assert.Equal(t, "t_users", tableName)
 }
@@ -427,13 +431,13 @@ func TestSingularTable(t *testing.T) {
 
 	require.NoError(t, db.AutoMigrate(&User{}))
 
-	// 单数表名模式下，User 模型的表名为 "user" 而非 "users"
+	// With singular table names the table of the User model is "user" instead of "users"
 	tableName := db.NamingStrategy.TableName("User")
 	assert.Equal(t, "user", tableName)
 }
 
 func TestSkipDefaultTransaction(t *testing.T) {
-	// 验证默认开启 SkipDefaultTransaction
+	// Verify that SkipDefaultTransaction is enabled by default
 	db, err := New(Config{
 		Driver:   DriverSQLite,
 		Database: ":memory:",
@@ -441,8 +445,8 @@ func TestSkipDefaultTransaction(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = Close(db) }()
 
-	// SkipDefaultTransaction 是配置项，在 gorm.Config 中设置
-	// 这里只验证连接正常
+	// SkipDefaultTransaction is a configuration item set through gorm.Config;
+	// here we only verify that the connection works
 	assert.NotNil(t, db)
 }
 
@@ -464,7 +468,7 @@ func TestBuildDialector_WithDSN(t *testing.T) {
 }
 
 func TestGormWriter_Printf(t *testing.T) {
-	// 验证 gormWriter 不会 panic
+	// Verify that gormWriter does not panic
 	l := logger.New(logger.Config{Output: []string{"stdout"}})
 
 	w := newGormWriter(l)

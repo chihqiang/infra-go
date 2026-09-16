@@ -14,7 +14,7 @@ import (
 
 var bgCtx = context.Background()
 
-// newTestCache 创建一个内存缓存，测试结束后自动 Close。
+// newTestCache creates an in-memory cache and Closes it automatically after the test.
 func newTestCache(t *testing.T, expire time.Duration, opts ...MemCacheOption) *MemCache {
 	t.Helper()
 	c := NewMemCache(bgCtx, expire, opts...)
@@ -22,7 +22,8 @@ func newTestCache(t *testing.T, expire time.Duration, opts ...MemCacheOption) *M
 	return c
 }
 
-// TestCacheInterface 编译期断言：MemCache 实现 Cache 接口。
+// TestCacheInterface is a compile-time assertion: MemCache implements the Cache
+// interface.
 func TestCacheInterface(t *testing.T) {
 	var _ Cache = NewMemCache(bgCtx, time.Minute)
 }
@@ -35,7 +36,7 @@ func TestSetGet(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "chihqiang", v)
 
-	// 非泛型：一个实例可存多种类型值
+	// Not generic: one instance can hold values of several types
 	assert.NoError(t, c.Set(bgCtx, "count", 42))
 	iv, err := c.Get(bgCtx, "count")
 	assert.NoError(t, err)
@@ -74,7 +75,7 @@ func TestExpire(t *testing.T) {
 	_, err := c.Get(bgCtx, "k")
 	assert.NoError(t, err)
 
-	// 等过期（考虑 5% 抖动，多等一些时间）
+	// Wait for the expiry (allowing for the 5% jitter, wait a bit longer)
 	time.Sleep(120 * time.Millisecond)
 	_, err = c.Get(bgCtx, "k")
 	assert.ErrorIs(t, err, ErrNotFound)
@@ -83,14 +84,15 @@ func TestExpire(t *testing.T) {
 func TestSetExOverride(t *testing.T) {
 	c := newTestCache(t, time.Minute)
 
-	// 短过期写入，随后用默认过期重写，旧定时器不应误删新值
+	// Write with a short expiry, then rewrite with the default expiry; the old timer
+	// must not delete the new value.
 	assert.NoError(t, c.SetEx(bgCtx, "k", "old", 30*time.Millisecond))
 	time.Sleep(5 * time.Millisecond)
 	assert.NoError(t, c.Set(bgCtx, "k", "new"))
 
 	time.Sleep(50 * time.Millisecond)
 	v, err := c.Get(bgCtx, "k")
-	assert.NoError(t, err, "新值不应被旧定时器删除")
+	assert.NoError(t, err, "the new value must not be deleted by the old timer")
 	assert.Equal(t, "new", v)
 }
 
@@ -101,12 +103,12 @@ func TestLruEvict(t *testing.T) {
 	assert.NoError(t, c.Set(bgCtx, "b", "2"))
 	assert.Equal(t, 2, c.Size())
 
-	// 访问 a，使 a 成为最近使用，b 变成最久未使用
+	// Access a so that a becomes most recently used and b least recently used
 	_, _ = c.Get(bgCtx, "a")
-	assert.NoError(t, c.Set(bgCtx, "c", "3")) // 触发淘汰，应淘汰 b
+	assert.NoError(t, c.Set(bgCtx, "c", "3")) // triggers eviction; b should be evicted
 
 	_, err := c.Get(bgCtx, "b")
-	assert.ErrorIs(t, err, ErrNotFound, "b 应被 LRU 淘汰")
+	assert.ErrorIs(t, err, ErrNotFound, "b should have been evicted by LRU")
 	_, err = c.Get(bgCtx, "a")
 	assert.NoError(t, err)
 	_, err = c.Get(bgCtx, "c")
@@ -127,7 +129,7 @@ func TestTake(t *testing.T) {
 	assert.Equal(t, "db-value", v)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&calls))
 
-	// 第二次命中缓存，不再调用 fetch
+	// The second call hits the cache and no longer calls fetch
 	v, err = c.Take(bgCtx, "k", fetch)
 	require.NoError(t, err)
 	assert.Equal(t, "db-value", v)
@@ -140,7 +142,7 @@ func TestTakeConcurrent(t *testing.T) {
 	var calls int32
 	fetch := func() (any, error) {
 		atomic.AddInt32(&calls, 1)
-		time.Sleep(20 * time.Millisecond) // 模拟慢查询
+		time.Sleep(20 * time.Millisecond) // simulate a slow query
 		return "db-value", nil
 	}
 
@@ -151,15 +153,16 @@ func TestTakeConcurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			v, err := c.Take(bgCtx, "k", fetch)
-			// 注意：子 goroutine 内只能用 assert，不能用 require（FailNow
-			// 会在子 goroutine 内 Goexit，跳过 wg.Done() 导致挂死）。
+			// Note: inside a child goroutine only assert can be used, not require
+			// (FailNow calls Goexit in the child goroutine, skipping wg.Done() and
+			// hanging the test).
 			assert.NoError(t, err)
 			assert.Equal(t, "db-value", v)
 		}()
 	}
 	wg.Wait()
 
-	// 并发 Take 只执行一次 fetch（防缓存击穿）
+	// Concurrent Take calls run fetch only once (stampede protection)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&calls))
 	assert.Equal(t, 1, c.Size())
 }
@@ -171,26 +174,26 @@ func TestTakeFetchError(t *testing.T) {
 		return nil, assert.AnError
 	})
 	assert.Error(t, err)
-	assert.Equal(t, 0, c.Size(), "fetch 失败不应写入缓存")
+	assert.Equal(t, 0, c.Size(), "a failed fetch must not write to the cache")
 }
 
 func TestNoExpire(t *testing.T) {
-	c := newTestCache(t, 0) // 默认不过期
+	c := newTestCache(t, 0) // no expiry by default
 
 	assert.NoError(t, c.Set(bgCtx, "k", "v"))
 	time.Sleep(20 * time.Millisecond)
 	_, err := c.Get(bgCtx, "k")
-	assert.NoError(t, err, "expire=0 时永不过期")
+	assert.NoError(t, err, "expire=0 never expires")
 }
 
 func TestClose(t *testing.T) {
 	c := NewMemCache(bgCtx, time.Minute)
 	assert.NoError(t, c.Set(bgCtx, "k", "v"))
 	c.Close()
-	c.Close() // 幂等，不 panic
+	c.Close() // idempotent, does not panic
 }
 
-// --- 补充用例：选项、边界行为、覆盖缺口、bug 回归 ---
+// --- Additional cases: options, edge behaviour, coverage gaps, bug regressions ---
 
 func TestWithName(t *testing.T) {
 	c := NewMemCache(bgCtx, time.Minute, WithName("users"))
@@ -207,7 +210,7 @@ func TestNoLimitKeepsAll(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		assert.NoError(t, c.Set(bgCtx, fmt.Sprintf("k%d", i), i))
 	}
-	assert.Equal(t, 1000, c.Size(), "无容量限制时不应淘汰任何 key")
+	assert.Equal(t, 1000, c.Size(), "no key should be evicted when capacity is unlimited")
 }
 
 func TestOverwrite(t *testing.T) {
@@ -218,7 +221,7 @@ func TestOverwrite(t *testing.T) {
 	v, err := c.Get(bgCtx, "k")
 	assert.NoError(t, err)
 	assert.Equal(t, "new", v)
-	assert.Equal(t, 1, c.Size(), "覆盖写不应增加元素数量")
+	assert.Equal(t, 1, c.Size(), "an overwrite must not increase the element count")
 }
 
 func TestDeleteMissingKey(t *testing.T) {
@@ -231,7 +234,7 @@ func TestDeleteOnLimitedCache(t *testing.T) {
 
 	assert.NoError(t, c.Set(bgCtx, "a", "1"))
 	assert.NoError(t, c.Set(bgCtx, "b", "2"))
-	assert.NoError(t, c.Delete(bgCtx, "a")) // 触发 keyLru.remove
+	assert.NoError(t, c.Delete(bgCtx, "a")) // triggers keyLru.remove
 
 	_, err := c.Get(bgCtx, "a")
 	assert.ErrorIs(t, err, ErrNotFound)
@@ -239,7 +242,7 @@ func TestDeleteOnLimitedCache(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, c.Size())
 
-	// 删除后 a 的 LRU 记录已清理，再次 Set 应正常
+	// After the deletion the LRU record of a is gone, so setting it again works
 	assert.NoError(t, c.Set(bgCtx, "a", "new"))
 	assert.Equal(t, 2, c.Size())
 }
@@ -250,33 +253,36 @@ func TestExpireOnLimitedCache(t *testing.T) {
 	assert.NoError(t, c.Set(bgCtx, "a", "1"))
 	assert.NoError(t, c.Set(bgCtx, "b", "2"))
 	time.Sleep(80 * time.Millisecond)
-	assert.Equal(t, 0, c.Size(), "过期后容量受限缓存应清空（expireKey 走 keyLru.remove）")
+	assert.Equal(t, 0, c.Size(),
+		"a capacity-limited cache must be empty after expiry (keyLru.remove path)")
 }
 
-// TestLruEvictThenReSet 回归测试：LRU 淘汰后旧定时器仍挂起，
-// 重新写入同一 key 时，旧定时器不得误删新值（版本号必须单调递增）。
+// TestLruEvictThenReSet is a regression test: the old timer is still pending after an
+// LRU eviction, and when the same key is written again the old timer must not delete
+// the new value by mistake (the version number must increase monotonically).
 func TestLruEvictThenReSet(t *testing.T) {
 	c := newTestCache(t, time.Minute, WithLimit(2))
 
-	// a 被短过期定时器跟踪
+	// a is tracked by a short-expiry timer
 	assert.NoError(t, c.SetEx(bgCtx, "a", "old", 100*time.Millisecond))
 	assert.NoError(t, c.Set(bgCtx, "b", "x"))
-	assert.NoError(t, c.Set(bgCtx, "c", "y")) // LRU 淘汰 a（a 最久未使用）
+	assert.NoError(t, c.Set(bgCtx, "c", "y")) // LRU evicts a (a is least recently used)
 
 	_, err := c.Get(bgCtx, "a")
-	assert.ErrorIs(t, err, ErrNotFound, "a 应已被 LRU 淘汰")
+	assert.ErrorIs(t, err, ErrNotFound, "a should already have been evicted by LRU")
 
-	// 在旧定时器触发前重新写入 a
+	// Write a again before the old timer fires
 	assert.NoError(t, c.SetEx(bgCtx, "a", "new", time.Minute))
 
-	time.Sleep(150 * time.Millisecond) // 越过旧定时器触发点
+	time.Sleep(150 * time.Millisecond) // past the old timer's firing point
 	v, err := c.Get(bgCtx, "a")
-	assert.NoError(t, err, "旧定时器不应误删重新写入的值")
+	assert.NoError(t, err, "the old timer must not delete the rewritten value")
 	assert.Equal(t, "new", v)
 }
 
 func TestSetExFallback(t *testing.T) {
-	// 默认 1 分钟，显式传 0/负数应回退到默认，不会立即过期
+	// Default is 1 minute; passing 0 or a negative value falls back to the default
+	// instead of expiring immediately
 	c := newTestCache(t, time.Minute)
 	assert.NoError(t, c.SetEx(bgCtx, "a", "v1", 0))
 	assert.NoError(t, c.SetEx(bgCtx, "b", "v2", -time.Second))
@@ -301,11 +307,11 @@ func TestTakeAfterExpire(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "v", v)
 
-	time.Sleep(80 * time.Millisecond) // 过期
+	time.Sleep(80 * time.Millisecond) // expired
 	v, err = c.Take(bgCtx, "k", fetch)
 	require.NoError(t, err)
 	assert.Equal(t, "v", v)
-	assert.Equal(t, int32(2), atomic.LoadInt32(&calls), "过期后应重新拉取")
+	assert.Equal(t, int32(2), atomic.LoadInt32(&calls), "must fetch again after expiry")
 }
 
 func TestTakeDistinctKeys(t *testing.T) {
@@ -326,7 +332,7 @@ func TestTakeDistinctKeys(t *testing.T) {
 	}
 	wg.Wait()
 
-	assert.Equal(t, int32(1), atomic.LoadInt32(&callsA), "不同 key 的 SingleFlight 应相互隔离")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&callsA), "SingleFlight must be isolated per key")
 	assert.Equal(t, int32(1), atomic.LoadInt32(&callsB))
 }
 
@@ -353,16 +359,16 @@ func TestConcurrentMixedOps(t *testing.T) {
 	}
 	wg.Wait()
 
-	// 主要目的是配合 -race 检测数据竞争；不 panic 即通过
+	// The main purpose is to exercise -race for data races; not panicking is enough
 	assert.True(t, c.Size() >= 0)
 }
 
 func TestNewUnstableClamp(t *testing.T) {
 	u := newUnstable(-0.5)
-	assert.Equal(t, 0.0, u.deviation, "负偏差应被钳制为 0")
+	assert.Equal(t, 0.0, u.deviation, "a negative deviation must be clamped to 0")
 
 	u = newUnstable(2.0)
-	assert.Equal(t, 1.0, u.deviation, "超上限偏差应被钳制为 1")
+	assert.Equal(t, 1.0, u.deviation, "a deviation above the upper bound must be clamped to 1")
 }
 
 func TestCacheStatLoop(t *testing.T) {
@@ -377,16 +383,16 @@ func TestCacheStatLoop(t *testing.T) {
 	go st.statLoop()
 	defer close(stop)
 
-	// 第一个周期无命中：走 total==0 continue 分支
+	// First period has no hits: the total == 0 continue branch is taken
 	time.Sleep(25 * time.Millisecond)
 
-	// 制造命中与未命中：走统计输出分支
+	// Produce hits and misses: the statistics output branch is taken
 	st.IncrementHit()
 	st.IncrementMiss()
 	st.IncrementHit()
 	time.Sleep(25 * time.Millisecond)
 
-	// 统计被 swap 清零后无新计数，最终归零
+	// After the counters were swapped to zero and no new counts arrive, they end at zero
 	time.Sleep(25 * time.Millisecond)
 	assert.Zero(t, atomic.LoadUint64(&st.hit))
 	assert.Zero(t, atomic.LoadUint64(&st.miss))
@@ -395,13 +401,13 @@ func TestCacheStatLoop(t *testing.T) {
 func TestIncrement(t *testing.T) {
 	c := newTestCache(t, time.Minute)
 
-	// key 不存在：初始化为 delta
+	// key does not exist: initialized to delta
 	assert.NoError(t, c.Increment(bgCtx, "count", 5))
 	v, err := c.Get(bgCtx, "count")
 	assert.NoError(t, err)
 	assert.Equal(t, int64(5), v)
 
-	// 已存在：累加
+	// already exists: accumulated
 	assert.NoError(t, c.Increment(bgCtx, "count", 3))
 	v, err = c.Get(bgCtx, "count")
 	assert.NoError(t, err)
@@ -411,13 +417,13 @@ func TestIncrement(t *testing.T) {
 func TestDecrement(t *testing.T) {
 	c := newTestCache(t, time.Minute)
 
-	// key 不存在：初始化为 -delta
+	// key does not exist: initialized to -delta
 	assert.NoError(t, c.Decrement(bgCtx, "count", 2))
 	v, err := c.Get(bgCtx, "count")
 	assert.NoError(t, err)
 	assert.Equal(t, int64(-2), v)
 
-	// 已存在：累减
+	// already exists: subtracted
 	assert.NoError(t, c.Decrement(bgCtx, "count", 3))
 	v, err = c.Get(bgCtx, "count")
 	assert.NoError(t, err)
@@ -427,14 +433,14 @@ func TestDecrement(t *testing.T) {
 func TestIncrementKeepsType(t *testing.T) {
 	c := newTestCache(t, time.Minute)
 
-	// Set 存的 int 类型，Increment 后仍为 int
+	// The value stored by Set is an int and stays an int after Increment
 	assert.NoError(t, c.Set(bgCtx, "n", 10))
 	assert.NoError(t, c.Increment(bgCtx, "n", 1))
 	v, err := c.Get(bgCtx, "n")
 	assert.NoError(t, err)
 	assert.Equal(t, 11, v)
 
-	// 非数值类型：返回错误，不改变原值
+	// Not a numeric type: an error is returned and the original value is unchanged
 	assert.NoError(t, c.Set(bgCtx, "s", "hello"))
 	assert.Error(t, c.Increment(bgCtx, "s", 1))
 	s, err := c.Get(bgCtx, "s")
@@ -446,17 +452,17 @@ func TestExpireSetTTL(t *testing.T) {
 	c := newTestCache(t, time.Minute)
 	assert.NoError(t, c.Set(bgCtx, "k", "v"))
 
-	// 设置短过期，到期前可读
+	// Set a short expiry; the key is still readable before it elapses
 	assert.NoError(t, c.Expire(bgCtx, "k", 30*time.Millisecond))
 	_, err := c.Get(bgCtx, "k")
 	assert.NoError(t, err)
 
-	// 等过期（考虑 5% 抖动，多等一些时间）
+	// Wait for the expiry (allowing for the 5% jitter, wait a bit longer)
 	time.Sleep(80 * time.Millisecond)
 	_, err = c.Get(bgCtx, "k")
 	assert.ErrorIs(t, err, ErrNotFound)
 
-	// key 不存在返回 ErrNotFound
+	// a missing key returns ErrNotFound
 	err = c.Expire(bgCtx, "missing", time.Minute)
 	assert.ErrorIs(t, err, ErrNotFound)
 }
@@ -465,7 +471,7 @@ func TestExpireImmediate(t *testing.T) {
 	c := newTestCache(t, time.Minute)
 	assert.NoError(t, c.Set(bgCtx, "k", "v"))
 
-	// ttl <= 0 立即失效
+	// ttl <= 0 expires immediately
 	assert.NoError(t, c.Expire(bgCtx, "k", 0))
 	_, err := c.Get(bgCtx, "k")
 	assert.ErrorIs(t, err, ErrNotFound)

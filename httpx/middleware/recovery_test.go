@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// 对应 recovery.go：Recovery 中间件。
+// Covers recovery.go: the Recovery middleware.
 
 func TestRecovery_Panic(t *testing.T) {
 	silenceLogger(t)
@@ -31,7 +31,7 @@ func TestRecovery_Normal(t *testing.T) {
 
 func TestRecovery_StillRunsAfterPanic(t *testing.T) {
 	silenceLogger(t)
-	// panic 恢复后，同一中间件实例仍可正常服务后续请求
+	// after recovering from a panic, the same middleware instance keeps serving later requests
 	mw := NewRecovery().Middleware()
 
 	rec1 := perform(mw, func(w http.ResponseWriter, r *http.Request) { panic("boom") },
@@ -44,7 +44,8 @@ func TestRecovery_StillRunsAfterPanic(t *testing.T) {
 }
 
 func TestRecovery_ComposeWithRequestID(t *testing.T) {
-	// 标准 net/http 组合：RequestID → Recovery → 业务（验证不依赖 httpx，可被其它框架复用）
+	// plain net/http composition: RequestID -> Recovery -> handler (proves it does not depend
+	// on httpx and can be reused by other frameworks)
 	silenceLogger(t)
 	var capturedID string
 	final := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

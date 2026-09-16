@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// --- 客户端 IP（httpx 主包便捷入口，底层转发 httpx/x） ---
+// --- Client IP (httpx package convenience entry points, forwarding to httpx/x) ---
 
 func TestClientIP_RemoteAddrFallback(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -17,11 +17,11 @@ func TestClientIP_RemoteAddrFallback(t *testing.T) {
 }
 
 func TestClientIP_ProxyHeaders(t *testing.T) {
-	// 直连为可信代理（回环）时解析代理头
+	// Resolve proxy headers when the direct peer is a trusted proxy (loopback)
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.RemoteAddr = "127.0.0.1:12345"
 	r.Header.Set("X-Forwarded-For", "1.1.1.1, 203.0.113.9")
-	// 防伪造：跳过可信右侧，取真实客户端
+	// Spoof protection: skip the trusted right-hand side and take the real client
 	assert.Equal(t, "203.0.113.9", ClientIP(r))
 
 	r.Header.Set("X-Real-IP", "8.8.8.8")
@@ -33,11 +33,12 @@ func TestClientIP_Nil(t *testing.T) {
 }
 
 func TestClientIPWithTrustedProxies(t *testing.T) {
-	// 流量经公网 CDN（203.0.113.0/24）回源：追加可信网段后取更原始客户端
+	// Traffic comes back through a public CDN (203.0.113.0/24): after appending the
+	// trusted range, the more original client is returned
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.RemoteAddr = "203.0.113.10:8080"
 	r.Header.Set("X-Forwarded-For", "8.8.8.8, 203.0.113.5")
 
-	assert.Equal(t, "203.0.113.10", ClientIP(r)) // 未追加：CDN 出口视为直连
+	assert.Equal(t, "203.0.113.10", ClientIP(r)) // not appended: CDN egress is treated as direct
 	assert.Equal(t, "8.8.8.8", ClientIPWithTrustedProxies(r, "203.0.113.0/24"))
 }

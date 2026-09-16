@@ -12,17 +12,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- URL Query 参数 ---
+// --- URL query parameters ---
 
 func TestQueryValue_String(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/users?tag=a&empty=&num=42", nil)
 
-	// 泛型类型推断：无 def 时需显式指定类型实参
+	// Generic type inference: without def the type argument must be given explicitly
 	assert.Equal(t, "a", QueryValue[string](r, "tag"))
 	assert.Equal(t, "", QueryValue[string](r, "empty"))
 	assert.Equal(t, "", QueryValue[string](r, "missing"))
 
-	// 带默认值：def 类型即 T
+	// With a default value: the type of def is T
 	assert.Equal(t, "a", QueryValue(r, "tag", "fb"))
 	assert.Equal(t, "fb", QueryValue(r, "empty", "fb"))
 	assert.Equal(t, "fb", QueryValue(r, "missing", "fb"))
@@ -32,7 +32,7 @@ func TestQueryValue_Typed(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet,
 		"/users?page=2&limit=9223372036854775807&ratio=3.14&flag=true", nil)
 
-	assert.Equal(t, 2, QueryValue(r, "page", -1)) // T 推断为 int
+	assert.Equal(t, 2, QueryValue(r, "page", -1)) // T inferred as int
 	assert.Equal(t, int64(9223372036854775807), QueryValue[int64](r, "limit", -1))
 	assert.Equal(t, uint64(2), QueryValue[uint64](r, "page", 0))
 	assert.Equal(t, 3.14, QueryValue(r, "ratio", -1.0))
@@ -42,7 +42,7 @@ func TestQueryValue_Typed(t *testing.T) {
 func TestQueryValue_Defaults(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/users?page=abc&flag=zzz", nil)
 
-	// 缺失/非法 → 默认值
+	// Missing/invalid → default value
 	assert.Equal(t, 7, QueryValue(r, "missing", 7))
 	assert.Equal(t, 7, QueryValue(r, "page", 7))
 	assert.Equal(t, int64(7), QueryValue[int64](r, "page", 7))
@@ -50,12 +50,12 @@ func TestQueryValue_Defaults(t *testing.T) {
 	assert.Equal(t, 7.5, QueryValue(r, "ratio", 7.5))
 	assert.Equal(t, true, QueryValue(r, "flag", true))
 
-	// 未提供默认值 → 类型零值
+	// No default provided → zero value of the type
 	assert.Equal(t, 0, QueryValue[int](r, "missing"))
 	assert.Equal(t, "", QueryValue[string](r, "missing"))
 }
 
-// --- 路径参数 ---
+// --- Path parameters ---
 
 func TestPathValue_Typed(t *testing.T) {
 	mux := http.NewServeMux()
@@ -85,8 +85,8 @@ func TestPathValue_Defaults(t *testing.T) {
 		count   uint64
 	)
 	mux.HandleFunc("GET /users/{id}", func(w http.ResponseWriter, r *http.Request) {
-		missing = PathValue(r, "none", 5) // 无此路径参数 → 默认
-		id = PathValue(r, "id", "fb")     // 命中 id，返回实际值
+		missing = PathValue(r, "none", 5) // no such path parameter → default
+		id = PathValue(r, "id", "fb")     // id matched, so the actual value is returned
 		count = PathValue[uint64](r, "id", 0)
 	})
 	req := httptest.NewRequest(http.MethodGet, "/users/42", nil)
@@ -109,7 +109,7 @@ func TestPathValue_Invalid(t *testing.T) {
 	assert.Equal(t, 9, id)
 }
 
-// --- Header 请求头 ---
+// --- Request headers ---
 
 func TestHeaderValue_Values(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -118,13 +118,13 @@ func TestHeaderValue_Values(t *testing.T) {
 	r.Header.Set("X-Flag", "true")
 
 	assert.Equal(t, "t-1", HeaderValue(r, "X-Token", ""))
-	assert.Equal(t, "t-1", HeaderValue(r, "x-token", "")) // 不区分大小写
+	assert.Equal(t, "t-1", HeaderValue(r, "x-token", "")) // case-insensitive
 	assert.Equal(t, "fb", HeaderValue(r, "X-Missing", "fb"))
 	assert.Equal(t, 3, HeaderValue(r, "X-Count", -1))
 	assert.Equal(t, int64(3), HeaderValue[int64](r, "X-Count", -1))
 	assert.Equal(t, true, HeaderValue(r, "X-Flag", false))
 
-	// 缺失 → 默认
+	// Missing → default
 	assert.Equal(t, -1, HeaderValue(r, "X-Missing", -1))
 }
 
@@ -134,7 +134,7 @@ func TestHeaderValue_Invalid(t *testing.T) {
 	assert.Equal(t, 9, HeaderValue(r, "X-Count", 9))
 }
 
-// --- nil 请求安全性 ---
+// --- nil request safety ---
 
 func TestValue_NilRequest(t *testing.T) {
 	assert.Equal(t, "", QueryValue[string](nil, "k"))
@@ -143,7 +143,7 @@ func TestValue_NilRequest(t *testing.T) {
 	assert.Equal(t, "fb", HeaderValue(nil, "k", "fb"))
 }
 
-// --- JSON 绑定测试 ---
+// --- JSON binding tests ---
 
 type userRequest struct {
 	Name  string `json:"name" binding:"required"`
@@ -192,7 +192,7 @@ func TestBindJSON_NilBody(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- Query 绑定测试 ---
+// --- Query binding tests ---
 
 type queryRequest struct {
 	Page     int    `form:"page" binding:"required,gte=1"`
@@ -210,7 +210,7 @@ func TestBindQuery(t *testing.T) {
 	assert.Equal(t, 1, q.Page)
 	assert.Equal(t, 20, q.PageSize)
 	assert.Equal(t, "hello", q.Keyword)
-	assert.Equal(t, "desc", q.Sort) // 默认值
+	assert.Equal(t, "desc", q.Sort) // default value
 }
 
 func TestBindQuery_DefaultValue(t *testing.T) {
@@ -238,7 +238,7 @@ func TestBindQuery_MissingRequired(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- Form 绑定测试 ---
+// --- Form binding tests ---
 
 type formRequest struct {
 	Username string `form:"username" binding:"required"`
@@ -267,7 +267,7 @@ func TestBindForm_ValidationError(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- Header 绑定测试 ---
+// --- Header binding tests ---
 
 type headerRequest struct {
 	AuthToken string `header:"X-Auth-Token" binding:"required"`
@@ -285,7 +285,7 @@ func TestBindHeader(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "token123", h.AuthToken)
 	assert.Equal(t, "trace456", h.TraceID)
-	assert.Equal(t, "v1", h.Version) // 默认值
+	assert.Equal(t, "v1", h.Version) // default value
 }
 
 func TestBindHeader_MissingRequired(t *testing.T) {
@@ -296,7 +296,7 @@ func TestBindHeader_MissingRequired(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- URI 绑定测试 ---
+// --- URI binding tests ---
 
 type uriRequest struct {
 	ID       int    `uri:"id" binding:"required"`
@@ -326,7 +326,7 @@ func TestBindURI_ValidationError(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- 自动绑定（Bind）测试 ---
+// --- Automatic binding (Bind) tests ---
 
 func TestBind_AutoDetect_Get(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/?name=Bob&age=30", nil)
@@ -370,7 +370,7 @@ func TestBind_AutoDetect_PostForm(t *testing.T) {
 	assert.Equal(t, 40, result.Age)
 }
 
-// --- 各种类型绑定测试 ---
+// --- Binding tests for various types ---
 
 type typesRequest struct {
 	Name      string        `form:"name"`
@@ -413,7 +413,7 @@ func TestBindQuery_EmptyValues(t *testing.T) {
 	assert.False(t, r.Active)
 }
 
-// --- MustBind 系列测试 ---
+// --- MustBind family tests ---
 
 func TestMustBindJSON_Success(t *testing.T) {
 	body := `{"name":"Alice","age":25,"email":"alice@example.com"}`
@@ -459,7 +459,7 @@ func TestMustBindQuery_Error(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// --- 嵌套结构体测试 ---
+// --- Nested struct tests ---
 
 type nestedRequest struct {
 	User struct {
@@ -482,7 +482,7 @@ func TestBindJSON_Nested(t *testing.T) {
 	assert.Equal(t, "value", r.Metadata["key"])
 }
 
-// --- 指针字段测试 ---
+// --- Pointer field tests ---
 
 type pointerRequest struct {
 	Name  *string `json:"name"`

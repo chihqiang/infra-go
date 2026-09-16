@@ -1,44 +1,44 @@
 # httpx
 
-HTTP 服务基础设施，位于 `httpx` 目录。主包提供服务器、统一响应、请求绑定便捷函数与中间件适配；核心能力按职责拆分到多个子包，均可被其它 `net/http` 兼容框架复用。
+HTTP service infrastructure, located in the `httpx` directory. The main package provides the server, unified responses, request binding helpers and middleware adapters; core capabilities are split into several subpackages by responsibility, all of which can be reused by other `net/http`-compatible frameworks.
 
-## 模块结构
+## Module structure
 
 ```text
 httpx/
-├── request.go              — 请求绑定便捷 API（Bind*/MustBind*）+ 单值读取（QueryValue/PathValue/HeaderValue）
-├── response.go             — 统一响应：Response[T]/CodeError/Ok*/Write*/SSEWriter/Redirect*
-├── server.go               — 服务器核心：Server/Route/ServerConfig 类型、路由注册/中间件链、Handler/404、启动与优雅关闭
-├── server_options.go       — 选项与适配：RouteOption/RunOption、With*/Apply*、AsMiddleware
-├── server_group.go         — 路由组：Group（前缀 + 中间件，支持嵌套）
-├── internal_middleware.go  — 内置中间件适配层：With*（转发 httpx/middleware）
-├── internal_route.go       — 内置路由（PprofRoutes）
-├── ctx.go                  — request_id context 工具（委托 httpx/middleware）
-├── binding/                — 请求绑定实现（绑定器/映射引擎/校验器，见下）
-├── middleware/             — 通用中间件实现（面向对象，一个中间件一个文件）
-├── respw/                  — ResponseWriter 增强包装（见 [httpx-respw](./httpx-respw.md)）
-└── x/                      — 通用 HTTP 小工具（路径匹配 + 客户端 IP 解析，见 [httpx-x](./httpx-x.md)）
+├── request.go              — request binding helpers (Bind*/MustBind*) + single-value reads (QueryValue/PathValue/HeaderValue)
+├── response.go             — unified responses: Response[T]/CodeError/Ok*/Write*/SSEWriter/Redirect*
+├── server.go               — server core: Server/Route/ServerConfig types, route registration/middleware chain, Handler/404, start and graceful shutdown
+├── server_options.go       — options and adapters: RouteOption/RunOption, With*/Apply*, AsMiddleware
+├── server_group.go         — route groups: Group (prefix + middleware, nestable)
+├── internal_middleware.go  — built-in middleware adapter layer: With* (forwards to httpx/middleware)
+├── internal_route.go       — built-in routes (PprofRoutes)
+├── ctx.go                  — request_id context helpers (delegates to httpx/middleware)
+├── binding/                — request binding implementation (binder/mapping engine/validator, see below)
+├── middleware/             — general middleware implementations (object-oriented, one middleware per file)
+├── respw/                  — ResponseWriter enhancements (see [httpx-respw](./httpx-respw.md))
+└── x/                      — general HTTP utilities (path matching + client IP resolution, see [httpx-x](./httpx-x.md))
 ```
 
-- `httpx/binding`：绑定器接口/实例、MIME 常量、反射映射引擎、校验器（`SetValidateFn`）。
-- `httpx/middleware`：各中间件核心逻辑，`NewXxx(...)` + `Middleware()` 面向对象形态，返回标准 `func(http.Handler) http.Handler`，不依赖 httpx，可被 gin / echo 等直接复用（详见「中间件」节）。
-- `httpx` 主包 = 服务器 + 统一响应 + 绑定便捷函数 + `With*` 适配层，是业务项目主要使用入口。
+- `httpx/binding`: binder interfaces/instances, MIME constants, the reflection mapping engine and the validator (`SetValidateFn`).
+- `httpx/middleware`: the core logic of each middleware, in the object-oriented `NewXxx(...)` + `Middleware()` form, returning the standard `func(http.Handler) http.Handler`, independent of httpx and directly reusable by gin / echo and others (see the "Middleware" section).
+- The `httpx` main package = server + unified responses + binding helpers + the `With*` adapter layer, and is the main entry point for business projects.
 
-## 特性
+## Features
 
-- **统一响应**：`Response[T]` 结构 + `Ok*` / `WriteHTTPError*` 智能包装
-- **参数绑定**：JSON / XML / Form / Query / Header / URI 六种来源 + `binding` 标签校验
-- **通用中间件**：CORS、Recovery、RequestID、链路追踪、访问日志、熔断、超时、请求体限制、gzip 解压、并发数限制、限流、JWT 认证、加解密、内容安全
-- **可复用**：中间件核心逻辑在 `httpx/middleware` 子包，标准 `net/http` 形态，可被任何框架复用
-- **Server 路由**：Go 1.22 `{param}` 路径参数、路由组、中间件链、优雅关闭、pprof
+- **Unified responses**: the `Response[T]` struct plus smart wrapping in `Ok*` / `WriteHTTPError*`
+- **Parameter binding**: six sources — JSON / XML / Form / Query / Header / URI — plus `binding` tag validation
+- **General middleware**: CORS, Recovery, RequestID, tracing, access logs, breaker, timeout, request body limits, gzip decompression, concurrency limits, rate limiting, JWT auth, encryption/decryption, content security
+- **Reusable**: the middleware core logic lives in the `httpx/middleware` subpackage in standard `net/http` form and can be reused by any framework
+- **Server routing**: Go 1.22 `{param}` path parameters, route groups, middleware chains, graceful shutdown, pprof
 
-## 安装
+## Installation
 
 ```bash
 go get github.com/chihqiang/infra-go/httpx
 ```
 
-## 快速开始
+## Quick start
 
 ```go
 package main
@@ -47,13 +47,13 @@ import (
     "net/http"
 
     "github.com/chihqiang/infra-go/httpx"
-    "github.com/chihqiang/infra-go/httpx/middleware" // 可选：直接用子包中间件
+    "github.com/chihqiang/infra-go/httpx/middleware" // optional: use subpackage middleware directly
 )
 
 func main() {
     server := httpx.NewServer(httpx.ServerConfig{Host: "0.0.0.0", Port: 8080})
 
-    // 中间件（With* 便捷注册，等价于 middleware.NewXxx().Middleware() 经 AsMiddleware 接入）
+    // middleware (With* registers conveniently; equivalent to middleware.NewXxx().Middleware() via AsMiddleware)
     server.Use(httpx.WithRecovery())
     server.Use(httpx.WithRequestID())
     server.Use(httpx.WithLogger("/healthz"))
@@ -65,51 +65,51 @@ func main() {
         Handler: func(w http.ResponseWriter, r *http.Request) {
             var req CreateUserRequest
             if err := httpx.MustBindJSON(w, r, &req); err != nil {
-                return // 已自动写 400
+                return // 400 already written automatically
             }
-            httpx.OkJSON(w, map[string]any{"id": "user-1"}) // 自动包成 Response[T]
+            httpx.OkJSON(w, map[string]any{"id": "user-1"}) // wrapped into Response[T] automatically
         },
     })
 
-    server.Start() // 阻塞；SIGINT/SIGTERM/SIGHUP 优雅关闭
+    server.Start() // blocking; graceful shutdown on SIGINT/SIGTERM/SIGHUP
 }
 ```
 
-## 请求绑定
+## Request binding
 
-将请求数据按来源绑定到结构体。字段通过 tag 指定来源名，并可用 `binding` 标签声明校验规则。
+Binds request data into structs by source. Fields declare their source name through a tag, and validation rules can be declared with the `binding` tag.
 
-> 绑定器的**实现**在 `httpx/binding` 子包（绑定器实例 `binding.JSON/XML/Form/Query/Header/Uri`、`binding.Default` 选择器、反射映射引擎与 `SetValidateFn` 校验入口）。httpx 主包 `Bind*` / `MustBind*` 便捷函数内部调用该子包，业务侧通常直接用主包函数即可。
+> The binder **implementation** lives in the `httpx/binding` subpackage (binder instances `binding.JSON/XML/Form/Query/Header/Uri`, the `binding.Default` selector, the reflection mapping engine and the `SetValidateFn` validation entry). The httpx main package's `Bind*` / `MustBind*` helpers call that subpackage internally, so business code normally just uses the main package functions.
 
-### 支持的标签
+### Supported tags
 
-| 标签 | 适用来源 | 说明 |
+| Tag | Applicable source | Description |
 |------|---------|------|
-| `json` | JSON body | JSON 字段名 |
-| `xml` | XML body | XML 字段名 |
-| `form` | Form / Query | 表单 / Query 参数名 |
-| `uri` | URI | 路径参数名 |
-| `header` | Header | HTTP 请求头名（大小写不敏感） |
-| `binding` | 全部 | 校验规则，见[参数验证](#参数验证) |
-| `default` | Form / Query / Header / URI | 字段默认值，如 `form:"sort,default=desc"` |
-| `time_format` / `time_utc` / `time_location` | Form / Query | 时间解析控制 |
-| `-` | 全部 | 忽略该字段，不做绑定 |
+| `json` | JSON body | JSON field name |
+| `xml` | XML body | XML field name |
+| `form` | Form / Query | Form / Query parameter name |
+| `uri` | URI | Path parameter name |
+| `header` | Header | HTTP header name (case-insensitive) |
+| `binding` | All | Validation rules, see [Parameter validation](#parameter-validation) |
+| `default` | Form / Query / Header / URI | Field default value, e.g. `form:"sort,default=desc"` |
+| `time_format` / `time_utc` / `time_location` | Form / Query | Time parsing control |
+| `-` | All | Ignore the field; don't bind it |
 
-### 绑定函数一览
+### Binding functions
 
-| 函数 | 数据来源 | 说明 |
+| Function | Data source | Description |
 |------|---------|------|
 | `BindJSON(r, &obj)` | JSON body | |
 | `BindXML(r, &obj)` | XML body | |
 | `BindForm(r, &obj)` | Query + POST form | |
 | `BindQuery(r, &obj)` | URL Query | |
 | `BindHeader(r, &obj)` | HTTP Header | |
-| `BindURI(params, &obj)` | 路径参数 | `params` 为 `map[string]string` |
-| `BindURIWithValues(params, &obj)` | 路径参数 | `params` 为 `map[string][]string` |
-| `Bind(r, &obj)` | 自动 | 按 Method / Content-Type 选择 |
-| `MustBind*` | — | 绑定 + 自动错误响应 |
+| `BindURI(params, &obj)` | Path parameters | `params` is a `map[string]string` |
+| `BindURIWithValues(params, &obj)` | Path parameters | `params` is a `map[string][]string` |
+| `Bind(r, &obj)` | Automatic | Chooses based on Method / Content-Type |
+| `MustBind*` | — | Binding + automatic error response |
 
-### 示例
+### Examples
 
 ```go
 // JSON
@@ -123,7 +123,7 @@ if err := httpx.BindJSON(r, &req); err != nil {
     return
 }
 
-// Query（form 标签，支持 default）
+// Query (form tag, supports default)
 type ListRequest struct {
     Page     int    `form:"page" binding:"gte=1"`
     PageSize int    `form:"page_size" binding:"gte=1,lte=100"`
@@ -138,7 +138,7 @@ type AuthRequest struct {
 }
 if err := httpx.BindHeader(r, &req); err != nil { /* handle */ }
 
-// URI（路径参数 /users/{id}）
+// URI (path parameter /users/{id})
 type GetUserRequest struct {
     ID int `uri:"id" binding:"required"`
 }
@@ -146,35 +146,35 @@ params := map[string]string{"id": r.PathValue("id")}
 if err := httpx.BindURI(params, &req); err != nil { /* handle */ }
 ```
 
-### 自动选择规则
+### Automatic selection rules
 
-`Bind(r, &obj)` 按 Method 与 Content-Type 选择：GET → Form（Query）；POST + `application/json` → JSON；`application/xml`/`text/xml` → XML；`application/x-www-form-urlencoded` / `multipart/form-data` → Form；其它/无法解析 → Form。
+`Bind(r, &obj)` chooses based on Method and Content-Type: GET → Form (Query); POST + `application/json` → JSON; `application/xml`/`text/xml` → XML; `application/x-www-form-urlencoded` / `multipart/form-data` → Form; anything else / unparsable → Form.
 
-### MustBind — 绑定 + 自动错误响应
+### MustBind — binding plus automatic error response
 
-绑定或校验失败时自动写入 HTTP 错误响应（携带 `request_id`）并返回 error 供控制流判断：
+When binding or validation fails it writes the HTTP error response automatically (carrying `request_id`) and returns an error so the control flow can react:
 
 ```go
 if err := httpx.MustBindJSON(w, r, &req); err != nil {
-    return // 已自动写 400
+    return // 400 already written automatically
 }
-// 同系列：MustBind（自动选择）/ MustBindQuery / MustBindForm
+// same family: MustBind (automatic selection) / MustBindQuery / MustBindForm
 ```
 
-### 单值读取 — QueryValue / PathValue / HeaderValue
+### Single-value reads — QueryValue / PathValue / HeaderValue
 
-按 key 读取单个值并转换类型（底层复用 `cast.ToE`），无需定义结构体：
+Reads a single value by key and converts its type (reusing `cast.ToE` under the hood), with no struct definition needed:
 
 ```go
-page  := httpx.QueryValue(r, "page", 1)     // int，缺失/非法 → 1
-tag   := httpx.QueryValue[string](r, "tag") // string，缺失 → ""
-id    := httpx.PathValue(r, "id", int64(0)) // 路径参数 {id}
+page  := httpx.QueryValue(r, "page", 1)     // int; missing/invalid → 1
+tag   := httpx.QueryValue[string](r, "tag") // string; missing → ""
+id    := httpx.PathValue(r, "id", int64(0)) // path parameter {id}
 token := httpx.HeaderValue(r, "X-Token", "")
 ```
 
-## 参数验证
+## Parameter validation
 
-绑定器映射后自动校验 `binding` 标签规则（基于 [go-playground/validator/v10](https://github.com/go-playground/validator)）：
+After the binder has mapped the data, the `binding` tag rules are validated automatically (based on [go-playground/validator/v10](https://github.com/go-playground/validator)):
 
 ```go
 type RegisterRequest struct {
@@ -185,26 +185,26 @@ type RegisterRequest struct {
 }
 ```
 
-常用规则：`required` 必填；`min=N`/`max=N`；`gte=N`/`lte=N`；`email`/`url`；`oneof=a b c` 枚举；`len=N`。
+Common rules: `required` for mandatory; `min=N`/`max=N`; `gte=N`/`lte=N`; `email`/`url`; `oneof=a b c` for enums; `len=N`.
 
-默认校验器为 `httpx/binding` 子包的 `DefaultValidator`（标签 `binding`）。需要自定义校验器时，实现 `binding.StructValidator` 并通过 `binding.SetValidateFn` 注入校验入口（见附录）；传 `nil` 恢复默认。httpx 主包便捷绑定函数与 binding 绑定器共享同一校验入口。
+The default validator is `DefaultValidator` from the `httpx/binding` subpackage (tag `binding`). To use a custom validator, implement `binding.StructValidator` and inject the validation entry point through `binding.SetValidateFn` (see the appendix); passing `nil` restores the default. The httpx main package binding helpers and the binding binders share the same validation entry point.
 
-## 支持的数据类型
+## Supported data types
 
-| 类型 | 示例 |
+| Type | Example |
 |------|------|
 | `string` | `Name string \`form:"name"\`` |
-| `int/int8/int16/int32/int64`、`uint/.../uint64` | `Age int \`form:"age"\`` |
+| `int/int8/int16/int32/int64`, `uint/.../uint64` | `Age int \`form:"age"\`` |
 | `bool` | `Active bool \`form:"active"\`` |
 | `float32/float64` | `Score float64 \`form:"score"\`` |
-| `time.Time` | 支持 `time_format`/`time_utc`/`time_location` 与 unix 时间戳 |
-| `time.Duration` | `Timeout time.Duration \`form:"timeout"\``（如 `1m30s`） |
-| `[]string` 等切片 | 逗号分隔或重复 key 自动收集 |
-| 内嵌结构体 / `map[string]string` 目标 | 递归 / 直接填充 |
+| `time.Time` | supports `time_format`/`time_utc`/`time_location` and Unix timestamps |
+| `time.Duration` | `Timeout time.Duration \`form:"timeout"\`` (e.g. `1m30s`) |
+| Slices such as `[]string` | collected automatically from comma-separated values or repeated keys |
+| Embedded structs / `map[string]string` targets | recursive / direct filling |
 
-## 统一响应
+## Unified responses
 
-### Response[T] 结构
+### The Response[T] struct
 
 ```go
 type Response[T any] struct {
@@ -215,95 +215,95 @@ type Response[T any] struct {
 }
 ```
 
-### 智能包装（推荐）
+### Smart wrapping (recommended)
 
-`Ok*` 系列自动把 `v` 包进 `Response[T]`；若 `v` 是 `*CodeError` / `CodeError` / `error`，自动取对应业务码与消息：
+The `Ok*` family wraps `v` into `Response[T]` automatically; if `v` is a `*CodeError` / `CodeError` / `error`, the matching business code and message are taken from it:
 
 ```go
 httpx.OkJSON(w, data)          // {code:0,msg:"ok",data:...}
-httpx.OkJSONCtx(ctx, w, data)  // 响应携带 request_id
+httpx.OkJSONCtx(ctx, w, data)  // the response carries request_id
 httpx.OkXML(w, data)
 httpx.OkXMLCtx(ctx, w, data)
 httpx.OkHTML(w, "<h1>hi</h1>")
 httpx.OkHTMLCtx(ctx, w, "<h1>hi</h1>")
 ```
 
-### 底层输出
+### Low-level output
 
 ```go
-httpx.WriteJSON(w, status, v)        // 任意状态码 + 任意结构
+httpx.WriteJSON(w, status, v)        // any status code + any structure
 httpx.WriteJSONCtx(ctx, w, status, v)
 httpx.WriteXML(w, status, v)
 httpx.WriteXMLCtx(ctx, w, status, v)
 ```
 
-### 错误响应
+### Error responses
 
 ```go
 httpx.WriteHTTPError(w, status, msg)                       // code = status
-httpx.WriteHTTPErrorCtx(ctx, w, status, msg)               // 带 request_id
-httpx.WriteHTTPErrorWithCode(w, status, code, msg)         // 业务码与 HTTP 码分离
+httpx.WriteHTTPErrorCtx(ctx, w, status, msg)               // with request_id
+httpx.WriteHTTPErrorWithCode(w, status, code, msg)         // business code separated from the HTTP code
 httpx.WriteHTTPErrorWithCodeCtx(ctx, w, status, code, msg)
 ```
 
-业务码常量：`CodeOK = 0`、`MsgOK = "ok"`、`CodeDefaultError = -1`。
+Business code constants: `CodeOK = 0`, `MsgOK = "ok"`, `CodeDefaultError = -1`.
 
 ### CodeError
 
 ```go
-httpx.NewCodeError(code, msg)                 // 业务错误
-httpx.NewCodeErrorWithCause(code, msg, err)   // 带根因，可 errors.Is/As
+httpx.NewCodeError(code, msg)                 // business error
+httpx.NewCodeErrorWithCause(code, msg, err)   // with a root cause, usable with errors.Is/As
 ```
 
-### SSE 流式响应
+### SSE streaming responses
 
 ```go
-sse := httpx.NewSSEWriter(w)                    // 构造器只接收 w
-sse.Event("message", `{"a":1}`)                // 写 event+data 帧
-sse.JSONEvent("message", map[string]any{"a": 1}) // v 序列化为 JSON 后写 data
-sse.Data("ping")                                // 写默认 message 事件的 data
+sse := httpx.NewSSEWriter(w)                    // the constructor takes only w
+sse.Event("message", `{"a":1}`)                // write an event+data frame
+sse.JSONEvent("message", map[string]any{"a": 1}) // v is serialized to JSON and written as data
+sse.Data("ping")                                // write data for the default message event
 sse.Comment("keepalive")
-sse.Retry(3000)        // 断线重连间隔
+sse.Retry(3000)        // reconnection interval after a drop
 sse.Flush()
 ```
 
-> `WithTimeout` 对 SSE/WebSocket 长连接豁免。
+> `WithTimeout` exempts long-lived SSE/WebSocket connections.
 
-### 重定向
+### Redirects
 
 ```go
 httpx.Redirect(w, r, url, http.StatusFound)   // RedirectCtx / RedirectTemporary / RedirectTemporaryCtx
 ```
 
-## 请求 ID（Request ID）
+## Request ID
 
-`WithRequestID` 从 `X-Request-Id` 头读取（缺省自动生成 uuid），注入 context 并回写响应头。下游读取：
+`WithRequestID` reads the `X-Request-Id` header (generating a uuid by default), injects it into the context and writes it back to the response headers. Reading it downstream:
 
 ```go
 id := httpx.RequestIDFromContext(r.Context())
 ```
 
-> request_id 的 context key 与存取实现统一在 `httpx/middleware`（`middleware.ContextWithRequestID`/`RequestIDFromContext`），httpx `ctx.go` 委托转发；配合 `OkJSONCtx`/`WriteHTTPErrorCtx` 会自动出现在响应 `request_id` 字段，配合 `logger.XxxCtx` 自动出现在日志。
+> The request_id context key and its accessors live in `httpx/middleware` (`middleware.ContextWithRequestID`/`RequestIDFromContext`) and httpx's `ctx.go` delegates to them; combined with `OkJSONCtx`/`WriteHTTPErrorCtx` it appears automatically in the response's `request_id` field, and combined with `logger.XxxCtx` it appears automatically in logs.
 
-## 路由与服务器
+## Routing and the server
 
-### 服务器创建
+### Creating a server
 
 ```go
 server := httpx.NewServer(httpx.ServerConfig{Host: "0.0.0.0", Port: 8080})
 ```
 
-### Route 与注册
+### Route and registration
 
 ```go
 server.AddRoute(httpx.Route{Method: "GET", Path: "/users", Handler: handler})
 server.AddRoutes([]httpx.Route{{...}, ...}, httpx.WithPrefix("/api/v1"))
-server.Routes() // 返回全部路由副本
+server.Routes() // returns copies of all routes
 ```
 
-### 路径参数
+### Path parameters
 
-Go 1.22 路由模式 `{param}`：
+Go 1.22 route patterns `{param}`:
 
 ```go
 server.AddRoute(httpx.Route{Method: "GET", Path: "/users/{id}", Handler: func(w http.ResponseWriter, r *http.Request) {
@@ -312,27 +312,27 @@ server.AddRoute(httpx.Route{Method: "GET", Path: "/users/{id}", Handler: func(w 
 }})
 ```
 
-### 中间件
+### Middleware
 
 ```go
 type Middleware func(http.HandlerFunc) http.HandlerFunc
 
-server.Use(mw1, mw2)              // 全局中间件（对所有路由生效）
-server.AddRoutes(rs, httpx.WithMiddleware(authMW)) // 单路由组中间件
-server.AddRoutes(httpx.ApplyMiddleware(authMW, routes...)) // 直接包装路由
+server.Use(mw1, mw2)              // global middleware (applies to every route)
+server.AddRoutes(rs, httpx.WithMiddleware(authMW)) // middleware for a single route group
+server.AddRoutes(httpx.ApplyMiddleware(authMW, routes...)) // wrap routes directly
 ```
 
-执行顺序：全局中间件（`Use`）→ 组中间件 → 路由 handler。
+Execution order: global middleware (`Use`) → group middleware → route handler.
 
-### 路由组（Group）
+### Route groups (Group)
 
 ```go
 api := server.Group("/api", authMW)
-v1 := api.Group("/v1", logMW) // 前缀 /api/v1，中间件叠加
+v1 := api.Group("/v1", logMW) // prefix /api/v1, middleware stacks up
 v1.AddRoute(httpx.Route{...})
 ```
 
-### 自定义 404
+### Custom 404
 
 ```go
 server.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
@@ -340,200 +340,205 @@ server.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
 })
 ```
 
-说明：
+Notes:
 
-- 仅对**路由未匹配**的请求生效；业务路由内部主动返回的 404（如「资源不存在」）不会被劫持，原样返回给客户端。
-- 路径匹配但方法不允许（405）不会被接管，仍返回 `405 Method Not Allowed` 与 `Allow` 头。
-- 处理器需自行写出状态码；未调用 `WriteHeader` 时由 net/http 隐式写 200（`OkJSON` 系列即为此约定：HTTP 200 + 响应体中的业务错误码）。
-- 设置该处理器后，正常路由的 handler 仍能拿到完整的 `http.Flusher` / `http.Hijacker` / `http.Pusher` / `Unwrap` 能力（SSE、WebSocket、HTTP/2 Push 不受影响）。
+- It applies only to requests where **no route matched**; a 404 returned deliberately inside a business route (such as "resource not found") is not hijacked and is passed to the client as-is.
+- A path that matches but doesn't allow the method (405) is not taken over; `405 Method Not Allowed` and the `Allow` header are still returned.
+- The handler must write the status code itself; when `WriteHeader` isn't called net/http writes 200 implicitly (the `OkJSON` family relies on this convention: HTTP 200 plus a business error code in the body).
+- After setting this handler, normal route handlers still get the full `http.Flusher` / `http.Hijacker` / `http.Pusher` / `Unwrap` capabilities (SSE, WebSocket and HTTP/2 Push are unaffected).
 
-### panic 恢复
+### panic recovery
 
-`WithRecovery` 捕获 handler panic，记录堆栈并返回 500。
+`WithRecovery` catches handler panics, logs the stack trace and returns 500.
 
-### 启动与关闭
+### Start and shutdown
 
 ```go
-server.Start()    // 阻塞，SIGINT/SIGTERM/SIGHUP 优雅关闭
-server.Shutdown() // 手动关闭（返回 error）
-server.Stop()     // 停止，委托 Shutdown（返回 error），便于 service.AsService 纳入 ServiceGroup 管理
+server.Start()    // blocking; graceful shutdown on SIGINT/SIGTERM/SIGHUP
+server.Shutdown() // manual shutdown (returns an error)
+server.Stop()     // stop; delegates to Shutdown (returns an error), so service.AsService can manage it in a ServiceGroup
 ```
 
-## 中间件
+## Middleware
 
-httpx 中间件分两层：
+httpx middleware comes in two layers:
 
-1. **`httpx/middleware` 子包（实现层）**：一个中间件一个文件、一个类型；`NewXxx(...)` 构造（构造时完成参数预计算），`(m *Xxx) Middleware()` 返回标准 `func(http.Handler) http.Handler`。不依赖 httpx，可被 gin/echo/标准库复用。错误响应按**请求作用域**解析：httpx 的 Server 在每个请求的 context 上注入统一 JSON 渲染，子包自身保持默认 `http.Error`。
-2. **`httpx` 主包（适配层）**：`WithXxx(...)` 便捷函数把子包标准中间件适配为 `httpx.Middleware` 供 `server.Use` 注册，方法签名稳定。
+1. **The `httpx/middleware` subpackage (implementation layer)**: one file and one type per middleware; `NewXxx(...)` constructs it (doing parameter precomputation), and `(m *Xxx) Middleware()` returns the standard `func(http.Handler) http.Handler`. It does not depend on httpx, so gin/echo/the standard library can reuse it. Error responses are resolved per **request scope**: the httpx Server injects the unified JSON renderer into each request's context, while the subpackage itself keeps the default `http.Error`.
+2. **The `httpx` main package (adapter layer)**: the `WithXxx(...)` helpers adapt the subpackage's standard middleware into `httpx.Middleware` for registration with `server.Use`, with stable method signatures.
 
-### 内置中间件清单（httpx.With*）
+### Built-in middleware (httpx.With*)
 
-| 中间件 | 用途 |
+| Middleware | Purpose |
 |--------|------|
-| `WithCors(origins...)` | CORS；`"*"` 允许所有来源（**回显具体 Origin**，不发送通配符）；同源不设头；**未授权来源默认透传**（不下发 CORS 头）；OPTIONS 预检 204 |
-| `WithRecovery()` | panic 恢复 → 500 + 堆栈日志 |
-| `WithRequestID()` | request_id 注入 context / 回写响应头 |
-| `WithTracing(ignorePaths...)` | 链路追踪（服务端 span，默认全局 TracerProvider） |
-| `WithLogger(skipPaths...)` | 访问日志（method/path/status/bytes/latency） |
-| `WithBreaker()` | 全局限流熔断（全局单一熔断器；打开时 503 + `Retry-After`） |
-| `WithRouteBreaker()` | 按路由隔离熔断（以**路由模板**为键，见下；打开时 503 + `Retry-After`） |
-| `WithTimeout(d)` | 请求超时（WS/SSE 豁免；客户端断开 499） |
-| `WithMaxBytes(n)` | 请求体大小限制（413） |
-| `WithGunzip()` | gzip 请求体自动解压（**解压后上限 5MB**，防解压炸弹） |
-| `WithMaxConns(n)` | 并发连接数限制（503 + `Retry-After`） |
-| `WithRateLimit(limiter, skipPaths...)` | 限流（429 + `Retry-After`；limiter 来自 ratelimit 包，见 [ratelimit](./ratelimit.md)） |
-| `WithJWT(j, getToken)` | JWT 认证（转发 `jwt.AuthMiddleware`，见 [jwt](./jwt.md)） |
-| `WithCryption(key, skipPaths...)` | 请求/响应 AES-GCM 加解密：解密请求体（密文上限默认 5MB，超限 413）；响应体**仅 2xx（且非 204/205/HEAD）加密**，错误/重定向等非 2xx 明文透传并保留状态码；响应超缓冲上限（默认 5MB）自动回退明文，且**完整输出全部正文**（不会被截断）。请求/响应上限可用 `middleware.NewCryptionWithLimit(key, reqBytes, respBytes, skipPaths...)` 调整 |
-| `WithContentSecurity(key, tolerance)` | 内容安全校验（防篡改 + 防重放）；**请求体上限 5MB**（超限 413，读失败 400）；认证失败 401 + `WWW-Authenticate` |
+| `WithCors(origins...)` | CORS; `"*"` allows every origin (**echoes the concrete Origin**, never sending a wildcard); no headers for same-origin; **unauthorized origins pass through by default** (no CORS headers emitted); OPTIONS preflight → 204 |
+| `WithRecovery()` | panic recovery → 500 + stack trace log |
+| `WithRequestID()` | inject request_id into the context / write it back to the response headers |
+| `WithTracing(ignorePaths...)` | distributed tracing (server-side span, using the global TracerProvider by default) |
+| `WithLogger(skipPaths...)` | access logs (method/path/status/bytes/latency) |
+| `WithBreaker()` | global breaker (a single global breaker; 503 + `Retry-After` while open) |
+| `WithRouteBreaker()` | per-route breaker (keyed by the **route pattern**, see below; 503 + `Retry-After` while open) |
+| `WithTimeout(d)` | request timeout (WS/SSE exempt; 499 when the client disconnects) |
+| `WithMaxBytes(n)` | request body size limit (413) |
+| `WithGunzip()` | automatic gzip request body decompression (**5MB limit after decompression**, guarding against decompression bombs) |
+| `WithMaxConns(n)` | concurrent connection limit (503 + `Retry-After`) |
+| `WithRateLimit(limiter, skipPaths...)` | rate limiting (429 + `Retry-After`; the limiter comes from the ratelimit package, see [ratelimit](./ratelimit.md)) |
+| `WithJWT(j, getToken)` | JWT authentication (forwards to `jwt.AuthMiddleware`, see [jwt](./jwt.md)) |
+| `WithCryption(key, skipPaths...)` | AES-GCM encryption/decryption of requests and responses: decrypts the request body (ciphertext limit 5MB by default, 413 beyond it); response bodies are **encrypted only for 2xx (and not 204/205/HEAD)**, while non-2xx such as errors and redirects pass through in plain text keeping their status code; a response exceeding the buffer limit (5MB by default) automatically falls back to plain text and **still writes the complete body** (never truncated). The request/response limits can be adjusted with `middleware.NewCryptionWithLimit(key, reqBytes, respBytes, skipPaths...)` |
+| `WithContentSecurity(key, tolerance)` | content security validation (tamper and replay protection); **5MB request body limit** (413 beyond it, 400 on a read failure); 401 + `WWW-Authenticate` on an authentication failure |
 
-### 状态码与响应头符合 HTTP 规范
+### Status codes and headers follow the HTTP spec
 
-中间件产生的错误响应遵从以下 RFC 要求：
+The error responses produced by the middleware comply with the following RFC requirements:
 
-| 状态码 | 场景（中间件） | 规范性响应头 | RFC 依据 |
+| Status | Scenario (middleware) | Normative header | RFC reference |
 |--------|--------------|-------------|---------|
-| 401 | `WithJWT`、`WithContentSecurity` | `WWW-Authenticate`（**MUST**） | RFC 9110 §15.5.2 |
-| 429 | `WithRateLimit` | `Retry-After`（MAY，尽量给出） | RFC 6585 §4；RFC 9110 §10.2.3 |
-| 503 | `WithBreaker`、`WithRouteBreaker`、`WithMaxConns` | `Retry-After`（**SHOULD**） | RFC 9110 §15.6.4 |
-| 413 | `WithMaxBytes`、`WithCryption`、`WithContentSecurity` | — | RFC 9110 §15.5.14 |
-| 405 | 路由层（ServeMux） | `Allow`（MUST） | RFC 9110 §15.5.6 |
+| 401 | `WithJWT`, `WithContentSecurity` | `WWW-Authenticate` (**MUST**) | RFC 9110 §15.5.2 |
+| 429 | `WithRateLimit` | `Retry-After` (MAY, emitted whenever possible) | RFC 6585 §4; RFC 9110 §10.2.3 |
+| 503 | `WithBreaker`, `WithRouteBreaker`, `WithMaxConns` | `Retry-After` (**SHOULD**) | RFC 9110 §15.6.4 |
+| 413 | `WithMaxBytes`, `WithCryption`, `WithContentSecurity` | — | RFC 9110 §15.5.14 |
+| 405 | Routing layer (ServeMux) | `Allow` (MUST) | RFC 9110 §15.5.6 |
 
-**401 的质询格式**：
+**401 challenge format**:
 
-- JWT 使用 Bearer 方案（RFC 6750 §3），`error` 参数区分失败原因：
+- JWT uses the Bearer scheme (RFC 6750 §3), with the `error` parameter distinguishing the failure reason:
 
   ```text
-  WWW-Authenticate: Bearer error="invalid_request"   # 未提供令牌
-  WWW-Authenticate: Bearer error="invalid_token"     # 令牌无效/过期
+  WWW-Authenticate: Bearer error="invalid_request"   # no token provided
+  WWW-Authenticate: Bearer error="invalid_token"     # invalid/expired token
   ```
 
-- `ContentSecurity` 是自定义 HMAC 签名方案（不属于 Basic/Bearer），
-  使用自定义 scheme 名：
+- `ContentSecurity` is a custom HMAC signing scheme (it is neither Basic nor Bearer),
+  so it uses a custom scheme name:
 
   ```text
   WWW-Authenticate: ContentSecurity
   ```
 
-**Retry-After 取值规则**（RFC 9110 §10.2.3）：
+**Retry-After value rules** (RFC 9110 §10.2.3):
 
-- 使用 `delay-seconds`（非负十进制整数），**向上取整**。
-- 不足 1 秒也输出 `1`，避免 `Retry-After: 0`（会被解读为可立即重试）。
-- **无法估计时省略该头**（而不是编造数值）——错误的等待提示会让客户端
-  过久不重试。例如自定义限流器未实现 `RetryAfterProvider` 时。
+- Use `delay-seconds` (a non-negative decimal integer), **rounded up**.
+- Anything under 1 second is still emitted as `1`, avoiding `Retry-After: 0` (which would be read as "retry immediately").
+- **Omit the header when it cannot be estimated** (rather than making up a number) — a wrong wait hint makes
+  clients wait far too long before retrying. That happens, for example, when a custom limiter doesn't
+  implement `RetryAfterProvider`.
 
-限流中间件优先向限流器索取精确值（`RetryAfterProvider` 可选接口），
-`ratelimit` 内置实现均已支持：
+The rate limiting middleware asks the limiter for a precise value first (the optional `RetryAfterProvider`
+interface), which every built-in `ratelimit` implementation supports:
 
-| 限流器 | `RetryAfter()` 含义 |
+| Limiter | Meaning of `RetryAfter()` |
 |--------|------------------|
-| `TokenBucket` | 距下一个令牌可用（由实时令牌数与 rate 算出） |
-| `SlidingWindow` | 最早一次记录滑出窗口 |
-| `RedisTokenBucket` | 生成一个令牌所需时长（按 rate 估计） |
-| `RedisSlidingWindow` | 整个窗口时长（避免限流路径上再访问 Redis） |
-| `Concurrency` | 不实现（占用时长不可预测，不应编造） |
+| `TokenBucket` | Time until the next token is available (computed from the live token count and the rate) |
+| `SlidingWindow` | Time until the earliest record slides out of the window |
+| `RedisTokenBucket` | Time needed to generate one token (estimated from the rate) |
+| `RedisSlidingWindow` | The whole window duration (avoiding another Redis round trip on the rate-limited path) |
+| `Concurrency` | Not implemented (the hold duration is unpredictable, so it must not be invented) |
 
-自定义限流器不实现该接口时，可用 `WithRetryAfter(d)` 给出固定值：
+When a custom limiter doesn't implement that interface, use `WithRetryAfter(d)` to provide a fixed value:
 
 ```go
 mw := middleware.NewRateLimit(myLimiter).WithRetryAfter(2 * time.Second)
-// 熔断 / 并发限制同理
+// the same applies to the breaker / concurrency limit
 mb := middleware.NewBreaker().WithRetryAfter(time.Second)
 mc := middleware.NewMaxConns(100).WithRetryAfter(500 * time.Millisecond)
 ```
 
-> **`499`（客户端主动断开）**：由 `WithTimeout` 在检测到请求 context 被取消时写入。
-> 它不是 RFC 定义的状态码，而是 nginx 约定。保留它是因为此时响应写不到已断开的
-> 客户端，该状态码仅用于服务端日志可观测性。RFC 9110 §15 允许定义新的状态码，
-> 499 属于 4xx 类，因此作为扩展是合规的；若你的日志管道不识别它，
-> 可在自己的访问日志中间件中把它映射为其它值。
+> **`499` (client disconnected)**: written by `WithTimeout` when it detects that the request context was
+> cancelled. It is not an RFC-defined status code but an nginx convention. It is kept because the response
+> can no longer reach the disconnected client in that case, so the status code only serves server-side log
+> observability. RFC 9110 §15 allows new status codes to be defined and 499 falls in the 4xx class, so it is
+> a compliant extension; if your log pipeline doesn't recognize it, map it to another value in your own
+> access-log middleware.
 
-### 安全相关的默认限额
+### Security-related default limits
 
-以下中间件会读入或展开请求体，均带默认上限以避免内存被耗尽：
+The middleware below reads or expands the request body and all of them carry default limits to avoid exhausting memory:
 
-| 中间件 | 限额 | 超限行为 | 调整方式 |
+| Middleware | Limit | Behavior beyond the limit | How to adjust |
 |--------|------|---------|---------|
-| `WithCryption` | 密文请求体 5MB | 413 | `middleware.NewCryptionWithLimit(key, req, resp, ...)` |
-| `WithContentSecurity` | 签名的请求体 5MB | 413（读失败 400） | `middleware.NewContentSecurity(key, tol).WithMaxBodyBytes(n)` |
-| `WithGunzip` | **解压后** 5MB | 下游读取返回错误 | `middleware.NewGunzip().WithMaxDecompressedBytes(n)` |
-| `WithMaxBytes` | 由调用方指定 | 413 | `WithMaxBytes(n)` |
+| `WithCryption` | 5MB ciphertext request body | 413 | `middleware.NewCryptionWithLimit(key, req, resp, ...)` |
+| `WithContentSecurity` | 5MB signed request body | 413 (400 on a read failure) | `middleware.NewContentSecurity(key, tol).WithMaxBodyBytes(n)` |
+| `WithGunzip` | 5MB **after decompression** | downstream reads return an error | `middleware.NewGunzip().WithMaxDecompressedBytes(n)` |
+| `WithMaxBytes` | specified by the caller | 413 | `WithMaxBytes(n)` |
 
-> `WithMaxBytes` 依赖 `Content-Length` 只限制**压缩体**大小，无法防解压炸弹；
-> 与 `WithGunzip` 组合使用时请让 `WithGunzip` 位于更内层，两者互补。
+> `WithMaxBytes` relies on `Content-Length` and only limits the size of the **compressed** body, so it cannot
+> stop decompression bombs; when combining it with `WithGunzip`, put `WithGunzip` on the inner side — the two
+> complement each other.
 
-### CORS 与凭证、未授权来源
+### CORS, credentials and unauthorized origins
 
-**未授权来源默认透传（不下发 CORS 头，请求继续交给下游），而不是返回 403。**
+**Unauthorized origins pass through by default (no CORS headers emitted, the request continues downstream) rather than returning 403.**
 
-CORS 是**浏览器侧**的响应读取限制，而非服务端的请求准入控制：缺少
-`Access-Control-Allow-Origin` 时，浏览器已会阻止跨域脚本读取响应。若改成 403：
+CORS is a **browser-side** restriction on reading responses, not a server-side admission control: when
+`Access-Control-Allow-Origin` is missing, the browser already blocks cross-origin scripts from reading the
+response. Switching to 403 would instead:
 
-- **误伤非浏览器客户端**：curl、移动端、服务间调用、部分 HTTP 库会无条件带上
-  `Origin` 头，它们不受 CORS 约束，却会被 403 挡在业务逻辑之外。
-- **概念混淆**：把“该来源不能读响应”表达成了“该请求被禁止”。
-- 无额外安全收益：预检本就无法通过（浏览器不会发真实请求）；
-  真实请求即使放行，其响应也不可被跨域脚本读取。
+- **Punish non-browser clients**: curl, mobile apps, service-to-service calls and some HTTP libraries attach
+  an `Origin` header unconditionally; they aren't bound by CORS, yet a 403 would keep them out of the business logic.
+- **Confuse two different concepts**: it expresses "this origin must not read the response" as "this request is forbidden".
+- **Buy no extra safety**: the preflight would fail anyway (the browser never sends the real request), and even if
+  the real request went through, its response still couldn't be read by a cross-origin script.
 
-需要“只服务白名单来源”语义时，可显式开启严格模式：
+When you do need "only serve whitelisted origins" semantics, enable strict mode explicitly:
 
 ```go
-// 默认：透传（推荐）
+// default: pass through (recommended)
 server.Use(httpx.WithCors("https://app.example.com"))
 
-// 严格：未授权来源 → 403（适用于确定只面向白名单客户端的后端）
+// strict: unauthorized origins → 403 (for backends known to serve only whitelisted clients)
 mw := middleware.NewCORS("https://app.example.com").WithRejectUnauthorizedOrigin(true)
 server.Use(httpx.AsMiddleware(mw.Middleware()))
 ```
 
-> ⚠️ **不要用 CORS 当 CSRF 防护**。简单请求（表单 POST、img GET）本就不受 CORS 阻止，
-> 跨站请求仍会到达服务端（只是响应不可读）。状态变更接口请使用 CSRF token
-> 或 `SameSite` Cookie。
+> ⚠️ **Don't use CORS as CSRF protection**. Simple requests (form POSTs, img GETs) aren't blocked by CORS in the
+> first place, and cross-site requests still reach the server (it's only the response that can't be read). For
+> state-changing endpoints use a CSRF token or a `SameSite` cookie.
 
-按 Fetch 规范，携带凭证时不允许使用通配来源。因此 `WithCors("*")`
-**回显请求的具体 Origin**（并附 `Vary: Origin`）而不是发送 `*` ——
-否则浏览器会拒绝整个响应，带 `withCredentials` 的跨域请求必然失败。
+Per the Fetch spec, wildcard origins are not allowed together with credentials. That's why `WithCors("*")`
+**echoes the request's concrete Origin** (adding `Vary: Origin`) instead of sending `*` — otherwise the browser
+would reject the whole response and any cross-origin request with `withCredentials` would inevitably fail.
 
-> ⚠️ 允许所有来源 + 凭证意味着**任意站点**都能发起带凭证的跨域请求并读取响应。
-> 生产环境请改用显式来源列表；确实不需要 cookie/Authorization 时，
-> 可用 `middleware.NewCORS("*").WithCredentials(false)` 关闭凭证下发。
+> ⚠️ Allowing every origin *and* credentials means **any site** can issue a credentialed cross-origin request
+> and read the response. Use an explicit origin list in production; if cookies/Authorization really aren't
+> needed, disable credential emission with `middleware.NewCORS("*").WithCredentials(false)`.
 
-### 按路由聚合的中间件与路由模板
+### Per-route middleware and route patterns
 
-`WithRouteBreaker` 这类”按路由隔离”的中间件需要一个**路由模板**作为键，
-而不能用具体路径：`/users/1` 与 `/users/2` 若各建一个熔断器，
-“按路由隔离”会退化为“按请求隔离”（统计割裂、永远达不到熔断阈值），
-且熔断器注册表会随路径参数无界增长。
+"Per-route isolation" middleware such as `WithRouteBreaker` needs a **route pattern** as its key rather
+than a concrete path: if `/users/1` and `/users/2` each got their own breaker, "per-route isolation"
+would degrade into "per-request isolation" (fragmented statistics that never reach the breaker
+threshold), and the breaker registry would grow without bound with the number of path parameters.
 
-httpx 在进入中间件链之前解析出模板并写入 context，可用
-`middleware.PatternFromContext(ctx)` 读取：
+httpx resolves the pattern before entering the middleware chain and writes it into the context, where
+it can be read with `middleware.PatternFromContext(ctx)`:
 
 ```go
 import "github.com/chihqiang/infra-go/httpx/middleware"
 
 pattern := middleware.PatternFromContext(r.Context())
-// 命中 /users/{id} 时为 "GET /users/{id}"，未匹配路由时为空字符串
+// "GET /users/{id}" when it matches /users/{id}; an empty string when no route matched
 ```
 
-> **为什么不在中间件里直接读 `r.Pattern`**：全局中间件包在 `ServeMux` 外层，
-> 而 `net/http` 只在把请求分发到命中 handler 时才填充 `r.Pattern`，
-> 因此全局中间件中 `r.Pattern` 恒为空。httpx 用 `mux.Handler(r)` 预先解析并代为传递。
+> **Why not read `r.Pattern` directly inside the middleware**: global middleware wraps the outside of the
+> `ServeMux`, and `net/http` only fills in `r.Pattern` when it dispatches the request to the matching
+> handler, so `r.Pattern` is always empty in global middleware. httpx resolves it up front with
+> `mux.Handler(r)` and passes it along.
 >
-> 其它框架可自行调用 `middleware.ContextWithPattern(ctx, pattern)` 提供同等信息。
+> Other frameworks can call `middleware.ContextWithPattern(ctx, pattern)` to provide the same information.
 
-`RouteBreaker` 的键解析优先级：`r.Pattern` → context 中的模板 → 归一化路径
-（把形如 ID 的段换成 `{}`，如 `/users/123` → `/users/{}`），
-保证非 ServeMux 场景下基数仍有界。
+`RouteBreaker`'s key resolution priority: `r.Pattern` → the pattern in the context → a normalized path
+(replacing ID-like segments with `{}`, e.g. `/users/123` → `/users/{}`), which keeps the cardinality
+bounded even outside ServeMux.
 
-熔断器注册表（`breaker.GetBreaker`）按名称**永久缓存、不会自动淘汰**，
-因此务必保证名称基数有界。`breaker.RegistrySize()` 可用于观测，
-`breaker.RemoveBreaker(name)` 可释放不再使用的名称。
+The breaker registry (`breaker.GetBreaker`) **caches by name forever and never evicts automatically**,
+so the name cardinality must be bounded. `breaker.RegistrySize()` is available for observability and
+`breaker.RemoveBreaker(name)` releases names that are no longer used.
 
-用法：
+Usage:
 
 ```go
 server.Use(httpx.WithRecovery(), httpx.WithRequestID(), httpx.WithLogger("/healthz"))
 server.Use(httpx.WithCors("*"))
-server.Use(httpx.WithTracing("/health*", "/metrics/*"))   // 放最前，日志带 trace_id
+server.Use(httpx.WithTracing("/health*", "/metrics/*"))   // put first so logs carry trace_id
 server.Use(httpx.WithRateLimit(ratelimit.NewTokenBucket(100, 200)))
 server.Use(httpx.WithJWT(j, func(r *http.Request) string {
     return strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -541,56 +546,58 @@ server.Use(httpx.WithJWT(j, func(r *http.Request) string {
 server.Use(httpx.WithTimeout(5 * time.Second))
 ```
 
-### 直接使用 httpx/middleware 子包（其它框架 / 标准库）
+### Using the httpx/middleware subpackage directly (other frameworks / the standard library)
 
 ```go
 import "github.com/chihqiang/infra-go/httpx/middleware"
 
-// 标准 net/http
+// standard net/http
 handler := middleware.NewRecovery().Middleware()(
     middleware.NewRequestID().Middleware()(mux),
 )
 http.ListenAndServe(":8080", handler)
 
-// gin：用 WrapH 接入
+// gin: hook it up with WrapH
 router.Use(gin.WrapH(middleware.NewCORS("*").Middleware()(router)))
 ```
 
-错误响应机制：`middleware.WriteError(ctx, w, status, msg)`（导出）。渲染函数按以下顺序解析：
+Error response mechanism: `middleware.WriteError(ctx, w, status, msg)` (exported). The render function is resolved in this order:
 
-1. **请求 context 携带的**（`middleware.ContextWithErrorHandler`）——httpx 的 `Server` 在每个请求上注入统一 JSON（携带 `request_id`），使经 httpx 分发的请求保持 httpx 格式；
-2. 否则回退**进程级全局**（`middleware.SetErrorHandler`），默认 `http.Error` 纯文本。
+1. **Carried by the request context** (`middleware.ContextWithErrorHandler`) — the httpx `Server` injects the unified JSON renderer (carrying `request_id`) into every request, keeping httpx's format for requests dispatched through httpx;
+2. Otherwise it falls back to the **process-wide global** (`middleware.SetErrorHandler`), which defaults to plain-text `http.Error`.
 
-> 为什么不用 `init()` 注入全局：那样“仅 import httpx”就会静默改变同进程内 gin/echo 路由
-> （它们也在用 `middleware` 子包）的错误响应格式，而 import 与调用顺序无关、无法 opt-out。
-> 按请求注入后，httpx 只影响自己分发的请求；jwt 等通过请求 context 调用
-> `middleware.WriteError` / `WriteUnauthorized` 的组件也会自动继承该格式。
+> Why not inject the global from `init()`: that would mean "merely importing httpx" silently changes the
+> error response format of gin/echo routes in the same process (they use the `middleware` subpackage too),
+> and since imports are order-independent there would be no way to opt out.
+> With per-request injection, httpx only affects the requests it dispatches itself; components such as jwt
+> that call `middleware.WriteError` / `WriteUnauthorized` with the request context inherit that format
+> automatically as well.
 >
-> 不经 httpx 分发、希望进程级生效时（如直接用子包供 gin/echo），显式调用
-> `middleware.SetErrorHandler(fn)`。需要在自定义 `http.Server` 上复用 httpx 格式时，
-> 可用 `middleware.ContextWithErrorHandler(ctx, fn)` 自行注入。
+> When you don't dispatch through httpx but want the process-wide behavior (e.g. using the subpackage
+> directly with gin/echo), call `middleware.SetErrorHandler(fn)` explicitly. To reuse the httpx format on a
+> custom `http.Server`, inject it yourself with `middleware.ContextWithErrorHandler(ctx, fn)`.
 
-### 自定义 / 第三方标准中间件接入 httpx
+### Integrating custom / third-party standard middleware into httpx
 
-`httpx.AsMiddleware(mw)` 把任意标准 `func(http.Handler) http.Handler` 中间件适配为 `httpx.Middleware`：
-
-```go
-server.Use(httpx.AsMiddleware(myStdMiddleware))                            // 自定义/第三方
-server.Use(httpx.AsMiddleware(middleware.NewCORS("*").Middleware()))       // 子包 OO 形态
-```
-
-### skipPaths / ignorePaths 匹配
-
-`WithLogger` / `WithRateLimit` / `WithCryption` 的 `skipPaths`、`WithTracing` 的 `ignorePaths` 使用 `httpx/x` 子包的 `PathMatcher`，支持精确匹配（`/health`）、前缀通配（`/health*`，跨目录）、glob（`/api/*/x`，不跨目录），见 [httpx-x](./httpx-x.md)。
-
-## 内置路由：PprofRoutes
+`httpx.AsMiddleware(mw)` adapts any standard `func(http.Handler) http.Handler` middleware into an `httpx.Middleware`:
 
 ```go
-server.AddRoutes(httpx.PprofRoutes(""))                 // 默认前缀 /debug/pprof
-server.AddRoutes(httpx.PprofRoutes(""), httpx.WithMiddleware(authMW)) // 生产建议加认证
+server.Use(httpx.AsMiddleware(myStdMiddleware))                            // custom/third-party
+server.Use(httpx.AsMiddleware(middleware.NewCORS("*").Middleware()))       // subpackage OO form
 ```
 
-## Server 配置
+### skipPaths / ignorePaths matching
+
+The `skipPaths` of `WithLogger` / `WithRateLimit` / `WithCryption` and the `ignorePaths` of `WithTracing` use the `PathMatcher` from the `httpx/x` subpackage, supporting exact matches (`/health`), prefix wildcards (`/health*`, crossing directories) and globs (`/api/*/x`, not crossing directories). See [httpx-x](./httpx-x.md).
+
+## Built-in routes: PprofRoutes
+
+```go
+server.AddRoutes(httpx.PprofRoutes(""))                 // default prefix /debug/pprof
+server.AddRoutes(httpx.PprofRoutes(""), httpx.WithMiddleware(authMW)) // add auth in production
+```
+
+## Server configuration
 
 ```go
 server := httpx.NewServer(httpx.ServerConfig{
@@ -601,7 +608,7 @@ server := httpx.NewServer(httpx.ServerConfig{
 })
 ```
 
-或 `RunOption` 编程式覆盖：
+Or override programmatically with `RunOption`:
 
 ```go
 httpx.NewServer(httpx.ServerConfig{...},
@@ -612,9 +619,9 @@ httpx.NewServer(httpx.ServerConfig{...},
 )
 ```
 
-## 附录
+## Appendix
 
-### 自定义校验器
+### Custom validator
 
 ```go
 import "github.com/chihqiang/infra-go/httpx/binding"
@@ -624,24 +631,24 @@ type myValidator struct{}
 func (v *myValidator) ValidateStruct(obj any) error { return nil }
 func (v *myValidator) Engine() any                  { return nil }
 
-binding.SetValidateFn((&myValidator{}).ValidateStruct) // 接入自定义校验
-binding.SetValidateFn(nil)                             // 恢复默认（go-playground/validator）
+binding.SetValidateFn((&myValidator{}).ValidateStruct) // plug in custom validation
+binding.SetValidateFn(nil)                             // restore the default (go-playground/validator)
 ```
 
-### 绑定器直接使用（httpx/binding）
+### Using binders directly (httpx/binding)
 
 ```go
 import "github.com/chihqiang/infra-go/httpx/binding"
 
 var obj MyReq
-_ = binding.JSON.BindBody([]byte(`{...}`), &obj)   // 从原始字节绑定
-b := binding.Default(r.Method, r.Header.Get("Content-Type")) // 绑定器选择
+_ = binding.JSON.BindBody([]byte(`{...}`), &obj)   // bind from raw bytes
+b := binding.Default(r.Method, r.Header.Get("Content-Type")) // binder selection
 ```
 
-### 常见中间件封装示例
+### Common middleware wrapping example
 
 ```go
-// 封装「绑定 + 校验 + 权限」的处理器（供路由挂载）
+// a handler wrapping "binding + validation + permissions" (for mounting on a route)
 func authzMW(roles ...string) httpx.Middleware {
     return func(next http.HandlerFunc) http.HandlerFunc {
         return func(w http.ResponseWriter, r *http.Request) {

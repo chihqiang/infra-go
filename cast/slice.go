@@ -5,16 +5,16 @@ import (
 	"strings"
 )
 
-// --- 切片转换 ---
+// --- Slice conversion ---
 
-// ToIntSlice 将 any 转换为 []int，转换失败返回空切片。
-// 支持 []int、[]any（逐元素转换）、字符串（逗号分隔）。
+// ToIntSlice converts any to []int, returning an empty slice if the conversion fails.
+// Supports []int, []any (converted element by element) and comma-separated strings.
 func ToIntSlice(v any) []int {
 	val, _ := ToIntSliceE(v)
 	return val
 }
 
-// ToIntSliceE 将 any 转换为 []int，返回转换结果和错误。
+// ToIntSliceE converts any to []int and returns the result along with an error.
 func ToIntSliceE(v any) ([]int, error) {
 	switch val := v.(type) {
 	case nil:
@@ -60,14 +60,14 @@ func ToIntSliceE(v any) ([]int, error) {
 	}
 }
 
-// ToStringSlice 将 any 转换为 []string，转换失败返回空切片。
-// 支持 []string、[]any（逐元素转换）、字符串（逗号分隔）。
+// ToStringSlice converts any to []string, returning an empty slice if the conversion fails.
+// Supports []string, []any (converted element by element) and comma-separated strings.
 func ToStringSlice(v any) []string {
 	val, _ := ToStringSliceE(v)
 	return val
 }
 
-// ToStringSliceE 将 any 转换为 []string，返回转换结果和错误。
+// ToStringSliceE converts any to []string and returns the result along with an error.
 func ToStringSliceE(v any) ([]string, error) {
 	switch val := v.(type) {
 	case nil:

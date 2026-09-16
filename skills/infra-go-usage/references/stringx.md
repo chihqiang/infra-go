@@ -1,22 +1,23 @@
 # stringx
 
-常用字符串工具包，提供随机字符串生成、字符串判断、转换、拆分连接等实用函数。
+A general-purpose string utility package offering random string generation, string checks,
+conversions, splitting/joining, and other practical helpers.
 
-## 特性
+## Features
 
-- **随机生成**：支持大小写、数字类型选择，线程安全
-- **字符串判断**：空值检测、空白检测、默认值回退
-- **命名转换**：驼峰 ↔ 蛇形互转、首字母大小写
-- **字符串操作**：反转、截取、分割、连接、重复、分块
-- **搜索统计**：子串查找、出现次数统计
+- **Random generation**: upper/lower/digit type selection, safe for concurrent use
+- **String checks**: emptiness checks, blank detection, default fallback
+- **Case conversion**: camelCase ↔ snake_case, first-letter case
+- **String operations**: reverse, substring, split, join, repeat, chunk
+- **Search and counting**: substring lookup and occurrence counting
 
-## 安装
+## Installation
 
 ```bash
 go get github.com/chihqiang/infra-go/stringx
 ```
 
-## 快速开始
+## Quick start
 
 ```go
 package main
@@ -28,26 +29,26 @@ import (
 )
 
 func main() {
-    // 随机字符串
+    // random strings
     fmt.Println(stringx.Rand())                     // "aB3kZ9xQ"
     fmt.Println(stringx.Randn(6, stringx.RandTypeUpper)) // "ABCDEF"
     fmt.Println(stringx.RandId())                   // "3f2a8b1c9d4e5f6a"
 
-    // 字符串判断
+    // string checks
     fmt.Println(stringx.IsEmpty(""))                // true
     fmt.Println(stringx.IsNotBlank("  hello  "))    // true
     fmt.Println(stringx.DefaultIfBlank("", "N/A"))  // "N/A"
 
-    // 命名转换
+    // case conversion
     fmt.Println(stringx.ToSnakeCase("UserName"))    // "user_name"
     fmt.Println(stringx.Capitalize("hello"))        // "Hello"
 
-    // 字符串操作
+    // string operations
     fmt.Println(stringx.Reverse("hello"))           // "olleh"
     fmt.Println(stringx.Substr("hello", 1, 3))     // "el"
     fmt.Println(stringx.Repeat("ab", 3))           // "ababab"
 
-    // 拆分与连接
+    // split and join
     fmt.Println(stringx.Split("a,,b,c", ','))       // ["a" "b" "c"]
     fmt.Println(stringx.Join('-', "a", "b", "c"))   // "a-b-c"
 }
@@ -55,23 +56,23 @@ func main() {
 
 ## API
 
-### 随机字符串
+### Random strings
 
-| 函数 | 说明 |
+| Function | Description |
 | ------ | ------ |
-| `Rand() string` | 生成默认长度（8）随机字符串 |
-| `Randn(n int, randType RandType) string` | 生成指定长度和类型的随机字符串 |
-| `RandId() string` | 生成加密安全的 16 位随机 ID |
-| `Seed(seed int64)` | 设置随机种子 |
+| `Rand() string` | Generate a random string of the default length (8) |
+| `Randn(n int, randType RandType) string` | Generate a random string of the given length and type |
+| `RandId() string` | Generate a cryptographically secure 16-character random ID |
+| `Seed(seed int64)` | Set the random seed |
 
-#### 随机类型
+#### Random types
 
-| 类型 | 说明 |
+| Type | Description |
 | ------ | ------ |
-| `RandTypeAll` | 全部：大小写 + 数字（默认） |
-| `RandTypeUpper` | 仅大写字母 |
-| `RandTypeLower` | 仅小写字母 |
-| `RandTypeDigit` | 仅数字 |
+| `RandTypeAll` | All: upper + lower + digits (default) |
+| `RandTypeUpper` | Uppercase letters only |
+| `RandTypeLower` | Lowercase letters only |
+| `RandTypeDigit` | Digits only |
 
 ```go
 stringx.Randn(10, stringx.RandTypeAll)     // "aB3kZ9xQ1y"
@@ -80,41 +81,41 @@ stringx.Randn(10, stringx.RandTypeLower)   // "abcdefghij"
 stringx.Randn(10, stringx.RandTypeDigit)   // "1234567890"
 ```
 
-### 字符串判断
+### String checks
 
-| 函数 | 说明 |
+| Function | Description |
 | ------ | ------ |
-| `IsEmpty(s string) bool` | 判断字符串是否为空 |
-| `IsNotBlank(s string) bool` | 判断字符串是否非空且非纯空白 |
-| `DefaultIfBlank(s, def string) string` | 若为空或纯空白，返回默认值 |
+| `IsEmpty(s string) bool` | Whether the string is empty |
+| `IsNotBlank(s string) bool` | Whether the string is non-empty and not all whitespace |
+| `DefaultIfBlank(s, def string) string` | Return the default when the string is empty or all whitespace |
 
-### 命名转换
+### Case conversion
 
-| 函数 | 说明 |
+| Function | Description |
 | ------ | ------ |
-| `ToCamelCase(s string) string` | 首字母转小写 |
-| `ToSnakeCase(s string) string` | 驼峰转蛇形命名 |
-| `Capitalize(s string) string` | 首字母转大写 |
+| `ToCamelCase(s string) string` | Lowercase the first letter |
+| `ToSnakeCase(s string) string` | Convert camelCase to snake_case |
+| `Capitalize(s string) string` | Uppercase the first letter |
 
 ```go
 stringx.ToCamelCase("Hello")    // "hello"
-stringx.ToCamelCase("Äbc")      // "äbc"（多字节首字符正确处理）
+stringx.ToCamelCase("Äbc")      // "äbc" (leading multi-byte rune handled correctly)
 stringx.ToSnakeCase("HTTPServer") // "http_server"
 stringx.Capitalize("hello")     // "Hello"
 ```
 
-> `ToCamelCase` / `Capitalize` 使用 `utf8.DecodeRuneInString` 定位首字符边界，
-> 支持多字节 UTF-8（中文、拉丁扩展、Emoji 等），不会产生字节截断。
-> 输入为非法 UTF-8 时原样返回。
+> `ToCamelCase` / `Capitalize` locate the first rune boundary with `utf8.DecodeRuneInString`,
+> supporting multi-byte UTF-8 (Chinese, Latin Extended, emoji, and so on) without byte
+> truncation. Invalid UTF-8 input is returned unchanged.
 
-### 字符串操作
+### String operations
 
-| 函数 | 说明 |
+| Function | Description |
 | ------ | ------ |
-| `Reverse(s string) string` | 反转字符串 |
-| `Substr(s string, start, end int) string` | 安全截取子串，支持负数索引 |
-| `Repeat(s string, n int) string` | 重复字符串 n 次 |
-| `Chunk(s string, size int) []string` | 按固定长度分块 |
+| `Reverse(s string) string` | Reverse a string |
+| `Substr(s string, start, end int) string` | Safe substring extraction with negative indices |
+| `Repeat(s string, n int) string` | Repeat a string n times |
+| `Chunk(s string, size int) []string` | Split into fixed-length chunks |
 
 ```go
 stringx.Reverse("hello")              // "olleh"
@@ -124,24 +125,24 @@ stringx.Repeat("ab", 3)              // "ababab"
 stringx.Chunk("abcdef", 2)           // ["ab" "cd" "ef"]
 ```
 
-> `Repeat` 不会 panic：`n <= 0`、`s` 为空，或结果长度超过 1 GiB 上限时返回空字符串。
-> 需要生成超过该上限的内容时请自行拼接。
+> `Repeat` never panics: it returns an empty string when `n <= 0`, when `s` is empty, or when the
+> result would exceed the 1 GiB limit. Concatenate manually if you need more than that.
 
-### 拆分与连接
+### Split and join
 
-| 函数 | 说明 |
+| Function | Description |
 | ------ | ------ |
-| `Join(sep byte, elem ...string) string` | 连接字符串，跳过空串 |
-| `Split(s string, sep byte) []string` | 拆分字符串，自动去除空串 |
+| `Join(sep byte, elem ...string) string` | Join strings, skipping empty ones |
+| `Split(s string, sep byte) []string` | Split a string, dropping empty parts |
 
 ```go
 stringx.Join(',', "a", "", "b", "c")  // "a,b,c"
 stringx.Split("a,,b,c", ',')          // ["a" "b" "c"]
 ```
 
-### 搜索统计
+### Search and counting
 
-| 函数 | 说明 |
+| Function | Description |
 | ------ | ------ |
-| `IndexOf(s, substr string) int` | 返回子串首次出现的位置，未找到返回 -1 |
-| `Count(s, substr string) int` | 计算子串出现次数 |
+| `IndexOf(s, substr string) int` | Index of the first occurrence of substr, or -1 when not found |
+| `Count(s, substr string) int` | Count the occurrences of substr |

@@ -1,70 +1,70 @@
 ---
 name: infra-go-usage
-description: '使用 infra-go Go 基础设施库在业务项目中搭建服务。覆盖 conf（配置加载）、logger（结构化日志）、orm（MySQL/PostgreSQL/SQLite）、redisx（Redis 与分布式锁）、cache（统一缓存：内存/Redis）、httpx（HTTP 服务、参数绑定、统一 Response[T] 响应、内置中间件：熔断/超时/限流/加密/降载/JWT 认证，核心在 httpx/middleware 子包）、jwt（JWT 封装与认证）、ratelimit（内存/Redis 限流器）、breaker（熔断器）、retry（重试）、taskq（异步任务队列）、storage（统一对象存储：本地文件/OSS/COS/KODO，写入/读取/存在判断/删除/URL）、websocket（实时通信）、trace（链路追踪：agent/span/传播）、hash（密码/摘要/加密/HMAC 签名）、cast（类型转换）、stringx（字符串）、syncx（并发原语）、service（ServiceGroup 服务编排）。Use when: 用 Go 写业务服务需要选型/初始化/组装 infra-go 模块，需要把 conf+logger+orm+redisx+httpx+jwt 组合起来，或需要统一响应、中间件、优雅关闭等基础设施。'
+description: 'Build services in business projects with the infra-go Go infrastructure library. Covers conf (config loading), logger (structured logging), orm (MySQL/PostgreSQL/SQLite), redisx (Redis and distributed locks), cache (unified cache: in-memory/Redis), httpx (HTTP server, parameter binding, unified Response[T] responses, built-in middleware: breaker/timeout/rate limiting/encryption/load shedding/JWT auth, core in the httpx/middleware subpackage), jwt (JWT wrapping and authentication), ratelimit (in-memory/Redis limiters), breaker (circuit breaker), retry (retries), taskq (async task queue), storage (unified object storage: local files/OSS/COS/KODO, write/read/exists/delete/URL), websocket (realtime communication), trace (distributed tracing: agent/span/propagation), hash (password/digest/encryption/HMAC signing), cast (type conversion), stringx (strings), syncx (concurrency primitives), service (ServiceGroup service orchestration). Use when: writing a Go business service and you need to choose, initialize or assemble infra-go modules, combine conf+logger+orm+redisx+httpx+jwt, or set up unified responses, middleware, graceful shutdown and other infrastructure.'
 ---
 
-# infra-go 使用指南
+# infra-go usage guide
 
-指导如何在业务项目中正确使用 `github.com/chihqiang/infra-go` 各模块，包括模块选型、初始化顺序、组装方式与验收标准。适用于：新建 Go 业务服务，或给现有服务接入某个基础设施能力。
+How to use each `github.com/chihqiang/infra-go` module correctly in a business project: module selection, initialization order, assembly and acceptance criteria. Applies to: starting a new Go business service, or wiring one infrastructure capability into an existing service.
 
 ## When to Use
 
-- 新建 Go 业务服务，需要搭建配置、日志、数据库、Redis、HTTP 等基础设施
-- 需要决定某需求用哪个 infra-go 模块（见决策表）
-- 需要把多个模块（如 conf + orm + httpx + jwt）正确组装
-- 需要按项目约定处理错误、上下文与统一响应
+- Starting a new Go business service that needs configuration, logging, database, Redis, HTTP and other infrastructure
+- Deciding which infra-go module fits a requirement (see the decision table)
+- Assembling several modules (such as conf + orm + httpx + jwt) correctly
+- Handling errors, context and unified responses the way the project expects
 
-## Module Decision Table（选型决策）
+## Module Decision Table
 
-| 需求 | 模块 | 关键入口 |
+| Need | Module | Key entry point |
 |------|------|----------|
-| 加载 JSON/YAML 配置、默认值、环境变量 | `conf` | `conf.MustLoad` |
-| 结构化 / 轮转日志 | `logger` | 包级 `logger.Info` 或 `logger.New` |
-| 数据库 CRUD（MySQL/Postgres/SQLite） | `orm` | `orm.MustNew` |
-| Redis 缓存 / 分布式锁 | `redisx` | `redisx.MustNew` |
-| 进程内内存缓存（热点数据） | `cache` | `cache.NewMemCache` |
-| 分布式缓存（跨实例共享） | `cache` | `cache.NewRedisCache` |
-| HTTP 服务 / 参数绑定 / 统一响应 | `httpx` | `httpx.NewServer` |
-| HTTP 通用中间件（熔断/超时/加密/追踪等） | `httpx` | `httpx.WithRecovery` · `httpx.WithRateLimit` · `httpx.WithTracing` … |
-| 自定义 / 第三方标准中间件接入 | `httpx` | `httpx.AsMiddleware` |
-| 接口鉴权 | `jwt` | `jwt.MustNew` + `httpx.WithJWT`（或 `j.AuthMiddleware`） |
-| 接口限流（限流器） | `ratelimit` | `ratelimit.NewTokenBucket` / `NewRedisTokenBucket`；HTTP 中间件 `httpx.WithRateLimit` |
-| 下游保护（熔断快速失败） | `breaker` | `breaker.NewBreaker` 或 `breaker.Do`；按路由隔离用 `httpx.WithRouteBreaker` |
-| 失败重试 | `retry` | `retry.Do` |
-| 异步任务队列 | `taskq` | `taskq.NewProducer` / `NewConsumer` |
-| 对象存储（本地文件 / OSS/COS/KODO） | `storage` | `storage.New` |
-| WebSocket 实时通信 | `websocket` | `websocket.MustNew` |
-| 链路追踪（agent / span / 传播） | `trace` | `trace.StartAgent` |
-| HTTP 链路追踪中间件 | `httpx` | `httpx.WithTracing` |
-| 密码 / 摘要哈希 | `hash` | `hash.BcryptHashDefault` |
-| 敏感数据加密 / 请求签名 | `hash` | `hash.AESGCMEncrypt` / `hash.HMACSign` |
-| 类型安全转换 | `cast` | `cast.To[T]` |
-| 字符串工具 | `stringx` | `stringx.RandId` |
-| 通用小工具（路径匹配 / 客户端 IP） | `httpx/x` | `x.NewPathMatcher` · `x.ClientIP`（httpx.With* 内部使用） |
-| 响应包装（状态/字节/超时/加密缓冲） | `httpx/respw` | `respw.NewRecorderWriter` · `NewTimeoutWriter` · `NewCryptionWriter` |
-| 并发原语 | `syncx` | `syncx.NewSingleFlight` |
-| 并发启停多个服务 | `service` | `service.NewServiceGroup` |
+| Load JSON/YAML config, defaults, environment variables | `conf` | `conf.MustLoad` |
+| Structured / rotating logs | `logger` | package-level `logger.Info` or `logger.New` |
+| Database CRUD (MySQL/Postgres/SQLite) | `orm` | `orm.MustNew` |
+| Redis cache / distributed lock | `redisx` | `redisx.MustNew` |
+| In-process memory cache (hot data) | `cache` | `cache.NewMemCache` |
+| Distributed cache (shared across instances) | `cache` | `cache.NewRedisCache` |
+| HTTP server / parameter binding / unified responses | `httpx` | `httpx.NewServer` |
+| General HTTP middleware (breaker/timeout/encryption/tracing…) | `httpx` | `httpx.WithRecovery` · `httpx.WithRateLimit` · `httpx.WithTracing` … |
+| Custom / third-party standard middleware integration | `httpx` | `httpx.AsMiddleware` |
+| API authentication | `jwt` | `jwt.MustNew` + `httpx.WithJWT` (or `j.AuthMiddleware`) |
+| API rate limiting (limiters) | `ratelimit` | `ratelimit.NewTokenBucket` / `NewRedisTokenBucket`; HTTP middleware `httpx.WithRateLimit` |
+| Downstream protection (fail fast via breaker) | `breaker` | `breaker.NewBreaker` or `breaker.Do`; per-route isolation with `httpx.WithRouteBreaker` |
+| Failure retries | `retry` | `retry.Do` |
+| Async task queue | `taskq` | `taskq.NewProducer` / `NewConsumer` |
+| Object storage (local files / OSS/COS/KODO) | `storage` | `storage.New` |
+| WebSocket realtime communication | `websocket` | `websocket.MustNew` |
+| Distributed tracing (agent / span / propagation) | `trace` | `trace.StartAgent` |
+| HTTP tracing middleware | `httpx` | `httpx.WithTracing` |
+| Password / digest hashing | `hash` | `hash.BcryptHashDefault` |
+| Sensitive-data encryption / request signing | `hash` | `hash.AESGCMEncrypt` / `hash.HMACSign` |
+| Type-safe conversion | `cast` | `cast.To[T]` |
+| String helpers | `stringx` | `stringx.RandId` |
+| General small utilities (path matching / client IP) | `httpx/x` | `x.NewPathMatcher` · `x.ClientIP` (used internally by httpx.With*) |
+| Response wrapping (status/bytes/timeout/encryption buffering) | `httpx/respw` | `respw.NewRecorderWriter` · `NewTimeoutWriter` · `NewCryptionWriter` |
+| Concurrency primitives | `syncx` | `syncx.NewSingleFlight` |
+| Start/stop several services concurrently | `service` | `service.NewServiceGroup` |
 
-**分支逻辑（决策点）**：
+**Branching logic (decision points)**:
 
-- 单机限流 → 内存限流器；多实例共享限流 → Redis 限流器；HTTP 挂载一律 `httpx.WithRateLimit(limiter, ...)`
-- HTTP 中间件：通用能力优先用 `httpx.With*`（实现收敛在 `httpx/middleware` 子包，返回标准 `func(http.Handler) http.Handler`，可被 gin/echo 复用）
-- 短期临时数据（缓存/会话/计数器）→ `redisx`；需要可靠持久化与事务 → `orm`
-- 接口需实时返回 → `httpx`（必要时 + `websocket`）；允许异步消费 → `taskq`
-- 需要互斥保护临界区 → `redisx.Locker`（跨实例）或 `syncx`（单进程）
-- 一次请求内防缓存击穿/重复执行 → `syncx.NewSingleFlight`
-- 文件上传/下载统一接口 → `storage`（Driver 决定 local/OSS/COS/KODO）
+- Single-host rate limiting → in-memory limiter; shared across instances → Redis limiter; on HTTP always mount with `httpx.WithRateLimit(limiter, ...)`
+- HTTP middleware: prefer `httpx.With*` for common capabilities (implementations converge in the `httpx/middleware` subpackage, returning the standard `func(http.Handler) http.Handler`, so gin/echo can reuse them)
+- Short-lived temporary data (cache/session/counters) → `redisx`; reliable persistence and transactions → `orm`
+- APIs that must respond synchronously → `httpx` (plus `websocket` when needed); async consumption is acceptable → `taskq`
+- Mutual exclusion around a critical section → `redisx.Locker` (cross-instance) or `syncx` (single process)
+- Preventing cache stampede / duplicate execution within one request → `syncx.NewSingleFlight`
+- A unified interface for file upload/download → `storage` (the Driver decides local/OSS/COS/KODO)
 
-## Workflow（完整工作流）
+## Workflow
 
-### Step 1 — 需求分析：确定所需模块
+### Step 1 — Requirement analysis: decide which modules are needed
 
-1. 列出服务的全部基础设施需求（配置、日志、存储、HTTP、鉴权、限流、重试、队列、实时通信…）
-2. 用决策表为每项需求选一个模块
-3. 记录模块间的先后依赖（如 jwt 依赖 conf 提供的 Secret；ServiceGroup 依赖各服务启停）
-4. 按推荐业务目录结构搭骨架（config / svc / route / handler / logic / model / middleware），见 [project-structure](./references/project-structure.md)
+1. List every infrastructure requirement of the service (config, logging, storage, HTTP, auth, rate limiting, retries, queues, realtime communication…)
+2. Use the decision table to pick one module per requirement
+3. Note the ordering dependencies between modules (e.g. jwt depends on the Secret supplied by conf; ServiceGroup depends on each service's start/stop)
+4. Lay out a skeleton following the recommended business directory structure (config / svc / route / handler / logic / model / middleware), see [project-structure](./references/project-structure.md)
 
-### Step 2 — 引入依赖
+### Step 2 — Add the dependencies
 
 ```bash
 go get github.com/chihqiang/infra-go/conf
@@ -74,18 +74,19 @@ go get github.com/chihqiang/infra-go/orm
 go get github.com/chihqiang/infra-go/redisx
 go get github.com/chihqiang/infra-go/jwt
 go get github.com/chihqiang/infra-go/ratelimit
-# ...按需引入
+# ...import as needed
 ```
 
-模块间零强制依赖，按需 import：未 import 的模块不会进入消费者 `go.mod` / `go.sum`。
+There are no mandatory dependencies between modules; import what you use — a module you never import doesn't enter the consumer's `go.mod` / `go.sum`.
 
-> ⚠️ 包内粒度例外：`storage`（三家云 SDK）、`orm`（三个 driver）、`trace`（四类 exporter）
-> 的同类实现打包在同一 package 内，**无法只选一家**——只 import `orm` 且仅用 MySQL，
-> 也会编译进 postgres / sqlite driver（消费者 `go.sum` 8 行 → 56 行，二进制 2.5M → 7.5M）。
-> 若对产物体积敏感（容器镜像、冷启动），可绕过封装直接用 `gorm.io/driver/*`、
-> `go.opentelemetry.io/otel/exporters/*` 或云厂商官方 SDK。
+> ⚠️ Exception at package granularity: the peer implementations in `storage` (three cloud SDKs),
+> `orm` (three drivers) and `trace` (four exporter kinds) are bundled into a single package, so
+> **you cannot pick just one** — importing `orm` and using only MySQL still compiles in the
+> postgres / sqlite drivers (consumer `go.sum` 8 lines → 56 lines, binary 2.5M → 7.5M).
+> If artifact size matters (container images, cold starts), bypass the wrapper and use
+> `gorm.io/driver/*`, `go.opentelemetry.io/otel/exporters/*` or the cloud vendors' official SDKs directly.
 
-### Step 3 — 用 conf 定义并加载配置
+### Step 3 — Define and load config with conf
 
 ```go
 type Config struct {
@@ -99,18 +100,18 @@ var cfg Config
 conf.MustLoad("config.yaml", &cfg, conf.UseEnv())
 ```
 
-标签指令速查：`default=...` 默认值；`range=[a:b]` 数值范围；`options=[a,b]` 枚举；`optional` 可选；`env=VAR` 优先环境变量；配置内可用 `${VAR}` 引用环境变量（配合 `conf.UseEnv()`）。
+Tag directive quick reference: `default=...` default value; `range=[a:b]` numeric range; `options=[a,b]` enum; `optional` optional; `env=VAR` prefer the environment variable; inside the config, `${VAR}` references an environment variable (together with `conf.UseEnv()`).
 
-### Step 4 — 按依赖顺序初始化组件
+### Step 4 — Initialize components in dependency order
 
-遵循 `New` 返回 error、`MustNew` 出错 panic 的约定：
+Follow the convention that `New` returns an error and `MustNew` panics on error:
 
 ```go
-// 1. 日志（全局，最先初始化）
+// 1. Logging (global, initialized first)
 logger.New(logger.Config{Level: logger.InfoLevel, AppName: "my-service"})
 defer logger.Sync()
 
-// 2. 数据库
+// 2. Database
 db := orm.MustNew(orm.Config{Driver: orm.DriverMySQL, Host: cfg.Host, ...})
 defer orm.Close(db)
 
@@ -118,19 +119,19 @@ defer orm.Close(db)
 client := redisx.MustNew(redisx.Config{Addr: cfg.RedisAddr, KeyPrefix: "myapp"})
 defer client.Close()
 
-// 4. JWT（供中间件使用）
+// 4. JWT (used by middleware)
 j := jwt.MustNew(jwt.Config{Secret: cfg.JWTSecret, ...})
 
-// 5. 链路追踪（可选；随后用 httpx.WithTracing 挂 HTTP 埋点）
+// 5. Distributed tracing (optional; then instrument HTTP with httpx.WithTracing)
 trace.StartAgent(trace.Config{Name: "my-service", Endpoint: cfg.OtelEndpoint})
 defer trace.StopAgent()
 ```
 
-约定：全局单例/服务级组件用 `MustXxx`（启动失败即 panic）；可恢复局部对象用 `Xxx` 显式处理 error；持有连接或后台 goroutine 的组件都 `defer Close/Stop/Sync`。
+Convention: use `MustXxx` for global singletons / service-level components (panic if startup fails); use `Xxx` and handle the error explicitly for recoverable local objects; every component holding connections or background goroutines gets a `defer Close/Stop/Sync`.
 
-### Step 5 — 用 httpx 组装 HTTP 服务与中间件
+### Step 5 — Assemble the HTTP server and middleware with httpx
 
-1. 定义请求结构体，用 `binding` 标签校验：
+1. Define request structs and validate them with `binding` tags:
 
 ```go
 type CreateUserRequest struct {
@@ -139,7 +140,7 @@ type CreateUserRequest struct {
 }
 ```
 
-2. 注册路由，`MustBind*` 一步完成绑定 + 校验 + 自动错误响应：
+2. Register routes; `MustBind*` does binding + validation + automatic error response in one step:
 
 ```go
 server := httpx.NewServer(httpx.ServerConfig{Host: "0.0.0.0", Port: 8080})
@@ -148,79 +149,79 @@ server.AddRoute(httpx.Route{
     Handler: func(w http.ResponseWriter, r *http.Request) {
         var req CreateUserRequest
         if err := httpx.MustBindJSON(w, r, &req); err != nil {
-            return // 已自动写 400
+            return // 400 already written automatically
         }
-        httpx.OkJSON(w, createUser(req)) // 自动包成 Response[T]，code=0, msg=ok
+        httpx.OkJSON(w, createUser(req)) // wrapped into Response[T] automatically: code=0, msg=ok
     },
 })
 ```
 
-3. 挂中间件（请求 ID、恢复、追踪、限流、JWT 认证等）：
+3. Mount middleware (request ID, recovery, tracing, rate limiting, JWT auth, etc.):
 
 ```go
-server.Use(httpx.WithTracing("/healthz"))          // 链路（放最前，日志带 trace_id）
+server.Use(httpx.WithTracing("/healthz"))          // tracing (put first so logs carry trace_id)
 server.Use(httpx.WithRequestID())
 server.Use(httpx.WithRecovery())
 server.Use(httpx.WithCors("*"))
-server.Use(httpx.WithRateLimit(ratelimit.NewTokenBucket(100, 200))) // 限流 429
-server.Use(httpx.WithJWT(j, func(r *http.Request) string {          // JWT 认证
+server.Use(httpx.WithRateLimit(ratelimit.NewTokenBucket(100, 200))) // rate limiting: 429
+server.Use(httpx.WithJWT(j, func(r *http.Request) string {          // JWT auth
     return strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 }))
 ```
 
-> 通用/第三方标准中间件：`server.Use(httpx.AsMiddleware(myStdMiddleware))`。中间件核心逻辑在 `httpx/middleware` 子包，也可直接用 `middleware.NewXxx().Middleware()` 供 gin/echo/标准库复用。
+> General/third-party standard middleware: `server.Use(httpx.AsMiddleware(myStdMiddleware))`. The middleware core logic lives in the `httpx/middleware` subpackage, and you can also use `middleware.NewXxx().Middleware()` directly for reuse with gin/echo/the standard library.
 
-4. 启动（阻塞，支持 SIGINT/SIGTERM/SIGHUP 优雅关闭）：
+4. Start it (blocking; supports graceful shutdown on SIGINT/SIGTERM/SIGHUP):
 
 ```go
 server.Start()
 ```
 
-### Step 6 — 用 service 编排多个服务的生命周期
+### Step 6 — Orchestrate the lifecycle of several services with service
 
 ```go
 sg := service.NewServiceGroup()
-sg.Add(service.AsService(server))               // *httpx.Server：AsService 适配 Start()/Stop() error
-sg.Add(service.WithStart(func() { _ = consumer.Run() })) // taskq 消费者：用 WithStart 包装
-sg.Start() // 阻塞，全部退出后返回；Stop 保证只执行一次
+sg.Add(service.AsService(server))               // *httpx.Server: AsService adapts Start()/Stop() error
+sg.Add(service.WithStart(func() { _ = consumer.Run() })) // taskq consumer: wrap it with WithStart
+sg.Start() // blocking; returns once everything has exited; Stop is guaranteed to run only once
 ```
 
-### Step 7 — 按约定处理错误、上下文与统一响应
+### Step 7 — Handle errors, context and unified responses the agreed way
 
-- 错误信息用英文，注释用中文（项目统一风格）
-- HTTP 层统一 `httpx.OkJSON(w, data)` / `httpx.OkJSONCtx(ctx, w, data)` / `httpx.WriteHTTPError(w, status, msg)` / `httpx.WriteHTTPErrorWithCode(w, status, code, msg)`
-- 需要关联 traceID / requestID 时用 `Ctx` 系列响应与 `logger.XxxCtx(ctx, ...)`
-- 跨模块统一用 `context.Context` 传递（orm / redisx / retry / taskq 均支持 ctx 超时取消）
-- 语义化错误用 `errors.Is` 判断：`redisx.ErrNil`、`jwt.ErrExpiredToken`、`retry.ErrMaxRetries` 等
+- Error messages and comments in English (the project-wide style)
+- At the HTTP layer always use `httpx.OkJSON(w, data)` / `httpx.OkJSONCtx(ctx, w, data)` / `httpx.WriteHTTPError(w, status, msg)` / `httpx.WriteHTTPErrorWithCode(w, status, code, msg)`
+- When traceID / requestID correlation is needed, use the `Ctx` response variants together with `logger.XxxCtx(ctx, ...)`
+- Pass `context.Context` across modules consistently (orm / redisx / retry / taskq all support ctx timeouts and cancellation)
+- Inspect semantic errors with `errors.Is`: `redisx.ErrNil`, `jwt.ErrExpiredToken`, `retry.ErrMaxRetries`, etc.
 
-## Acceptance Criteria（验收清单）
+## Acceptance Criteria
 
-- [ ] 只引入了实际使用的模块
-- [ ] 配置通过 `conf` 加载，含默认值与环境变量支持；敏感信息走环境变量
-- [ ] 所有组件按依赖顺序初始化；连接类组件有 `Close / Stop / Sync`
-- [ ] HTTP 路由用 `MustBind*` 处理参数；响应统一走 `httpx.Ok*` / `WriteHTTPError`
-- [ ] 鉴权 / 限流 / 追踪 / 请求 ID / 恢复以中间件形式挂载（`httpx.With*`）
-- [ ] 自定义标准中间件经 `httpx.AsMiddleware` 接入
-- [ ] 多服务用 `service.NewServiceGroup` 统一启停，支持优雅关闭
-- [ ] 错误信息为英文、注释为中文，符合项目风格
-- [ ] 涉及网络 / 临时性失败处使用了 `retry`；多实例场景用了 Redis 限流 / 锁
-- [ ] `go build ./...` 与 `go vet ./...` 通过
+- [ ] Only modules that are actually used have been imported
+- [ ] Configuration is loaded through `conf`, with defaults and environment variable support; sensitive values come from environment variables
+- [ ] All components are initialized in dependency order; connection-holding components have `Close / Stop / Sync`
+- [ ] HTTP routes use `MustBind*` for parameters; responses go through `httpx.Ok*` / `WriteHTTPError` consistently
+- [ ] Auth / rate limiting / tracing / request ID / recovery are mounted as middleware (`httpx.With*`)
+- [ ] Custom standard middleware is integrated via `httpx.AsMiddleware`
+- [ ] Multiple services are started and stopped together with `service.NewServiceGroup`, with graceful shutdown
+- [ ] Error messages and comments are English, matching the project style
+- [ ] `retry` is used wherever network / transient failures occur; Redis rate limiting / locks are used in multi-instance setups
+- [ ] `go build ./...` and `go vet ./...` pass
 
 ## References
 
-各模块 API 文档统一维护在 `references/` 目录（按模块划分文件），覆盖安装、配置、初始化、关键方法与错误约定。HTTP 相关子包（`binding`/`middleware`/`x`/`respw`）的用法见 [httpx](./references/httpx.md) 及其链接。
+The API documentation for each module is maintained in the `references/` directory (one file per module), covering installation, configuration, initialization, key methods and error conventions. For the HTTP-related subpackages (`binding`/`middleware`/`x`/`respw`), see [httpx](./references/httpx.md) and its links.
 
-| 类别 | 模块文档 |
+| Category | Module docs |
 |------|------|
-| 配置与日志 | [conf](./references/conf.md) · [logger](./references/logger.md) |
-| 数据层 | [orm](./references/orm.md) · [redisx](./references/redisx.md) · [cache](./references/cache.md) |
-| HTTP 与接口 | [httpx](./references/httpx.md)（含 binding/middleware/x/respw 子包）· [jwt](./references/jwt.md) · [ratelimit](./references/ratelimit.md) · [breaker](./references/breaker.md) · [retry](./references/retry.md) · [websocket](./references/websocket.md) |
-| 异步与存储 | [taskq](./references/taskq.md) · [storage](./references/storage.md) |
-| 观测与安全 | [trace](./references/trace.md) · [hash](./references/hash.md) |
-| 通用工具 | [cast](./references/cast.md) · [stringx](./references/stringx.md) · [syncx](./references/syncx.md) |
-| 服务编排 | [service](./references/service.md) · [mapping](./references/mapping.md) |
-| 工程结构 | [project-structure](./references/project-structure.md) |
+| Configuration and logging | [conf](./references/conf.md) · [logger](./references/logger.md) |
+| Data layer | [orm](./references/orm.md) · [redisx](./references/redisx.md) · [cache](./references/cache.md) |
+| HTTP and APIs | [httpx](./references/httpx.md) (includes the binding/middleware/x/respw subpackages) · [jwt](./references/jwt.md) · [ratelimit](./references/ratelimit.md) · [breaker](./references/breaker.md) · [retry](./references/retry.md) · [websocket](./references/websocket.md) |
+| Async and storage | [taskq](./references/taskq.md) · [storage](./references/storage.md) |
+| Observability and security | [trace](./references/trace.md) · [hash](./references/hash.md) |
+| General utilities | [cast](./references/cast.md) · [stringx](./references/stringx.md) · [syncx](./references/syncx.md) |
+| Service orchestration | [service](./references/service.md) · [mapping](./references/mapping.md) |
+| Project structure | [project-structure](./references/project-structure.md) |
 
-> `x`、`respw` 已作为子包移入 `httpx`（`httpx/x`、`httpx/respw`），对应文档分别见 [httpx 子包结构](./references/httpx.md) 顶部目录树，以及独立文件 [httpx-x](./references/httpx-x.md)、[httpx-respw](./references/httpx-respw.md)。
+> `x` and `respw` have moved into `httpx` as subpackages (`httpx/x`, `httpx/respw`); see the directory tree at the top of [httpx subpackage structure](./references/httpx.md), plus the standalone files [httpx-x](./references/httpx-x.md) and [httpx-respw](./references/httpx-respw.md).
 
-所有模块遵循统一约定：`New` 返回 error、`MustNew` 出错 panic；连接类组件有 `Close / Stop / Sync`；注释中文、错误英文。
+All modules follow the same conventions: `New` returns an error and `MustNew` panics on error; connection-holding components have `Close / Stop / Sync`; comments and errors in English.

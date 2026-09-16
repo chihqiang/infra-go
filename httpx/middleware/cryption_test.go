@@ -13,13 +13,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 对应 cryption.go：请求/响应 AES-GCM 加解密中间件。
+// Covers cryption.go: the request/response AES-GCM encryption middleware.
 
 func TestCryption_RoundTrip(t *testing.T) {
 	silenceLogger(t)
 	echo := func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		_, _ = w.Write(b) // 回显解密后的明文
+		_, _ = w.Write(b) // echo back the decrypted plaintext
 	}
 
 	encBody, err := hash.AESGCMEncrypt(testKey, []byte("encrypted-payload"))
@@ -30,7 +30,7 @@ func TestCryption_RoundTrip(t *testing.T) {
 	rec := perform(NewCryption(testKey).Middleware(), echo, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	// 响应体为密文，解密后包含原始 payload
+	// The response body is ciphertext; once decrypted it contains the original payload
 	dec, err := hash.AESGCMDecrypt(testKey, rec.Body.String())
 	require.NoError(t, err)
 	assert.Contains(t, string(dec), "encrypted-payload")
@@ -54,12 +54,12 @@ func TestCryption_SkipExactPaths(t *testing.T) {
 	}
 	mw := NewCryption(testKey, "/plain").Middleware()
 
-	// 命中跳过：明文透传（不解密、不加密）
+	// Skip rule matched: plaintext pass-through (no decryption, no encryption)
 	rec := perform(mw, echo, httptest.NewRequest(http.MethodPost, "/plain", strings.NewReader("raw-body")))
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "raw-body")
 
-	// 未命中：仍按密文处理
+	// Not matched: still handled as ciphertext
 	encBody, err := hash.AESGCMEncrypt(testKey, []byte("secret"))
 	require.NoError(t, err)
 	req2 := httptest.NewRequest(http.MethodPost, "/echo", strings.NewReader(encBody))
@@ -79,12 +79,12 @@ func TestCryption_SkipPrefixWildcard(t *testing.T) {
 	}
 	mw := NewCryption(testKey, "/public/*").Middleware()
 
-	// 命中通配前缀：明文透传
+	// Wildcard prefix matched: plaintext pass-through
 	rec := perform(mw, echo, httptest.NewRequest(http.MethodPost, "/public/raw", strings.NewReader("open-text")))
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "open-text")
 
-	// 未命中：仍按密文处理
+	// Not matched: still handled as ciphertext
 	encBody, err := hash.AESGCMEncrypt(testKey, []byte("top-secret"))
 	require.NoError(t, err)
 	req2 := httptest.NewRequest(http.MethodPost, "/secure/data", strings.NewReader(encBody))
@@ -96,7 +96,7 @@ func TestCryption_SkipPrefixWildcard(t *testing.T) {
 	assert.Contains(t, string(dec), "top-secret")
 }
 
-// --- 状态码与响应策略 ---
+// --- Status codes and response policy ---
 
 func TestCryption_ErrorResponsePlaintext(t *testing.T) {
 	silenceLogger(t)
@@ -106,7 +106,8 @@ func TestCryption_ErrorResponsePlaintext(t *testing.T) {
 	rec := perform(NewCryption(testKey).Middleware(), notFound,
 		httptest.NewRequest(http.MethodGet, "/missing", nil))
 
-	// 非 2xx：明文透传且保留状态码（客户端可直接读取错误，无需解密）
+	// Not 2xx: plaintext pass-through that keeps the status code (clients can read the error
+	// without decrypting anything)
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 	assert.Contains(t, rec.Body.String(), "not found")
 }
@@ -119,7 +120,7 @@ func TestCryption_NoContentPlaintext(t *testing.T) {
 	rec := perform(NewCryption(testKey).Middleware(), noContent,
 		httptest.NewRequest(http.MethodGet, "/empty", nil))
 
-	// 204 无 body 语义：不得输出密文 body
+	// 204 means no body: an encrypted body must not be emitted
 	assert.Equal(t, http.StatusNoContent, rec.Code)
 	assert.Empty(t, rec.Body.String())
 }
@@ -132,7 +133,7 @@ func TestCryption_HeadNoBody(t *testing.T) {
 	rec := perform(NewCryption(testKey).Middleware(), head,
 		httptest.NewRequest(http.MethodHead, "/probe", nil))
 
-	// HEAD：保留状态码但无响应体
+	// HEAD: the status code is preserved but there is no response body
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Empty(t, rec.Body.String())
 }
@@ -147,7 +148,7 @@ func TestCryption_ChunkedRequestBody(t *testing.T) {
 	encBody, err := hash.AESGCMEncrypt(testKey, []byte("chunked-payload"))
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/echo", strings.NewReader(encBody))
-	req.ContentLength = -1 // Transfer-Encoding: chunked（Go 中 ContentLength==-1）
+	req.ContentLength = -1 // Transfer-Encoding: chunked (ContentLength == -1 in Go)
 
 	rec := perform(NewCryption(testKey).Middleware(), echo, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -160,7 +161,7 @@ func TestCryption_RequestTooLarge(t *testing.T) {
 	silenceLogger(t)
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 
-	// 构造超过 16 字节上限的请求体
+	// Build a request body that exceeds the 16 byte limit
 	big := strings.Repeat("A", 32)
 	encBody, err := hash.AESGCMEncrypt(testKey, []byte(big))
 	require.NoError(t, err)
@@ -173,11 +174,12 @@ func TestCryption_RequestTooLarge(t *testing.T) {
 
 func TestCryption_ResponseOverflowFallsBackPlaintext(t *testing.T) {
 	silenceLogger(t)
-	// 响应超过默认缓冲上限（5MB）应回退明文：分块写入，使前段进入缓冲、后续触发超限
+	// A response exceeding the default buffer limit (5MB) must fall back to plaintext: write it in
+	// chunks so that the leading part is buffered and the rest trips the limit
 	const chunk = 512 * 1024
 	big := func(w http.ResponseWriter, r *http.Request) {
 		blob := bytes.Repeat([]byte("x"), chunk)
-		for i := 0; i < 12; i++ { // 共 6MB > 5MB 上限
+		for i := 0; i < 12; i++ { // 6MB in total > the 5MB limit
 			_, _ = w.Write(blob)
 		}
 	}
@@ -185,19 +187,20 @@ func TestCryption_ResponseOverflowFallsBackPlaintext(t *testing.T) {
 		httptest.NewRequest(http.MethodGet, "/big", nil))
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	// 明文回退：完整输出 12 块 = 6MB 明文（body 可直接读取，非密文），不得截断
+	// Plaintext fallback: all 12 chunks = 6MB of plaintext are written out (the body is directly
+	// readable, not ciphertext) and must not be truncated
 	assert.Len(t, rec.Body.Bytes(), 12*chunk)
 	assert.Equal(t, bytes.Repeat([]byte("x"), chunk), rec.Body.Bytes()[:chunk])
 }
 
 func TestCryption_ResponseLimitConfigurable(t *testing.T) {
 	silenceLogger(t)
-	// 自定义较小响应上限（64KB），验证可配置生效
+	// A custom, smaller response limit (64KB) to verify that the configuration takes effect
 	const customLimit = 64 * 1024
 	const chunk = 32 * 1024
 	big := func(w http.ResponseWriter, r *http.Request) {
 		blob := bytes.Repeat([]byte("y"), chunk)
-		for i := 0; i < 4; i++ { // 共 128KB > 64KB 上限
+		for i := 0; i < 4; i++ { // 128KB in total > the 64KB limit
 			_, _ = w.Write(blob)
 		}
 	}
@@ -205,7 +208,7 @@ func TestCryption_ResponseLimitConfigurable(t *testing.T) {
 	rec := perform(mw.Middleware(), big, httptest.NewRequest(http.MethodGet, "/big", nil))
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Len(t, rec.Body.Bytes(), 4*chunk) // 回退明文，完整输出 128KB，不得截断
+	assert.Len(t, rec.Body.Bytes(), 4*chunk) // plaintext fallback: all 128KB written, no truncation
 }
 
 func TestCryption_SuccessResponseEncryptedWithStatus(t *testing.T) {
@@ -217,7 +220,7 @@ func TestCryption_SuccessResponseEncryptedWithStatus(t *testing.T) {
 	rec := perform(NewCryption(testKey).Middleware(), created,
 		httptest.NewRequest(http.MethodGet, "/create", nil))
 
-	// 2xx（201）保留状态码，body 加密
+	// 2xx (201) keeps the status code and encrypts the body
 	assert.Equal(t, http.StatusCreated, rec.Code)
 	assert.Equal(t, "text/plain; charset=utf-8", rec.Header().Get("Content-Type"))
 	dec, err := hash.AESGCMDecrypt(testKey, rec.Body.String())

@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 对应 form.go：FormBinding（包含 query 和 post form）。
+// Covers form.go: FormBinding (including query and post form).
 
 type formReq struct {
 	Username string `form:"username" binding:"required"`
@@ -20,7 +20,7 @@ type formReq struct {
 }
 
 func TestForm_Bind_QueryAndBody(t *testing.T) {
-	// query + urlencoded body 合并绑定
+	// query + urlencoded body merged binding
 	req := httptest.NewRequest(http.MethodPost, "/?remember=true", strings.NewReader("username=admin&password=123456"))
 	req.Header.Set("Content-Type", MIMEPOSTForm)
 
@@ -45,7 +45,7 @@ func TestForm_ValidationError(t *testing.T) {
 	req.Header.Set("Content-Type", MIMEPOSTForm)
 
 	var f formReq
-	require.Error(t, Form.Bind(req, &f)) // username 缺失
+	require.Error(t, Form.Bind(req, &f)) // username is missing
 }
 
 func TestForm_Multipart(t *testing.T) {

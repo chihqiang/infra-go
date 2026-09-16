@@ -8,22 +8,22 @@ import (
 	"strings"
 )
 
-// --- 整数转换（int） ---
+// --- Integer conversion (int) ---
 
-// ToInt 将 any 转换为 int，转换失败返回零值。
-// 支持 int 系列、float 系列、string、bool、json.Number。
+// ToInt converts any to int, returning the zero value if the conversion fails.
+// Supports the int family, the float family, string, bool and json.Number.
 func ToInt(v any) int {
 	val, _ := ToIntE(v)
 	return val
 }
 
-// ToInt64 将 any 转换为 int64，转换失败返回零值。
+// ToInt64 converts any to int64, returning the zero value if the conversion fails.
 func ToInt64(v any) int64 {
 	val, _ := ToInt64E(v)
 	return val
 }
 
-// ToIntE 将 any 转换为 int，返回转换结果和错误。
+// ToIntE converts any to int and returns the result along with an error.
 func ToIntE(v any) (int, error) {
 	switch val := v.(type) {
 	case nil:
@@ -39,7 +39,7 @@ func ToIntE(v any) (int, error) {
 	case int64:
 		return int(val), nil
 	case uint:
-		// 防止大于 int 最大值时静默溢出为负值
+		// prevent a silent overflow to a negative value when the input exceeds math.MaxInt
 		if uint64(val) > uint64(math.MaxInt) {
 			return 0, castErr("uint", "int")
 		}
@@ -81,7 +81,7 @@ func ToIntE(v any) (int, error) {
 	}
 }
 
-// ToInt64E 将 any 转换为 int64，返回转换结果和错误。
+// ToInt64E converts any to int64 and returns the result along with an error.
 func ToInt64E(v any) (int64, error) {
 	switch val := v.(type) {
 	case nil:
@@ -97,7 +97,7 @@ func ToInt64E(v any) (int64, error) {
 	case int64:
 		return val, nil
 	case uint:
-		// 防止大于 int64 最大值时静默溢出为负值
+		// prevent a silent overflow to a negative value when the input exceeds math.MaxInt64
 		if uint64(val) > math.MaxInt64 {
 			return 0, castErr("uint", "int64")
 		}
@@ -139,34 +139,35 @@ func ToInt64E(v any) (int64, error) {
 	}
 }
 
-// --- 无符号整数转换（uint） ---
+// --- Unsigned integer conversion (uint) ---
 
-// ToUint 将 any 转换为 uint，转换失败返回零值。
+// ToUint converts any to uint, returning the zero value if the conversion fails.
 func ToUint(v any) uint {
 	val, _ := ToUintE(v)
 	return val
 }
 
-// ToUint64 将 any 转换为 uint64，转换失败返回零值。
+// ToUint64 converts any to uint64, returning the zero value if the conversion fails.
 func ToUint64(v any) uint64 {
 	val, _ := ToUint64E(v)
 	return val
 }
 
-// ToUintE 将 any 转换为 uint，返回转换结果和错误。
+// ToUintE converts any to uint and returns the result along with an error.
 func ToUintE(v any) (uint, error) {
 	n, err := ToUint64E(v)
 	if err != nil {
 		return 0, err
 	}
-	// 32 位平台上 uint 窄于 uint64，需要判断溢出（64 位平台恒为假）。
+	// On 32-bit platforms uint is narrower than uint64, so overflow must be checked
+	// (this is always false on 64-bit platforms).
 	if n > math.MaxUint {
 		return 0, castErr("uint64", "uint")
 	}
 	return uint(n), nil
 }
 
-// ToUint64E 将 any 转换为 uint64，返回转换结果和错误。
+// ToUint64E converts any to uint64 and returns the result along with an error.
 func ToUint64E(v any) (uint64, error) {
 	switch val := v.(type) {
 	case nil:
@@ -232,36 +233,37 @@ func ToUint64E(v any) (uint64, error) {
 	}
 }
 
-// --- 浮点转换（float） ---
+// --- Float conversion (float) ---
 
-// ToFloat32 将 any 转换为 float32，转换失败返回零值。
+// ToFloat32 converts any to float32, returning the zero value if the conversion fails.
 func ToFloat32(v any) float32 {
 	val, _ := ToFloat32E(v)
 	return val
 }
 
-// ToFloat64 将 any 转换为 float64，转换失败返回零值。
+// ToFloat64 converts any to float64, returning the zero value if the conversion fails.
 func ToFloat64(v any) float64 {
 	val, _ := ToFloat64E(v)
 	return val
 }
 
-// ToFloat32E 将 any 转换为 float32，返回转换结果和错误。
+// ToFloat32E converts any to float32 and returns the result along with an error.
 func ToFloat32E(v any) (float32, error) {
 	f, err := ToFloat64E(v)
 	if err != nil {
 		return 0, err
 	}
 	f32 := float32(f)
-	// float64 → float32 窄化溢出会静默产生 ±Inf（如 1e300），需显式报错。
-	// 输入本身就是 ±Inf 时保持透传，不算窄化溢出。
+	// A narrowing float64 → float32 overflow silently produces ±Inf (e.g. 1e300), so it
+	// must be reported explicitly. An input that is already ±Inf is passed through and
+	// is not treated as a narrowing overflow.
 	if isNonFinite(float64(f32)) && !isNonFinite(f) {
 		return 0, castErr("float64", "float32")
 	}
 	return f32, nil
 }
 
-// ToFloat64E 将 any 转换为 float64，返回转换结果和错误。
+// ToFloat64E converts any to float64 and returns the result along with an error.
 func ToFloat64E(v any) (float64, error) {
 	switch val := v.(type) {
 	case nil:

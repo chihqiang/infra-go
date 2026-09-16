@@ -5,13 +5,13 @@ import (
 	"sync"
 )
 
-// OrDone 返回一个 channel，当 ctx.Done() 或 src 关闭时关闭。
-// 用于在 select 中简化 context 取消的处理。
+// OrDone returns a channel that is closed when done is closed or src is closed.
+// It simplifies handling context cancellation inside a select.
 //
-// 用法：
+// Usage:
 //
 //	for v := range syncx.OrDone(ctx.Done(), src) {
-//	    // 处理 v
+//	    // handle v
 //	}
 func OrDone[T any](done <-chan struct{}, src <-chan T) <-chan T {
 	out := make(chan T)
@@ -35,14 +35,14 @@ func OrDone[T any](done <-chan struct{}, src <-chan T) <-chan T {
 	return out
 }
 
-// OrDoneCtx 返回一个 channel，当 ctx 取消或 src 关闭时关闭。
-// 与 OrDone 类似，但直接接收 context.Context。
+// OrDoneCtx returns a channel that is closed when ctx is cancelled or src is
+// closed. It is like OrDone but takes a context.Context directly.
 func OrDoneCtx[T any](ctx context.Context, src <-chan T) <-chan T {
 	return OrDone[T](ctx.Done(), src)
 }
 
-// Merge 将多个 channel 合并为一个 channel，当所有源 channel 都关闭时关闭。
-// 支持通过 context 取消。
+// Merge fans several channels into one, closing the result once every source
+// channel is closed. Cancellation is supported through the context.
 func Merge[T any](ctx context.Context, channels ...<-chan T) <-chan T {
 	out := make(chan T)
 	var wg sync.WaitGroup
@@ -69,10 +69,11 @@ func Merge[T any](ctx context.Context, channels ...<-chan T) <-chan T {
 	return out
 }
 
-// FanOut 将输入 channel 的每个值广播到所有 n 个输出 channel。
-// 每个输出 channel 都会收到 src 中的每一个值。
-// 如果某个输出 channel 的消费者处理缓慢，不会阻塞其他输出 channel 的消费者。
-// 当 context 取消时，所有等待发送的操作自动解除阻塞。
+// FanOut broadcasts every value from src to all n output channels.
+// Each output channel receives every value read from src.
+// A slow consumer on one output channel never blocks consumers of the other
+// output channels. When the context is cancelled, every blocked send unblocks
+// automatically.
 func FanOut[T any](ctx context.Context, src <-chan T, n int) []<-chan T {
 	outs := make([]chan T, n)
 	for i := range outs {
@@ -89,7 +90,7 @@ func FanOut[T any](ctx context.Context, src <-chan T, n int) []<-chan T {
 		for v := range OrDoneCtx(ctx, src) {
 			v := v
 			var wg sync.WaitGroup
-			// 并发广播到所有 output，慢消费者不阻塞其他
+			// Broadcast concurrently to all outputs, so slow consumers block nobody
 			for i := range outs {
 				wg.Add(1)
 				go func(out chan T) {

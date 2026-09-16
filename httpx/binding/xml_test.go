@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 对应 xml.go：XMLBinding。
+// Covers xml.go: XMLBinding.
 
 type xmlReq struct {
 	Name  string `xml:"name" binding:"required"`
@@ -39,7 +39,7 @@ func TestXML_BindBody(t *testing.T) {
 }
 
 func TestXML_ValidationError(t *testing.T) {
-	body := []byte(`<xmlReq><name>Bob</name></xmlReq>`) // 缺 email
+	body := []byte(`<xmlReq><name>Bob</name></xmlReq>`) // email is missing
 	var u xmlReq
 	require.Error(t, XML.BindBody(body, &u))
 }

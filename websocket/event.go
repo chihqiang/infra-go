@@ -2,23 +2,23 @@ package websocket
 
 import "encoding/json"
 
-// Event WebSocket 事件，用于事件驱动的消息通信。
-// 客户端发送 JSON 格式 {"type": "event_name", "data": {...}}，
-// EventHandler 会根据 type 字段分发到对应的处理器。
+// Event is a WebSocket event used for event-driven messaging.
+// The client sends JSON in the form {"type": "event_name", "data": {...}} and
+// EventHandler dispatches it to the matching handler based on the type field.
 //
-// 用法（发送端）：
+// Usage (sender side):
 //
 //	conn.Emit("chat", map[string]string{"msg": "hello"})
-//	// 发送: {"type":"chat","data":{"msg":"hello"}}
+//	// sends: {"type":"chat","data":{"msg":"hello"}}
 type Event struct {
-	// Type 事件类型。
+	// Type is the event type.
 	Type string `json:"type"`
-	// Data 事件数据（原始 JSON）。
+	// Data is the event payload (raw JSON).
 	Data json.RawMessage `json:"data,omitempty"`
 }
 
-// NewEvent 创建一个事件，data 会被 JSON 序列化。
-// 如果 data 为 nil，则 Data 字段为空。
+// NewEvent creates an event; data is JSON-marshalled.
+// When data is nil the Data field stays empty.
 func NewEvent(eventType string, data any) (Event, error) {
 	e := Event{Type: eventType}
 	if data != nil {
@@ -31,7 +31,7 @@ func NewEvent(eventType string, data any) (Event, error) {
 	return e, nil
 }
 
-// MustNewEvent 创建一个事件，序列化失败时 panic。
+// MustNewEvent creates an event and panics when marshalling fails.
 func MustNewEvent(eventType string, data any) Event {
 	e, err := NewEvent(eventType, data)
 	if err != nil {
@@ -40,7 +40,7 @@ func MustNewEvent(eventType string, data any) Event {
 	return e
 }
 
-// Decode 将事件的 Data 字段反序列化到 v 中。
+// Decode unmarshals the Data field of the event into v.
 func (e Event) Decode(v any) error {
 	if len(e.Data) == 0 {
 		return nil

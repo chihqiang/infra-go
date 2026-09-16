@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newMiniRedisClient 创建基于 miniredis 的客户端。
+// newMiniRedisClient creates a client backed by miniredis.
 func newMiniRedisClient(t *testing.T) (*Client, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
@@ -55,12 +55,12 @@ func TestTryLock_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, lock)
 
-	// Redis 中应存在锁键
+	// The lock key should exist in Redis
 	val, err := mr.Get("lock")
 	require.NoError(t, err)
 	assert.NotEmpty(t, val)
 
-	// 释放后键被删除
+	// The key is deleted after the release
 	require.NoError(t, lock.Unlock(ctx))
 	assert.False(t, mr.Exists("lock"))
 }
@@ -74,7 +74,7 @@ func TestTryLock_Conflict(t *testing.T) {
 	require.NoError(t, err)
 	defer lock1.Unlock(ctx)
 
-	// 第二个获取同一把锁应失败
+	// A second acquisition of the same lock must fail
 	_, err = la.TryLock(ctx)
 	assert.ErrorIs(t, err, ErrLockNotAcquired)
 	assert.True(t, IsLockNotAcquired(err))
@@ -89,7 +89,7 @@ func TestTryLock_ContextCancelled(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- Lock（阻塞式） ---
+// --- Lock (blocking) ---
 
 func TestLock_BlockUntilReleased(t *testing.T) {
 	ctx := context.Background()
@@ -99,7 +99,7 @@ func TestLock_BlockUntilReleased(t *testing.T) {
 	lock1, err := la.TryLock(ctx)
 	require.NoError(t, err)
 
-	// 并发阻塞获取
+	// Concurrent blocking acquisition
 	var (
 		got    *Lock
 		gotErr error
@@ -111,13 +111,13 @@ func TestLock_BlockUntilReleased(t *testing.T) {
 		got, gotErr = la.Lock(ctx, 10*time.Millisecond)
 	}()
 
-	// 确保阻塞获取已开始尝试
+	// Make sure the blocking acquisition has started trying
 	time.Sleep(50 * time.Millisecond)
 
-	// 释放第一把锁
+	// Release the first lock
 	require.NoError(t, lock1.Unlock(ctx))
 
-	// 等 goroutine 拿到锁
+	// Wait for the goroutine to get the lock
 	wg.Wait()
 	require.NoError(t, gotErr)
 	require.NotNil(t, got)
@@ -132,7 +132,7 @@ func TestLock_ContextCancelledWhileWaiting(t *testing.T) {
 	require.NoError(t, err)
 	defer lock1.Unlock(context.Background())
 
-	// 取消的 ctx
+	// Cancelled ctx
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err = la.Lock(ctx, 5*time.Millisecond)
@@ -148,7 +148,7 @@ func TestUnlock_OwnershipMismatch(t *testing.T) {
 	lock, err := c.Locker("lock", 10*time.Second).TryLock(ctx)
 	require.NoError(t, err)
 
-	// 第三方直接删除锁键，导致 token 不匹配
+	// A third party deletes the lock key directly, so the token no longer matches
 	mr.Del("lock")
 
 	err = lock.Unlock(ctx)
@@ -163,7 +163,7 @@ func TestUnlock_Twice(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, lock.Unlock(ctx))
-	// 第二次 Unlock：键已删除，token 不匹配
+	// Second Unlock: the key is gone, so the token does not match
 	assert.ErrorIs(t, lock.Unlock(ctx), ErrLockOwnershipMismatch)
 }
 
@@ -181,7 +181,7 @@ func TestSetNXWithLock_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&called))
 
-	// 锁应已被释放，可再次获取
+	// The lock should have been released and can be acquired again
 	lock, err := c.Locker("lock", 5*time.Second).TryLock(ctx)
 	require.NoError(t, err)
 	lock.Unlock(ctx)
@@ -191,7 +191,7 @@ func TestSetNXWithLock_NotAcquired(t *testing.T) {
 	ctx := context.Background()
 	c, _ := newMiniRedisClient(t)
 
-	// 先占住锁
+	// Hold the lock first
 	lock, err := c.Locker("lock", 10*time.Second).TryLock(ctx)
 	require.NoError(t, err)
 	defer lock.Unlock(ctx)
@@ -215,31 +215,32 @@ func TestSetNXWithLock_FnError(t *testing.T) {
 	})
 	assert.Same(t, sentinel, err)
 
-	// 即使 fn 报错，锁也应被释放
+	// The lock should be released even if fn returned an error
 	lock, err := c.Locker("lock", 5*time.Second).TryLock(context.Background())
 	require.NoError(t, err)
 	lock.Unlock(context.Background())
 }
 
-// --- 自动续期 ---
+// --- Automatic renewal ---
 
 func TestLock_AutoRenew(t *testing.T) {
 	ctx := context.Background()
 	c, mr := newMiniRedisClient(t)
 
-	// 短 TTL + 自动续期（续期周期 = ttl/3）
+	// Short TTL with automatic renewal (renew period = ttl/3)
 	lock, err := c.Locker("lock", 300*time.Millisecond, WithAutoRenew()).TryLock(ctx)
 	require.NoError(t, err)
 
-	// 循环：真实 sleep 让 renewLoop 执行续期（重置 TTL），再 FastForward 推进虚拟时钟。
-	// 若无续期，累计快进超过 300ms 后锁必过期；有续期则始终存活。
+	// Loop: sleep for real so that renewLoop performs a renewal (resetting the TTL),
+	// then FastForward the virtual clock. Without renewal the lock would have expired
+	// after more than 300ms of accumulated fast-forwarding; with renewal it stays alive.
 	for i := 0; i < 5; i++ {
-		time.Sleep(150 * time.Millisecond) // 让 renewLoop 至少续期一次
+		time.Sleep(150 * time.Millisecond) // let renewLoop renew at least once
 		mr.FastForward(200 * time.Millisecond)
 		assert.True(t, c.client.Exists(ctx, "lock").Val() > 0, "lock should be renewed (iter %d)", i)
 	}
 
-	// 释放后续期停止，锁应过期
+	// Renewal stops after the release, so the lock should expire
 	require.NoError(t, lock.Unlock(ctx))
 	mr.FastForward(500 * time.Millisecond)
 	assert.False(t, c.client.Exists(ctx, "lock").Val() > 0, "lock should expire after unlock")
@@ -249,17 +250,18 @@ func TestLock_NoAutoRenew_Expires(t *testing.T) {
 	ctx := context.Background()
 	c, mr := newMiniRedisClient(t)
 
-	// 短 TTL、不续期
+	// Short TTL, no renewal
 	lock, err := c.Locker("lock", 100*time.Millisecond).TryLock(ctx)
 	require.NoError(t, err)
 	defer lock.Unlock(ctx)
 
-	// FastForward 推进虚拟时钟使 TTL 过期
+	// FastForward the virtual clock to let the TTL expire
 	mr.FastForward(300 * time.Millisecond)
 	assert.False(t, c.client.Exists(ctx, "lock").Val() > 0, "lock should expire without renewal")
 }
 
-// --- TTL 校验（防永不过期的锁 / 续期 panic / 续期时删锁） ---
+// --- TTL validation (against never-expiring locks / renewal panics / renewal deleting
+// the lock) ---
 
 func TestTryLock_InvalidTTLRejected(t *testing.T) {
 	ctx := context.Background()
@@ -279,7 +281,7 @@ func TestTryLock_InvalidTTLRejected(t *testing.T) {
 			_, err := c.Locker("lock", tc.ttl).TryLock(ctx)
 			require.ErrorIs(t, err, ErrInvalidLockTTL)
 
-			// 非法 TTL 不应写入任何 Redis key（尤其是"永不过期"的锁）
+			// An invalid TTL must not write any Redis key (especially a "never expires" lock)
 			assert.False(t, c.client.Exists(ctx, "lock").Val() > 0,
 				"no lock key should be created for invalid ttl %v", tc.ttl)
 		})
@@ -291,7 +293,8 @@ func TestTryLock_InvalidTTLViaOption(t *testing.T) {
 	ctx := context.Background()
 	c, _ := newMiniRedisClient(t)
 
-	// Locker 传入合法 TTL，但被 WithTTL 覆盖为非法值 → 同样必须被拒绝
+	// Locker is given a valid TTL, but WithTTL overrides it with an invalid one -> it must
+	// be rejected as well
 	_, err := c.Locker("lock", time.Second, WithTTL(0)).TryLock(ctx)
 	require.ErrorIs(t, err, ErrInvalidLockTTL)
 
@@ -299,8 +302,9 @@ func TestTryLock_InvalidTTLViaOption(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidLockTTL)
 }
 
-// TestTryLock_InvalidTTLWithAutoRenewDoesNotPanic 验证非法 TTL + 自动续期
-// 不会再触发 time.NewTicker(0) 的 goroutine panic（历史缺陷会导致进程退出）。
+// TestTryLock_InvalidTTLWithAutoRenewDoesNotPanic verifies that an invalid TTL combined
+// with automatic renewal no longer triggers the goroutine panic of time.NewTicker(0)
+// (the historical defect terminated the process).
 func TestTryLock_InvalidTTLWithAutoRenewDoesNotPanic(t *testing.T) {
 	ctx := context.Background()
 	c, _ := newMiniRedisClient(t)
@@ -310,12 +314,13 @@ func TestTryLock_InvalidTTLWithAutoRenewDoesNotPanic(t *testing.T) {
 		require.ErrorIs(t, err, ErrInvalidLockTTL)
 	})
 
-	// 留出时间窗口：若旧实现真的启动了 renewLoop，panic 会在此刻发生
+	// Leave a time window: if the old implementation really started renewLoop, the panic
+	// would happen here
 	time.Sleep(50 * time.Millisecond)
 }
 
-// TestLock_InvalidTTLPropagatesThroughLock 验证阻塞式 Lock 也会快速失败，
-// 而不是自旋重试到 ctx 超时。
+// TestLock_InvalidTTLPropagatesThroughLock verifies that the blocking Lock fails fast as
+// well instead of spinning until the ctx times out.
 func TestLock_InvalidTTLPropagatesThroughLock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -327,7 +332,8 @@ func TestLock_InvalidTTLPropagatesThroughLock(t *testing.T) {
 	assert.Less(t, time.Since(start), time.Second, "should fail fast, not spin until ctx timeout")
 }
 
-// TestSetNXWithLock_InvalidTTL 验证便捷方法同样受 TTL 校验保护。
+// TestSetNXWithLock_InvalidTTL verifies that the convenience helper is protected by the
+// TTL validation as well.
 func TestSetNXWithLock_InvalidTTL(t *testing.T) {
 	ctx := context.Background()
 	c, _ := newMiniRedisClient(t)

@@ -9,16 +9,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 对应 value.go：setWithProperType 及各 set*Field / setFormMap。
+// Covers value.go: setWithProperType plus the set*Field helpers and setFormMap.
 
-// reflectValueFieldOf 返回结构体指针第 idx 个字段的可设置 reflect.Value。
+// reflectValueFieldOf returns the settable reflect.Value of the idx-th field of a struct pointer.
 func reflectValueFieldOf(ptr any, idx int) reflect.Value {
 	return reflect.ValueOf(ptr).Elem().Field(idx)
 }
 
 func TestSetIntField_Overflow(t *testing.T) {
 	var v int8
-	require.Error(t, setIntField("300", 8, reflect.ValueOf(&v).Elem())) // int8 溢出
+	require.Error(t, setIntField("300", 8, reflect.ValueOf(&v).Elem())) // int8 overflow
 	assert.Zero(t, v)
 
 	require.NoError(t, setIntField("42", 8, reflect.ValueOf(&v).Elem()))
@@ -57,7 +57,7 @@ func TestSetTimeField_LayoutAndUTC(t *testing.T) {
 	require.NoError(t, setTimeField("2024-05-06", fm, reflect.ValueOf(&tm).Elem()))
 	assert.Equal(t, time.Date(2024, 5, 6, 0, 0, 0, 0, time.UTC), tm)
 
-	// 空值 → 零值
+	// empty value → zero value
 	require.NoError(t, setTimeField("", fm, reflect.ValueOf(&tm).Elem()))
 	assert.True(t, tm.IsZero())
 }
@@ -92,9 +92,9 @@ func TestSetWithProperType_StructJSONFallback(t *testing.T) {
 
 func TestSetFormMap_StringString(t *testing.T) {
 	m := map[string]string{}
-	// setFormMap 期望 map 值（mapFormByTag 会先解引用指针再传入）
+	// setFormMap expects a map value (mapFormByTag dereferences the pointer before passing it in)
 	require.NoError(t, setFormMap(m, map[string][]string{"k": {"a", "b"}}))
-	assert.Equal(t, "b", m["k"]) // 取最后值
+	assert.Equal(t, "b", m["k"]) // take the last value
 }
 
 func TestSetFormMap_StringSlices(t *testing.T) {

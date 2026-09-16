@@ -7,59 +7,61 @@ import (
 	"time"
 )
 
-// 错误定义。
+// Error definitions.
 var (
-	// ErrLimitExceeded 超出限流。
+	// ErrLimitExceeded means the rate limit was exceeded.
 	ErrLimitExceeded = errors.New("ratelimit: limit exceeded")
 )
 
-// Limiter 限流器接口。
-// 内存限流器和 Redis 限流器均实现此接口，可自由切换。
+// Limiter is the rate limiter interface.
+// Both the in-memory limiter and the Redis limiter implement it, so they can be swapped
+// freely.
 type Limiter interface {
-	// Allow 检查是否允许请求通过。
-	// 返回 true 表示允许，false 表示被限流。
+	// Allow reports whether the request is allowed.
+	// true means allowed, false means rate limited.
 	Allow() bool
-	// AllowContext 带 context 的检查，支持超时取消。
-	// 对于内存限流器，与 Allow 行为一致。
-	// 对于 Redis 限流器，通过 context 控制 Redis 操作超时。
+	// AllowContext is the context-aware check and supports timeout cancellation.
+	// For the in-memory limiter it behaves exactly like Allow.
+	// For the Redis limiter the context controls the timeout of the Redis operations.
 	AllowContext(ctx context.Context) (bool, error)
 }
 
-// --- 令牌桶（内存） ---
+// --- Token bucket (in-memory) ---
 
-// TokenBucket 令牌桶限流器。
-// 以固定速率生成令牌，请求消耗令牌，支持突发流量。
+// TokenBucket is a token bucket rate limiter.
+// Tokens are generated at a fixed rate and consumed by requests, which allows bursts.
 type TokenBucket struct {
 	mu         sync.Mutex
-	rate       float64   // 每秒生成令牌数
-	burst      float64   // 桶容量（最大令牌数）
-	tokens     float64   // 当前令牌数
-	lastUpdate time.Time // 上次更新时间
+	rate       float64   // tokens generated per second
+	burst      float64   // bucket capacity (maximum number of tokens)
+	tokens     float64   // current number of tokens
+	lastUpdate time.Time // last update time
 }
 
-// NewTokenBucket 创建令牌桶限流器。
-// rate 为每秒生成的令牌数，burst 为桶容量。
-// 例如：NewTokenBucket(100, 200) 表示每秒生成 100 个令牌，桶最多存 200 个。
+// NewTokenBucket creates a token bucket rate limiter.
+// rate is the number of tokens generated per second and burst is the bucket capacity.
+// For example, NewTokenBucket(100, 200) generates 100 tokens per second and stores at most
+// 200 of them.
 func NewTokenBucket(rate float64, burst float64) *TokenBucket {
 	return &TokenBucket{
 		rate:       rate,
 		burst:      burst,
-		tokens:     burst, // 初始满桶
+		tokens:     burst, // start with a full bucket
 		lastUpdate: time.Now(),
 	}
 }
 
-// Allow 检查是否允许请求通过。
+// Allow reports whether the request is allowed.
 func (tb *TokenBucket) Allow() bool {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
 
 	now := time.Now()
-	// 计算自上次更新以来生成的令牌数
+	// Add the tokens generated since the last update
 	elapsed := now.Sub(tb.lastUpdate).Seconds()
 	tb.tokens += elapsed * tb.rate
 
-	// 限制令牌数不超过桶容量
+	// Never let the token count exceed the bucket capacity
 	if tb.tokens > tb.burst {
 		tb.tokens = tb.burst
 	}
@@ -72,23 +74,24 @@ func (tb *TokenBucket) Allow() bool {
 	return false
 }
 
-// AllowContext 带 context 的检查。
+// AllowContext is the context-aware check.
 func (tb *TokenBucket) AllowContext(ctx context.Context) (bool, error) {
-	// 令牌桶是内存计算，无需考虑 context
+	// The token bucket is computed in memory, so the context is irrelevant
 	return tb.Allow(), nil
 }
 
-// Tokens 返回当前令牌数（用于调试/监控）。
+// Tokens returns the current number of tokens (for debugging/monitoring).
 func (tb *TokenBucket) Tokens() float64 {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
 	return tb.tokens
 }
 
-// RetryAfter 返回建议的重试等待时间：距下一个令牌可用的时长。
+// RetryAfter returns the suggested retry delay: the time until the next token is available.
 //
-// 实现 http 层的 Retry-After 语义（RFC 9110 §10.2.3）。
-// rate <= 0 时桶永远填不满，返回 0 表示无法给出估计。
+// It implements the http-layer Retry-After semantics (RFC 9110 §10.2.3).
+// When rate <= 0 the bucket never refills, so 0 is returned to signal that no estimate can
+// be given.
 func (tb *TokenBucket) RetryAfter() time.Duration {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
@@ -100,32 +103,33 @@ func (tb *TokenBucket) RetryAfter() time.Duration {
 	now := time.Now()
 	tokens := tb.tokens + now.Sub(tb.lastUpdate).Seconds()*tb.rate
 	if tokens >= 1 {
-		return 0 // 已有可用令牌
+		return 0 // a token is already available
 	}
 
-	// 距凑满 1 个令牌还需 (1-tokens)/rate 秒
+	// Reaching one full token still takes (1-tokens)/rate seconds
 	wait := time.Duration((1 - tokens) / tb.rate * float64(time.Second))
 	if wait < time.Millisecond {
-		// 向上取整到 1ms，避免因浮点误差算出 0 而被解读为“可立即重试”
+		// Round up to 1ms so that floating point error cannot produce 0, which would be
+		// read as "retry immediately"
 		wait = time.Millisecond
 	}
 	return wait
 }
 
-// --- 滑动窗口（内存） ---
+// --- Sliding window (in-memory) ---
 
-// SlidingWindow 滑动窗口限流器。
-// 在指定时间窗口内最多允许 limit 次请求。
+// SlidingWindow is a sliding window rate limiter.
+// It allows at most limit requests within the given time window.
 type SlidingWindow struct {
 	mu       sync.Mutex
-	limit    int           // 窗口内最大请求数
-	window   time.Duration // 时间窗口大小
-	requests []time.Time   // 请求时间戳
+	limit    int           // maximum number of requests within the window
+	window   time.Duration // window size
+	requests []time.Time   // request timestamps
 }
 
-// NewSlidingWindow 创建滑动窗口限流器。
-// limit 为窗口内最大请求数，window 为时间窗口大小。
-// 例如：NewSlidingWindow(100, time.Second) 表示每秒最多 100 次请求。
+// NewSlidingWindow creates a sliding window rate limiter.
+// limit is the maximum number of requests within the window and window is the window size.
+// For example, NewSlidingWindow(100, time.Second) allows at most 100 requests per second.
 func NewSlidingWindow(limit int, window time.Duration) *SlidingWindow {
 	return &SlidingWindow{
 		limit:    limit,
@@ -134,7 +138,7 @@ func NewSlidingWindow(limit int, window time.Duration) *SlidingWindow {
 	}
 }
 
-// Allow 检查是否允许请求通过。
+// Allow reports whether the request is allowed.
 func (sw *SlidingWindow) Allow() bool {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
@@ -142,7 +146,7 @@ func (sw *SlidingWindow) Allow() bool {
 	now := time.Now()
 	sw.pruneExpired(now)
 
-	// 检查是否超出限制
+	// Check whether the limit has been exceeded
 	if len(sw.requests) >= sw.limit {
 		return false
 	}
@@ -151,14 +155,15 @@ func (sw *SlidingWindow) Allow() bool {
 	return true
 }
 
-// AllowContext 带 context 的检查。
+// AllowContext is the context-aware check.
 func (sw *SlidingWindow) AllowContext(ctx context.Context) (bool, error) {
 	return sw.Allow(), nil
 }
 
-// pruneExpired 移除窗口外的请求记录。
-// 调用方需持有锁。
-// 使用 copy 原地移动元素，复用底层数组避免频繁分配。
+// pruneExpired removes the request records that have left the window.
+// The caller must hold the lock.
+// Elements are moved in place with copy, reusing the backing array to avoid frequent
+// allocations.
 func (sw *SlidingWindow) pruneExpired(now time.Time) {
 	windowStart := now.Add(-sw.window)
 
@@ -169,13 +174,13 @@ func (sw *SlidingWindow) pruneExpired(now time.Time) {
 		}
 	}
 	if i > 0 {
-		// 原地 copy 前移，复用底层数组容量
+		// Shift the elements forward in place with copy, reusing the backing array capacity
 		copy(sw.requests, sw.requests[i:])
 		sw.requests = sw.requests[:len(sw.requests)-i]
 	}
 }
 
-// Count 返回当前窗口内的请求数（用于调试/监控）。
+// Count returns the number of requests in the current window (for debugging/monitoring).
 func (sw *SlidingWindow) Count() int {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
@@ -184,10 +189,11 @@ func (sw *SlidingWindow) Count() int {
 	return len(sw.requests)
 }
 
-// RetryAfter 返回建议的重试等待时间：最早一次记录滑出窗口所需时长。
+// RetryAfter returns the suggested retry delay: the time until the oldest record slides out
+// of the window.
 //
-// 实现 http 层的 Retry-After 语义（RFC 9110 §10.2.3）。
-// 窗口未满或没有记录时返回 0（无意义或无必要重试提示）。
+// It implements the http-layer Retry-After semantics (RFC 9110 §10.2.3).
+// It returns 0 when the window is not full or holds no records (no meaningful hint).
 func (sw *SlidingWindow) RetryAfter() time.Duration {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
@@ -198,7 +204,7 @@ func (sw *SlidingWindow) RetryAfter() time.Duration {
 		return 0
 	}
 
-	// 最早一条记录滑出窗口后才会腾出配额
+	// Quota is only freed once the oldest record leaves the window
 	wait := sw.requests[0].Add(sw.window).Sub(now)
 	if wait < time.Millisecond {
 		wait = time.Millisecond
@@ -206,26 +212,26 @@ func (sw *SlidingWindow) RetryAfter() time.Duration {
 	return wait
 }
 
-// --- 并发数限制 ---
+// --- Concurrency limiting ---
 
-// Concurrency 并发数限流器。
-// 限制同时处理的请求数量。
+// Concurrency is a concurrency rate limiter.
+// It limits the number of requests processed at the same time.
 type Concurrency struct {
 	mu      sync.Mutex
 	limit   int
 	current int
 }
 
-// NewConcurrency 创建并发数限流器。
-// limit 为最大并发数。
+// NewConcurrency creates a concurrency limiter.
+// limit is the maximum number of concurrent requests.
 func NewConcurrency(limit int) *Concurrency {
 	return &Concurrency{
 		limit: limit,
 	}
 }
 
-// Allow 检查是否允许请求通过。
-// 注意：使用后必须调用 Release 释放。
+// Allow reports whether the request is allowed.
+// Note: Release must be called afterwards.
 func (c *Concurrency) Allow() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -237,12 +243,12 @@ func (c *Concurrency) Allow() bool {
 	return true
 }
 
-// AllowContext 带 context 的检查。
+// AllowContext is the context-aware check.
 func (c *Concurrency) AllowContext(ctx context.Context) (bool, error) {
 	return c.Allow(), nil
 }
 
-// Release 释放一个并发槽。
+// Release frees one concurrency slot.
 func (c *Concurrency) Release() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -252,29 +258,32 @@ func (c *Concurrency) Release() {
 	}
 }
 
-// Current 返回当前并发数（用于调试/监控）。
+// Current returns the current concurrency (for debugging/monitoring).
 func (c *Concurrency) Current() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.current
 }
 
-// --- 组合限流器 ---
+// --- Composite limiter ---
 
-// Chain 组合多个限流器，所有限流器都通过才允许请求。
+// Chain combines several limiters; the request is allowed only when all of them allow it.
 type Chain struct {
 	limiters []Limiter
 }
 
-// NewChain 创建组合限流器。
+// NewChain creates a composite limiter.
 func NewChain(limiters ...Limiter) *Chain {
 	return &Chain{limiters: limiters}
 }
 
-// Allow 检查所有限流器是否都允许请求通过。
-// 注意：如果某个限流器返回 false，之前已通过的限流器不会回滚。
-// 警告：不要在 Chain 中使用 Concurrency 限流器，因为 Concurrency.Allow() 会增加计数，
-// 若后续限流器失败不回滚 Release，会导致并发计数虚高。如需组合，请单独使用 Concurrency。
+// Allow reports whether every limiter allows the request.
+// Note: when one limiter returns false, the limiters that already passed are not rolled
+// back.
+// Warning: do not use a Concurrency limiter inside a Chain, because Concurrency.Allow()
+// increments the counter and a later failure does not roll it back with Release, which
+// leaves the concurrency count inflated. If you need to combine them, use Concurrency on its
+// own.
 func (c *Chain) Allow() bool {
 	for _, l := range c.limiters {
 		if !l.Allow() {
@@ -284,7 +293,7 @@ func (c *Chain) Allow() bool {
 	return true
 }
 
-// AllowContext 带 context 的检查。
+// AllowContext is the context-aware check.
 func (c *Chain) AllowContext(ctx context.Context) (bool, error) {
 	for _, l := range c.limiters {
 		select {
@@ -303,7 +312,7 @@ func (c *Chain) AllowContext(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// Add 添加限流器到链中。
+// Add appends a limiter to the chain.
 func (c *Chain) Add(limiter Limiter) {
 	c.limiters = append(c.limiters, limiter)
 }

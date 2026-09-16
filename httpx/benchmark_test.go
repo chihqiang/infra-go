@@ -11,7 +11,8 @@ import (
 	"github.com/chihqiang/infra-go/httpx/binding"
 )
 
-// discardWriter 丢弃响应内容的 ResponseWriter，用于基准测试避免内存累积。
+// discardWriter is a ResponseWriter that discards the response body, used in
+// benchmarks to avoid accumulating memory.
 type discardWriter struct {
 	header http.Header
 }
@@ -24,9 +25,10 @@ func newDiscardWriter() *discardWriter {
 	return &discardWriter{header: make(http.Header)}
 }
 
-// --- 路由分发基准 ---
+// --- Route dispatch benchmarks ---
 
-// BenchmarkDispatch 基准：注册 10 条路由后请求分发（含全局中间件）。
+// BenchmarkDispatch benchmarks request dispatch after registering 10 routes
+// (including global middleware).
 func BenchmarkDispatch(b *testing.B) {
 	s := newTestServer()
 	s.Use(func(next http.HandlerFunc) http.HandlerFunc {
@@ -51,7 +53,7 @@ func BenchmarkDispatch(b *testing.B) {
 	}
 }
 
-// BenchmarkDispatch_NoMiddleware 基准：无中间件时的路由分发。
+// BenchmarkDispatch_NoMiddleware benchmarks route dispatch without middleware.
 func BenchmarkDispatch_NoMiddleware(b *testing.B) {
 	s := newTestServer()
 	for i := 0; i < 10; i++ {
@@ -71,7 +73,7 @@ func BenchmarkDispatch_NoMiddleware(b *testing.B) {
 	}
 }
 
-// --- 响应基准 ---
+// --- Response benchmarks ---
 
 func BenchmarkOkJSON(b *testing.B) {
 	w := newDiscardWriter()
@@ -128,7 +130,7 @@ func BenchmarkRedirect(b *testing.B) {
 	}
 }
 
-// --- 参数绑定基准 ---
+// --- Parameter binding benchmarks ---
 
 type benchRequest struct {
 	Name  string `json:"name" form:"name" binding:"required"`
@@ -194,9 +196,9 @@ func BenchmarkBind_AutoDetect(b *testing.B) {
 	}
 }
 
-// --- 中间件链基准 ---
+// --- Middleware chain benchmarks ---
 
-// BenchmarkMiddlewareChain 基准：3 层全局中间件 + 路由分发。
+// BenchmarkMiddlewareChain benchmarks 3 layers of global middleware plus route dispatch.
 func BenchmarkMiddlewareChain(b *testing.B) {
 	s := newTestServer()
 	mw := func(next http.HandlerFunc) http.HandlerFunc {
@@ -219,7 +221,7 @@ func BenchmarkMiddlewareChain(b *testing.B) {
 	}
 }
 
-// --- 工具基准 ---
+// --- Utility benchmarks ---
 
 func BenchmarkWriteJSON_Response(b *testing.B) {
 	resp := Response[any]{Code: CodeOK, Msg: MsgOK, Data: map[string]string{"name": "Alice"}}
@@ -240,7 +242,8 @@ func BenchmarkNewUploadRequest(b *testing.B) {
 	}
 }
 
-// buildBenchMultipart 构造 multipart 请求体（用于 Multipart 基准）。
+// buildBenchMultipart builds a multipart request body (used by the multipart
+// benchmarks).
 func buildBenchMultipart(content string) *http.Request {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)

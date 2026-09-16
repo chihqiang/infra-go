@@ -24,14 +24,14 @@ func init() {
 	})
 }
 
-// TraceIDKey HTTP 头中的 trace id 键名。
+// TraceIDKey is the trace id key name in HTTP headers.
 // https://www.w3.org/TR/trace-context/#trace-id
 var TraceIDKey = http.CanonicalHeaderKey("x-trace-id")
 
-// --- gRPC 元数据传播 ---
+// --- gRPC metadata propagation ---
 
-// metadataSupplier 实现 propagation.TextMapCarrier 接口，
-// 用于在 gRPC metadata 中注入和提取链路上下文。
+// metadataSupplier implements the propagation.TextMapCarrier interface, used to inject
+// and extract the trace context in gRPC metadata.
 type metadataSupplier struct {
 	metadata *metadata.MD
 }
@@ -56,16 +56,18 @@ func (s *metadataSupplier) Keys() []string {
 	return out
 }
 
-// Inject 将链路上下文注入到 gRPC metadata 中。
-// 用于 gRPC 客户端发起请求时，将当前 span 上下文传递到服务端。
+// Inject injects the trace context into gRPC metadata.
+// Used by a gRPC client to pass the current span context to the server when starting a
+// request.
 func Inject(ctx context.Context, metadata *metadata.MD) {
 	otel.GetTextMapPropagator().Inject(ctx, &metadataSupplier{
 		metadata: metadata,
 	})
 }
 
-// Extract 从 gRPC metadata 中提取链路上下文。
-// 用于 gRPC 服务端接收请求时，恢复客户端传递的 span 上下文。
+// Extract extracts the trace context from gRPC metadata.
+// Used by a gRPC server to restore the span context passed by the client when receiving
+// a request.
 func Extract(ctx context.Context, metadata *metadata.MD) (context.Context, trace.SpanContext) {
 	ctx = otel.GetTextMapPropagator().Extract(ctx, &metadataSupplier{
 		metadata: metadata,
@@ -73,36 +75,40 @@ func Extract(ctx context.Context, metadata *metadata.MD) (context.Context, trace
 	return ctx, trace.SpanContextFromContext(ctx)
 }
 
-// --- HTTP 头传播 ---
+// --- HTTP header propagation ---
 
-// InjectHeader 将链路上下文注入到 HTTP Header 中。
-// 用于 HTTP 客户端发起请求时，将当前 span 上下文传递到服务端。
+// InjectHeader injects the trace context into an HTTP header.
+// Used by an HTTP client to pass the current span context to the server when starting a
+// request.
 func InjectHeader(ctx context.Context, header http.Header) {
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(header))
 }
 
-// ExtractHeader 从 HTTP Header 中提取链路上下文。
-// 用于 HTTP 服务端接收请求时，恢复客户端传递的 span 上下文。
+// ExtractHeader extracts the trace context from an HTTP header.
+// Used by an HTTP server to restore the span context passed by the client when receiving
+// a request.
 func ExtractHeader(ctx context.Context, header http.Header) (context.Context, trace.SpanContext) {
 	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(header))
 	return ctx, trace.SpanContextFromContext(ctx)
 }
 
-// --- 辅助函数 ---
+// --- Helper functions ---
 
-// ContextWithSpanContext 将 SpanContext 注入到 context 中。
-// 用于跨上下文传递链路信息，例如将根 span 的链路注入到 HTTP 请求上下文。
+// ContextWithSpanContext injects a SpanContext into the context.
+// Used to pass trace information across contexts, for example injecting the trace of a
+// root span into an HTTP request context.
 func ContextWithSpanContext(ctx context.Context, sc trace.SpanContext) context.Context {
 	return trace.ContextWithSpanContext(ctx, sc)
 }
 
-// SpanContextFromContext 从 context 中提取 SpanContext。
+// SpanContextFromContext extracts the SpanContext from the context.
 func SpanContextFromContext(ctx context.Context) trace.SpanContext {
 	return trace.SpanContextFromContext(ctx)
 }
 
-// TracerFromContext 从 context 中获取 tracer。
-// 如果 context 中有有效的 span，使用其 TracerProvider；否则使用全局 TracerProvider。
+// TracerFromContext returns the tracer from the context.
+// If the context holds a valid span, its TracerProvider is used; otherwise the global
+// TracerProvider is used.
 func TracerFromContext(ctx context.Context) trace.Tracer {
 	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
 		return span.TracerProvider().Tracer(TraceName)
@@ -110,8 +116,8 @@ func TracerFromContext(ctx context.Context) trace.Tracer {
 	return otel.Tracer(TraceName)
 }
 
-// TraceIDFromContext 返回 context 中的 trace id。
-// 如果 context 中没有有效的 span，返回空字符串。
+// TraceIDFromContext returns the trace id in the context.
+// It returns an empty string when the context holds no valid span.
 func TraceIDFromContext(ctx context.Context) string {
 	sc := trace.SpanContextFromContext(ctx)
 	if sc.HasTraceID() {
@@ -120,8 +126,8 @@ func TraceIDFromContext(ctx context.Context) string {
 	return ""
 }
 
-// SpanIDFromContext 返回 context 中的 span id。
-// 如果 context 中没有有效的 span，返回空字符串。
+// SpanIDFromContext returns the span id in the context.
+// It returns an empty string when the context holds no valid span.
 func SpanIDFromContext(ctx context.Context) string {
 	sc := trace.SpanContextFromContext(ctx)
 	if sc.HasSpanID() {
@@ -130,9 +136,9 @@ func SpanIDFromContext(ctx context.Context) string {
 	return ""
 }
 
-// StartSpan 创建并启动一个新的 span。
-// 返回带有 span 的 context 和 span 本身。
-// 用法：
+// StartSpan creates and starts a new span.
+// It returns the context carrying the span and the span itself.
+// Usage:
 //
 //	ctx, span := trace.StartSpan(ctx, "operation-name",
 //	    trace.WithAttributes(trace.AttrString("key", "val")),

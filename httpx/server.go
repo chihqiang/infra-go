@@ -22,22 +22,24 @@ import (
 	mp "github.com/chihqiang/infra-go/mapping"
 )
 
-// 本文件承载 HTTP 服务器 Server 核心：
-//   - 核心类型（Middleware / Route / ServerConfig / Server）
-//   - 服务器构造与路由注册（NewServer / AddRoute(s) / Use / Routes / PrintRoutes）
-//   - 全局中间件懒加载与自定义 404（Handler / SetNotFoundHandler）
-//   - 服务器启动与优雅关闭（Start / Shutdown / Stop）
-//   - 内部路径辅助（buildPattern / normalizePath / joinPath）
+// This file holds the core of the HTTP server, Server:
+//   - Core types (Middleware / Route / ServerConfig / Server)
+//   - Server construction and route registration
+//     (NewServer / AddRoute(s) / Use / Routes / PrintRoutes)
+//   - Lazy global middleware and custom 404 (Handler / SetNotFoundHandler)
+//   - Server start and graceful shutdown (Start / Shutdown / Stop)
+//   - Internal path helpers (buildPattern / normalizePath / joinPath)
 //
-// 说明：路由组选项 / 中间件包装 / Server 选项（With* / Apply*）在 server_options.go；
-// 路由组 Group 在 server_group.go。
+// Note: route group options / middleware wrappers / Server options (With* / Apply*)
+// live in server_options.go; the route group Group lives in server_group.go.
 
-// --- 核心类型 ---
+// --- Core types ---
 
-// Middleware 是 HTTP 中间件函数。
-// 接收下游 handler，返回包装后的 handler。
+// Middleware is an HTTP middleware function.
+// It receives the downstream handler and returns the wrapped handler.
 //
-// 约定：中间件调用 next(w, r) 将请求传递给下游，不调用则中断链路。
+// Convention: middleware calls next(w, r) to pass the request downstream; not calling
+// it breaks the chain.
 //
 //	func Logging(next http.HandlerFunc) http.HandlerFunc {
 //	    return func(w http.ResponseWriter, r *http.Request) {
@@ -48,88 +50,97 @@ import (
 //	}
 type Middleware func(http.HandlerFunc) http.HandlerFunc
 
-// Route 表示一个 HTTP 路由，注册后由 Server 分发。
+// Route represents one HTTP route, dispatched by the Server once registered.
 type Route struct {
-	// Method HTTP 方法（如 GET、POST），大小写不敏感。
+	// Method is the HTTP method (e.g. GET, POST); case-insensitive.
 	Method string
-	// Path 路由路径，支持 Go 1.22 ServeMux 模式：/users/{id}、/files/{path...}。
+	// Path is the route path, supporting Go 1.22 ServeMux patterns:
+	// /users/{id}, /files/{path...}.
 	Path string
-	// Handler 处理该路由的 HTTP 处理器。
+	// Handler is the HTTP handler serving this route.
 	Handler http.HandlerFunc
 }
 
-// ServerConfig 是 HTTP 服务器配置。
-// 使用 json 标签声明默认值和约束，兼容 conf 包从配置文件加载。
+// ServerConfig is the HTTP server configuration.
+// The json tags declare defaults and constraints and are compatible with the conf
+// package loading from a configuration file.
 type ServerConfig struct {
-	// Host 监听地址，默认 "0.0.0.0"。
+	// Host is the listen address, default "0.0.0.0".
 	Host string `json:",default=0.0.0.0"`
-	// Port 监听端口，默认 8080。
+	// Port is the listen port, default 8080.
 	Port int `json:",default=8080,range=[1:65535]"`
-	// CertFile TLS 证书文件路径（可选，设置后启用 HTTPS）。
+	// CertFile is the TLS certificate file path (optional; setting it enables HTTPS).
 	CertFile string `json:",optional"`
-	// KeyFile TLS 私钥文件路径（可选）。
+	// KeyFile is the TLS private key file path (optional).
 	KeyFile string `json:",optional"`
-	// ReadTimeout 读超时，默认 10s。
-	// 通过 ServerConfig 设 0 会被当作“未设置”而使用默认值；
-	// 若需设为 0（不限制），请用 WithReadTimeout(0)。
+	// ReadTimeout is the read timeout, default 10s.
+	// Setting 0 via ServerConfig is treated as "unset" and the default applies;
+	// use WithReadTimeout(0) to really set it to 0 (no limit).
 	ReadTimeout time.Duration `json:",default=10s"`
-	// WriteTimeout 写超时，默认 10s。
-	// 通过 ServerConfig 设 0 会被当作“未设置”而使用默认值；
-	// 若需设为 0（不限制），请用 WithWriteTimeout(0)。
+	// WriteTimeout is the write timeout, default 10s.
+	// Setting 0 via ServerConfig is treated as "unset" and the default applies;
+	// use WithWriteTimeout(0) to really set it to 0 (no limit).
 	WriteTimeout time.Duration `json:",default=10s"`
-	// IdleTimeout 空闲连接超时，默认 120s。
-	// 通过 ServerConfig 设 0 会被当作“未设置”而使用默认值；
-	// 若需设为 0（不限制），请用 WithIdleTimeout(0)。
+	// IdleTimeout is the idle connection timeout, default 120s.
+	// Setting 0 via ServerConfig is treated as "unset" and the default applies;
+	// use WithIdleTimeout(0) to really set it to 0 (no limit).
 	IdleTimeout time.Duration `json:",default=120s"`
-	// MaxHeaderBytes 最大请求头字节数，默认 1MB。
+	// MaxHeaderBytes is the maximum request header size, default 1MB.
 	MaxHeaderBytes int `json:",default=1048576"`
-	// ShutdownTimeout 优雅关闭超时时间，默认 10s。
-	// 通过 ServerConfig 设 0 会被当作“未设置”而使用默认值；
-	// 若需设为 0，请用 WithShutdownTimeout(0)。
+	// ShutdownTimeout is the graceful shutdown timeout, default 10s.
+	// Setting 0 via ServerConfig is treated as "unset" and the default applies;
+	// use WithShutdownTimeout(0) to really set it to 0.
 	ShutdownTimeout time.Duration `json:",default=10s"`
 }
 
-// fillDefault 填充默认值，然后用用户配置中的非零字段覆盖。
-// 使用 mapping.FillAndOverride 统一处理，零值视为"未设置"保留默认值。
-// 要显式设为 0 请用对应的 RunOption，如 WithReadTimeout(0)。
+// fillDefault fills in the defaults, then overrides them with the non-zero fields from
+// the user configuration.
+// It delegates to mapping.FillAndOverride, where a zero value counts as "unset" and
+// keeps the default.
+// To set a value to 0 explicitly use the matching RunOption, such as
+// WithReadTimeout(0).
 func fillDefault(cfg ServerConfig) ServerConfig {
 	var c ServerConfig
 	mp.MustFillAndOverride(&c, cfg)
 	return c
 }
 
-// --- 内部类型 ---
+// --- Internal types ---
 
-// Server 是一个 HTTP 服务器，支持路由注册、中间件和优雅关闭。
+// Server is an HTTP server supporting route registration, middleware and graceful
+// shutdown.
 //
-// 底层使用 http.ServeMux，原生支持：
-//   - 方法匹配（GET / POST / PUT ...），自动返回 405 Method Not Allowed
-//   - 路径参数（/users/{id}），通过 r.PathValue("id") 获取
-//   - 通配路径（/files/{path...}），通过 r.PathValue("path") 获取
-//   - 自动 404 Not Found
+// It is built on http.ServeMux, which natively supports:
+//   - Method matching (GET / POST / PUT ...) with automatic 405 Method Not Allowed
+//   - Path parameters (/users/{id}), read via r.PathValue("id")
+//   - Wildcard paths (/files/{path...}), read via r.PathValue("path")
+//   - Automatic 404 Not Found
 type Server struct {
 	conf      ServerConfig
 	mux       *http.ServeMux
 	gmw       []Middleware
-	gh        http.Handler // 缓存应用全局中间件后的根 handler，nil 表示需要重建
-	handlerLk sync.Mutex   // 保护 gh 懒加载与重建（Use / SetNotFoundHandler 并发安全）
+	gh        http.Handler // root handler with global middleware applied, nil means rebuild
+	handlerLk sync.Mutex   // guards gh lazy init and rebuild (Use / SetNotFoundHandler concurrency)
 	tlsConfig *tls.Config
 
-	// stateLk 保护以下可变状态：
-	//   - routes：AddRoutes 写入，Routes/PrintRoutes 读取
-	//   - httpServer：Start 写入，Shutdown/Stop 读取
+	// stateLk guards the following mutable state:
+	//   - routes: written by AddRoutes, read by Routes/PrintRoutes
+	//   - httpServer: written by Start, read by Shutdown/Stop
 	//
-	// 二者都可能被多个 goroutine 并发访问（例如 service.ServiceGroup 在一个
-	// goroutine 中启动、另一个中停止），无保护会构成数据竞争。
+	// Both may be accessed concurrently by multiple goroutines (for example a
+	// service.ServiceGroup starting in one goroutine and stopping in another), and
+	// without protection that would be a data race.
 	stateLk    sync.RWMutex
 	routes     []Route
 	httpServer *http.Server
 
-	// notFoundHandler 自定义 404 响应处理器（可选），通过 SetNotFoundHandler 设置。
+	// notFoundHandler is the custom 404 response handler (optional), set via
+	// SetNotFoundHandler.
 	notFoundHandler http.HandlerFunc
 }
 
-// routesSnapshot 返回路由列表副本（调用方不得假设其后续不变）。
+// routesSnapshot returns a copy of the route list (callers must not assume it stays
+// unchanged afterwards).
 func (s *Server) routesSnapshot() []Route {
 	s.stateLk.RLock()
 	defer s.stateLk.RUnlock()
@@ -138,17 +149,18 @@ func (s *Server) routesSnapshot() []Route {
 	return out
 }
 
-// currentHTTPServer 返回当前正在运行的 http.Server；未启动时返回 nil。
-// 用于 Shutdown/Stop 以避免与 Start 的写入竞争。
+// currentHTTPServer returns the currently running http.Server, or nil when not
+// started.
+// It is used by Shutdown/Stop to avoid racing with the write in Start.
 func (s *Server) currentHTTPServer() *http.Server {
 	s.stateLk.RLock()
 	defer s.stateLk.RUnlock()
 	return s.httpServer
 }
 
-// --- Server 构造与路由注册 ---
+// --- Server construction and route registration ---
 
-// NewServer 创建一个 HTTP 服务器。
+// NewServer creates an HTTP server.
 //
 //	conf := httpx.ServerConfig{
 //	    Host: "0.0.0.0",
@@ -167,16 +179,18 @@ func NewServer(conf ServerConfig, opts ...RunOption) *Server {
 	return s
 }
 
-// AddRoute 添加单个路由，可附加 RouteOption。
+// AddRoute adds a single route and may carry RouteOption values.
 func (s *Server) AddRoute(r Route, opts ...RouteOption) {
 	s.AddRoutes([]Route{r}, opts...)
 }
 
-// AddRoutes 添加一组路由。
+// AddRoutes adds a group of routes.
 //
-// opts 中的 RouteOption 会统一应用到这组路由（如前缀、中间件）。
+// The RouteOption values in opts are applied to this whole group of routes (such as
+// prefix and middleware).
 //
-// 中间件执行顺序：全局中间件（Use 添加）→ 组中间件（WithMiddleware 添加）→ 路由 handler。
+// Middleware execution order: global middleware (added via Use) → group middleware
+// (added via WithMiddleware) → route handler.
 func (s *Server) AddRoutes(rs []Route, opts ...RouteOption) {
 	g := routeGroup{routes: rs}
 	for _, opt := range opts {
@@ -186,12 +200,13 @@ func (s *Server) AddRoutes(rs []Route, opts ...RouteOption) {
 	for _, r := range g.routes {
 		handler := r.Handler
 
-		// 应用组中间件（逆序包装，使先添加的中间件先执行）
+		// Apply group middleware (wrap in reverse so the first added runs first)
 		for i := len(g.middlewares) - 1; i >= 0; i-- {
 			handler = g.middlewares[i](handler)
 		}
-		// 全局中间件不在注册时烧录，而是在请求时由 gh 动态应用，
-		// 这样 Use 添加的全局中间件可以对已注册的路由也生效。
+		// Global middleware is not baked in at registration time but applied
+		// dynamically per request by gh, so global middleware added via Use also
+		// affects already-registered routes.
 
 		pattern := buildPattern(r.Method, r.Path)
 		s.mux.HandleFunc(pattern, handler)
@@ -200,35 +215,38 @@ func (s *Server) AddRoutes(rs []Route, opts ...RouteOption) {
 		s.routes = append(s.routes, Route{
 			Method:  strings.ToUpper(r.Method),
 			Path:    r.Path,
-			Handler: r.Handler, // 存原始 handler，便于 PrintRoutes 反射获取函数名
+			Handler: r.Handler, // keep the raw handler so PrintRoutes can reflect its name
 		})
 		s.stateLk.Unlock()
 	}
 }
 
-// Use 添加全局中间件，对所有已注册和后续注册的路由生效。
-// 多个中间件按添加顺序执行（先添加的先执行）。
+// Use adds global middleware, affecting all previously and subsequently registered
+// routes.
+// Several middleware run in the order they were added (first added runs first).
 //
-// 全局中间件在请求时动态应用（包装整个路由器），因此即使先注册路由、
-// 再调用 Use，已注册的路由也会经过新添加的全局中间件。
-// 注意：Start 启动后再调用 Use 不会影响已经运行的 httpServer。
+// Global middleware is applied dynamically per request (wrapping the whole router), so
+// even when routes are registered first and Use is called afterwards, the already
+// registered routes still pass through the newly added global middleware.
+// Note: calling Use after Start has begun does not affect the running httpServer.
 func (s *Server) Use(mws ...Middleware) {
 	s.handlerLk.Lock()
 	s.gmw = append(s.gmw, mws...)
-	s.gh = nil // 清空缓存，下次 Handler() 重新构建
+	s.gh = nil // clear the cache so the next Handler() rebuilds it
 	s.handlerLk.Unlock()
 }
 
-// Routes 返回已注册的所有路由（未应用中间件的原始 handler）。
-// 返回的是副本，修改不会影响 Server 内部状态；并发安全。
+// Routes returns all registered routes (with the raw, unwrapped handlers).
+// It returns a copy, so modifying it does not affect the Server's internal state; it
+// is concurrency-safe.
 func (s *Server) Routes() []Route {
 	return s.routesSnapshot()
 }
 
-// PrintRoutes 打印已注册的路由列表。
+// PrintRoutes prints the list of registered routes.
 //
 //	server.PrintRoutes()
-//	// 输出：
+//	// Output:
 //	// DELETE  /admin/users/{id}   --> main.deleteUser
 //	// GET     /api/v1/users       --> main.listUsers
 //	// GET     /api/v1/users/{id}   --> main.getUser
@@ -259,7 +277,7 @@ func (s *Server) PrintRoutes() {
 		return entries[i].method < entries[j].method
 	})
 
-	// 计算列宽
+	// Compute the column widths
 	mw, pw := 0, 0
 	for _, e := range entries {
 		if len(e.method) > mw {
@@ -276,8 +294,9 @@ func (s *Server) PrintRoutes() {
 	fmt.Printf("\n%d routes registered\n", len(entries))
 }
 
-// handlerName 通过反射获取 http.HandlerFunc 的函数名（含包路径）。
-// 获取不到时返回空字符串。
+// handlerName obtains the function name of an http.HandlerFunc by reflection
+// (including the package path).
+// It returns an empty string when it cannot be obtained.
 func handlerName(h http.HandlerFunc) string {
 	if h == nil {
 		return ""
@@ -285,14 +304,16 @@ func handlerName(h http.HandlerFunc) string {
 	return runtime.FuncForPC(reflect.ValueOf(h).Pointer()).Name()
 }
 
-// Mux 返回底层的 ServeMux，用于高级场景（如手动注册路由）。
+// Mux returns the underlying ServeMux for advanced scenarios (such as registering
+// routes manually).
 func (s *Server) Mux() *http.ServeMux {
 	return s.mux
 }
 
-// Handler 返回服务器的 HTTP Handler，可用于 httptest 等场景。
-// 返回的 handler 已应用全局中间件（Use 添加）。
-// 并发安全：懒加载构建受内部锁保护。
+// Handler returns the server's HTTP Handler, usable in httptest and similar
+// scenarios.
+// The returned handler already has the global middleware (added via Use) applied.
+// It is concurrency-safe: the lazy build is protected by an internal lock.
 func (s *Server) Handler() http.Handler {
 	s.handlerLk.Lock()
 	defer s.handlerLk.Unlock()
@@ -302,21 +323,26 @@ func (s *Server) Handler() http.Handler {
 	return s.gh
 }
 
-// buildGlobalHandler 构建应用了全局中间件、自定义 404 的根 handler（懒加载）。
-// 全局中间件按添加顺序执行（先添加的先执行），包装整个 mux。
-// 组中间件已在路由注册时烧录到各路由 handler，执行顺序为：
-// 全局中间件 → 组中间件 → 路由 handler。
+// buildGlobalHandler builds the root handler with global middleware and the custom 404
+// applied (lazily).
+// Global middleware runs in the order added (first added runs first), wrapping the
+// entire mux.
+// Group middleware is already baked into each route handler at registration time, so
+// the execution order is: global middleware → group middleware → route handler.
 //
-// handler 链（从内到外）：
+// The handler chain (innermost to outermost):
 //
-//	mux（含自定义 404 判定）→ 全局中间件 → 错误渲染/路由模板注入
+//	mux (including custom 404 detection) → global middleware → error rendering/route
+//	template injection
 func (s *Server) buildGlobalHandler() {
 	handler := http.HandlerFunc(s.mux.ServeHTTP)
-	// 自定义 404 紧贴 mux，只对真正未匹配的路由生效。
-	// 通过路由预判而非包装 ResponseWriter 判定"未匹配"，原因是后者无法区分
-	// "路由未命中"与"业务主动返回 404"，会把业务 404 一并劫持；
-	// 且包装 writer 会丢失 Flush/Hijack/Push/Unwrap 等可选能力，
-	// 导致 SSE、WebSocket、HTTP/2 Push 静默失效。
+	// The custom 404 sits right next to the mux so it only applies to genuinely
+	// unmatched routes.
+	// "Unmatched" is decided by a routing pre-check rather than by wrapping the
+	// ResponseWriter, because the latter cannot tell "route not matched" apart from
+	// "the handler deliberately returned 404" and would hijack those business 404s;
+	// wrapping the writer would also drop optional capabilities such as
+	// Flush/Hijack/Push/Unwrap, silently breaking SSE, WebSocket and HTTP/2 Push.
 	if s.notFoundHandler != nil {
 		mux, notFound := s.mux, s.notFoundHandler
 		handler = func(w http.ResponseWriter, r *http.Request) {
@@ -328,26 +354,31 @@ func (s *Server) buildGlobalHandler() {
 		}
 	}
 
-	// 全局中间件（逆序包装，使先添加的中间件先执行）
+	// Global middleware (wrapped in reverse so the first added runs first)
 	for i := len(s.gmw) - 1; i >= 0; i-- {
 		handler = s.gmw[i](handler)
 	}
 
-	// 路由模板注入必须包在**中间件链最外层**：
-	// 全局中间件位于 mux 外层，此时 net/http 还没有把匹配到的路由模板写入
-	// r.Pattern（ServeMux 只在分发到命中 handler 时才填充）。
-	// 需要"按路由聚合"的中间件（熔断、指标）因此拿不到稳定模板。
-	// 这里先做一次路由预判、把模板放进 context，再进入中间件链，
-	// 供 middleware.PatternFromContext 读取。
+	// Route template injection must wrap the **outermost** layer of the middleware
+	// chain: global middleware sits outside the mux, and at that point net/http has
+	// not yet written the matched route template into r.Pattern (ServeMux only fills
+	// it when dispatching to the matched handler).
+	// Middleware that needs to aggregate per route (circuit breaking, metrics) would
+	// therefore not see a stable template.
+	// Here we do a routing pre-check, put the template into the context, and only then
+	// enter the middleware chain so middleware.PatternFromContext can read it.
 	//
-	// 顺序很关键：若包在内层，中间件执行时 context 里还没有模板。
+	// Order matters: wrapped inside, the context would still lack the template when
+	// middleware runs.
 	mux := s.mux
 	inner := handler
-	// 仅在存在全局中间件/自定义 404 时才做路由预判（它们才需要模板）。
+	// Only pre-check routing when global middleware/custom 404 exist (they are the
+	// only ones needing the template).
 	needPattern := len(s.gmw) > 0 || s.notFoundHandler != nil
 	s.gh = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 按请求注入错误渲染：经 httpx 分发的请求保持统一 JSON 响应，
-		// 而同进程内 gin/echo 路由不受影响（详见 middlewareErrorHandler）。
+		// Inject error rendering per request: requests dispatched through httpx keep
+		// the unified JSON response, while gin/echo routes in the same process stay
+		// unaffected (see middlewareErrorHandler).
 		ctx := middleware.ContextWithErrorHandler(r.Context(), middlewareErrorHandler)
 		if needPattern {
 			if pattern := matchedPattern(mux, r); pattern != "" {
@@ -358,45 +389,53 @@ func (s *Server) buildGlobalHandler() {
 	})
 }
 
-// matchedPattern 返回该请求将被 mux 分发到的路由模板（如 "GET /users/{id}"）。
-// 未匹配（含 405）时返回空字符串。
+// matchedPattern returns the route template this request will be dispatched to by the
+// mux (e.g. "GET /users/{id}").
+// It returns an empty string when unmatched (including 405).
 //
-// 注意：只用 mux.Handler 查询，不调用 mux.ServeHTTP，
-// 因此不会影响 ServeMux 后续对 r.Pattern 的填充。
+// Note: it only queries via mux.Handler and never calls mux.ServeHTTP, so it does not
+// interfere with ServeMux's later population of r.Pattern.
 func matchedPattern(mux *http.ServeMux, r *http.Request) string {
 	_, pattern := mux.Handler(r)
 	return pattern
 }
 
-// notFoundHandlerPtr 是 net/http 内置 404 处理器（http.NotFoundHandler()）的代码指针。
+// notFoundHandlerPtr is the code pointer of net/http's built-in 404 handler
+// (http.NotFoundHandler()).
 var notFoundHandlerPtr = reflect.ValueOf(http.NotFoundHandler()).Pointer()
 
-// isMuxNotFound 判断该请求是否会被 mux 交给内置的 404 处理器。
+// isMuxNotFound reports whether the mux will hand this request to the built-in 404
+// handler.
 //
-// 不能只看 ServeMux.Handler 返回的 pattern：Go 1.22+ 在「无匹配」与
-// 「路径匹配但方法不允许(405)」两种情况下都返回空 pattern，仅凭 pattern
-// 判定会把 405 误判为 404（丢失 Allow 响应头）。因此需要同时满足：
-// 空 pattern 且返回的 handler 正是内置 NotFoundHandler。
+// Looking at the pattern returned by ServeMux.Handler alone is not enough: Go 1.22+
+// returns an empty pattern both for "no match" and for "path matched but method not
+// allowed (405)", so judging by pattern alone would mistake a 405 for a 404 (losing
+// the Allow header). Both conditions must hold: an empty pattern *and* a returned
+// handler that is exactly the built-in NotFoundHandler.
 func isMuxNotFound(mux *http.ServeMux, r *http.Request) bool {
 	h, pattern := mux.Handler(r)
 	if pattern != "" {
 		return false
 	}
 	v := reflect.ValueOf(h)
-	// 命中的可能是任意实现了 http.Handler 的类型（非函数），此时不可能是内置 404。
+	// The matched type may be any http.Handler implementation (not necessarily a
+	// function); in that case it cannot be the built-in 404.
 	if v.Kind() != reflect.Func {
 		return false
 	}
 	return v.Pointer() == notFoundHandlerPtr
 }
 
-// --- 自定义错误响应 ---
+// --- Custom error responses ---
 
-// SetNotFoundHandler 设置路由未找到（404）时的自定义响应处理器。
-// 所有未被任何路由匹配的请求都会交给该处理器，替代默认的 "404 page not found"。
-// 注意：处理器需自行写出状态码；若未调用 WriteHeader，将由 net/http 隐式写 200
-// （httpx.OkJSON 系列即为此约定：HTTP 200 + 响应体中的业务错误码）。
-// 业务路由内部主动返回的 404 不会被劫持，仍会原样返回给客户端。
+// SetNotFoundHandler sets a custom response handler for route-not-found (404).
+// Every request not matched by any route goes to this handler instead of the default
+// "404 page not found".
+// Note: the handler must write the status code itself; if WriteHeader is never called,
+// net/http implicitly writes 200 (which is exactly the convention followed by the
+// httpx.OkJSON family: HTTP 200 plus a business error code in the body).
+// A 404 deliberately returned from inside a business route is not hijacked and reaches
+// the client unchanged.
 //
 //	server.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
 //	    httpx.OkJSON(w, httpx.NewCodeError(httpx.CodeNotFound, "resource not found"))
@@ -408,18 +447,20 @@ func (s *Server) SetNotFoundHandler(h http.HandlerFunc) {
 	s.handlerLk.Unlock()
 }
 
-// --- 启动与关闭 ---
+// --- Startup and shutdown ---
 
-// Start 启动 HTTP 服务器，支持优雅关闭。
+// Start starts the HTTP server with graceful shutdown support.
 //
-// 服务器在独立 goroutine 中运行，主 goroutine 阻塞等待信号。
-// 收到 SIGINT（Ctrl+C）、SIGTERM 或 SIGHUP 时执行优雅关闭。
+// The server runs in a dedicated goroutine while the main goroutine blocks waiting for
+// a signal.
+// On SIGINT (Ctrl+C), SIGTERM or SIGHUP it performs a graceful shutdown.
 //
-// 如果配置了 CertFile 和 KeyFile，则启动 HTTPS 服务。
+// When CertFile and KeyFile are configured, it starts an HTTPS service.
 //
-// 并发语义：Start 会先登记 http.Server 再开始监听，登记过程受锁保护，
-// 因此另一 goroutine 调用 Stop/Shutdown 不会与登记过程竞争；
-// 但若 Stop 在 Start 之前完成，则本次 Stop 是空操作（彼时服务器尚未启动）。
+// Concurrency semantics: Start registers the http.Server before it begins listening,
+// and the registration is lock-protected, so another goroutine calling Stop/Shutdown
+// cannot race with it; but if Stop completes before Start, that Stop is a no-op (the
+// server was not running yet).
 func (s *Server) Start() error {
 	srv := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", s.conf.Host, s.conf.Port),
@@ -432,8 +473,8 @@ func (s *Server) Start() error {
 		TLSConfig:         s.tlsConfig,
 	}
 
-	// 登记后再启动监听：Stop/Shutdown 通过 currentHTTPServer() 读取，
-	// 无锁写入会与之构成数据竞争（-race 可检出）。
+	// Register before listening: Stop/Shutdown read it via currentHTTPServer(), and
+	// an unlocked write would be a data race with them (detectable with -race).
 	s.stateLk.Lock()
 	s.httpServer = srv
 	s.stateLk.Unlock()
@@ -448,11 +489,12 @@ func (s *Server) Start() error {
 	}()
 
 	sigCh := make(chan os.Signal, 1)
-	// 监听 SIGINT、SIGTERM 和 SIGHUP，兼容 Kubernetes 环境信号
+	// Listen for SIGINT, SIGTERM and SIGHUP to stay compatible with Kubernetes signals
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	// 必须注销：否则本函数返回后 sigCh 仍被注册在 signal 包中，
-	// 后续信号会被投递到无人接收的 channel（缓冲满后静默丢弃），
-	// 且同一进程多次 Start 会累积注册。
+	// Unregistering is mandatory: otherwise sigCh stays registered with the signal
+	// package after this function returns, later signals get delivered to a channel
+	// nobody receives from (silently dropped once the buffer is full), and repeated
+	// Start calls in the same process accumulate registrations.
 	defer signal.Stop(sigCh)
 
 	select {
@@ -468,12 +510,13 @@ func (s *Server) Start() error {
 	}
 }
 
-// Shutdown 优雅关闭服务器，等待活跃连接处理完毕。
-// 超时时间由 WithShutdownTimeout 设置（默认 10 秒）。
-// 关闭失败时记录日志但不静默吞掉错误。
+// Shutdown gracefully shuts down the server, waiting for active connections to finish.
+// The timeout is set by WithShutdownTimeout (10 seconds by default).
+// A failed shutdown is logged but the error is not silently swallowed.
 //
-// 若服务器尚未启动（Start 未被调用），返回 nil（空操作）。
-// 并发安全：可在与 Start 不同的 goroutine 中调用。
+// If the server has not been started (Start was never called), it returns nil (no-op).
+// It is concurrency-safe and may be called from a goroutine other than the one running
+// Start.
 func (s *Server) Shutdown() error {
 	srv := s.currentHTTPServer()
 	if srv == nil {
@@ -490,18 +533,20 @@ func (s *Server) Shutdown() error {
 	return err
 }
 
-// Stop 停止服务器并返回关闭错误，委托 Shutdown。
-// 提供与 Shutdown 等价的“停止”命名入口，便于适配要求 Stop() error 的管理接口
-// （如配合 service.AsService 纳入 ServiceGroup 管理）；直接调用方也可像 Shutdown 一样获取错误。
+// Stop stops the server and returns the shutdown error, delegating to Shutdown.
+// It provides a "stop"-named entry point equivalent to Shutdown, making it easy to
+// satisfy management interfaces that require Stop() error (e.g. pairing with
+// service.AsService to join a ServiceGroup); direct callers can obtain the error just
+// like with Shutdown.
 func (s *Server) Stop() error {
 	return s.Shutdown()
 }
 
-// --- 内部辅助函数 ---
+// --- Internal helper functions ---
 
-// buildPattern 构建 ServeMux 的路由模式（格式："METHOD /path"）。
-// 自动规范化路径：确保非空路径以 "/" 开头，否则 http.ServeMux
-// 会因非法 pattern（如 "GET users"）而 panic。
+// buildPattern builds the ServeMux route pattern (format: "METHOD /path").
+// It normalizes the path automatically: a non-empty path is guaranteed to start with
+// "/", otherwise http.ServeMux panics on an invalid pattern (such as "GET users").
 func buildPattern(method, path string) string {
 	method = strings.ToUpper(method)
 	path = normalizePath(path)
@@ -511,9 +556,9 @@ func buildPattern(method, path string) string {
 	return method + " " + path
 }
 
-// normalizePath 规范化路由路径：
-//   - 空路径视为根路径 "/"
-//   - 非空路径确保以 "/" 开头（自动补前导斜杠）
+// normalizePath normalizes a route path:
+//   - an empty path is treated as the root path "/"
+//   - a non-empty path is guaranteed to start with "/" (a leading slash is added)
 func normalizePath(path string) string {
 	if path == "" {
 		return "/"
@@ -524,8 +569,9 @@ func normalizePath(path string) string {
 	return path
 }
 
-// joinPath 连接前缀和路径，处理多余的斜杠。
-// 若 p 以 "/" 结尾（子树匹配模式，如 /static/），保留结尾斜杠；裸 "/" 除外。
+// joinPath joins a prefix and a path, dealing with redundant slashes.
+// When p ends with "/" (subtree match pattern such as /static/), the trailing slash is
+// preserved; a bare "/" is the exception.
 func joinPath(prefix, p string) string {
 	if prefix == "" {
 		return p

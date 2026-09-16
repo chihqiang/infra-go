@@ -14,22 +14,23 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// 对应 content_security.go：内容安全校验中间件（防篡改 + 防重放）。
+// Covers content_security.go: the content security verification middleware
+// (tamper-proof + replay-proof).
 
-// bodySHA256Hex 计算请求体的 SHA-256 十六进制摘要（用于构造签名）。
+// bodySHA256Hex computes the hex SHA-256 digest of a request body (used to build a signature).
 func bodySHA256Hex(body string) string {
 	sum := sha256.Sum256([]byte(body))
 	return hex.EncodeToString(sum[:])
 }
 
-// signedRequest 构造带合法签名的请求。
+// signedRequest builds a request carrying a valid signature.
 func signedRequest(t *testing.T, key []byte, method, path, body string, ts int64) *http.Request {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	// 签名内容：timestamp\nmethod\npath\nquery\nbodySha256Hex
+	// Signed content: timestamp\nmethod\npath\nquery\nbodySha256Hex
 	signContent := fmt.Sprintf("%d\n%s\n%s\n%s\n%s",
 		ts, method, "/"+strings.TrimPrefix(path, "/"), "", bodySHA256Hex(body))
 	signature := hash.HMACSign(key, signContent)
@@ -50,7 +51,7 @@ func TestContentSecurity_InvalidSignature(t *testing.T) {
 	silenceLogger(t)
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 
-	// 错误密钥签名 → 401
+	// Signed with the wrong key → 401
 	req := signedRequest(t, []byte("wrong-key-1234567"), http.MethodPost, "/data", "x", time.Now().Unix())
 	rec := perform(NewContentSecurity(testKey, 5*time.Minute).Middleware(), ok, req)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
@@ -60,11 +61,12 @@ func TestContentSecurity_Expired(t *testing.T) {
 	silenceLogger(t)
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 
-	// 时间戳在 10 分钟前（超出 5 分钟容差）→ 401 防重放。
+	// Timestamp 10 minutes in the past (outside the 5 minute tolerance) → 401 replay protection.
 	//
-	// 用 401 而非 403：凭据失效（这里指时间戳过期）属于 RFC 9110 §15.5.2
-	// 定义的 "lacks valid authentication credentials"，403 表达的是
-	// "已认证但权限不足"，语义不同。同中间件的其它失败路径也都是 401。
+	// 401 rather than 403: invalid credentials (an expired timestamp here) is the
+	// RFC 9110 §15.5.2 condition "lacks valid authentication credentials", whereas 403 means
+	// "authenticated but not permitted" — a different meaning. The other failure paths of this
+	// middleware also use 401.
 	req := signedRequest(t, testKey, http.MethodPost, "/data", "x", time.Now().Add(-10*time.Minute).Unix())
 	rec := perform(NewContentSecurity(testKey, 5*time.Minute).Middleware(), ok, req)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
@@ -83,7 +85,7 @@ func TestContentSecurity_InvalidTimestamp(t *testing.T) {
 	silenceLogger(t)
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 
-	// timestamp 非数字 → 401
+	// non-numeric timestamp → 401
 	req := signedRequest(t, testKey, http.MethodPost, "/data", "x", time.Now().Unix())
 	req.Header.Set(ContentSecurityHeader, "time=abc; signature=xyz")
 	rec := perform(NewContentSecurity(testKey, 5*time.Minute).Middleware(), ok, req)

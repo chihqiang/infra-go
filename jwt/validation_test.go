@@ -9,16 +9,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 本文件覆盖签发行/受众（iss/aud）与算法校验的回归测试。
+// This file covers regression tests for the issuer/audience (iss/aud) and
+// algorithm validation.
 //
-// 历史缺陷：ParseToken 只校验签名与过期时间，Config.Issuer / Config.Audience
-// 仅在签发时写入、从不参与校验。共享同一密钥的不同应用（或多租户场景）因此可以
-// 互相接受对方签发的令牌 —— iss=app-a/aud=tenant-a 的令牌会被配置为
-// app-b/tenant-b 的实例接受，构成跨租户越权。
+// Historic defect: ParseToken validated only the signature and the expiry, so
+// Config.Issuer / Config.Audience were written at signing time but never
+// validated. Different applications sharing the same secret (or multi-tenant
+// setups) could therefore accept each other's tokens — a token with
+// iss=app-a/aud=tenant-a was accepted by an instance configured with
+// app-b/tenant-b, allowing cross-tenant privilege escalation.
 
 const crossTenantSecret = "shared-secret"
 
-// newJWTWithIdentity 构造带指定 iss/aud 的实例。
+// newJWTWithIdentity builds an instance with the given iss/aud.
 func newJWTWithIdentity(t *testing.T, issuer string, audience ...string) *JWT {
 	t.Helper()
 	j, err := New(Config{
@@ -32,7 +35,8 @@ func newJWTWithIdentity(t *testing.T, issuer string, audience ...string) *JWT {
 	return j
 }
 
-// TestParseToken_RejectsForeignIssuer 回归测试：不同 Issuer 的实例不得接受彼此的令牌。
+// TestParseToken_RejectsForeignIssuer is a regression test: instances with
+// different Issuers must not accept each other's tokens.
 func TestParseToken_RejectsForeignIssuer(t *testing.T) {
 	appA := newJWTWithIdentity(t, "app-a", "tenant-a")
 	appB := newJWTWithIdentity(t, "app-b", "tenant-b")
@@ -40,19 +44,20 @@ func TestParseToken_RejectsForeignIssuer(t *testing.T) {
 	token, err := appA.GenerateAccessToken(Claims{"user_id": "1"})
 	require.NoError(t, err)
 
-	// 自己签发的仍可用
+	// Its own tokens still work
 	claims, err := appA.ParseAccessToken(token)
 	require.NoError(t, err)
 	assert.Equal(t, "1", claims["user_id"])
 
-	// 其他应用必须拒绝
+	// Other applications must reject it
 	_, err = appB.ParseAccessToken(token)
 	require.Error(t, err, "a token issued for app-a must not be accepted by app-b")
 	assert.ErrorIs(t, err, ErrInvalidToken)
 	assert.Contains(t, err.Error(), "issuer")
 }
 
-// TestParseToken_RejectsForeignAudience 回归测试：受众不匹配时必须拒绝。
+// TestParseToken_RejectsForeignAudience is a regression test: a mismatched
+// audience must be rejected.
 func TestParseToken_RejectsForeignAudience(t *testing.T) {
 	tenantA := newJWTWithIdentity(t, "app", "tenant-a")
 	tenantB := newJWTWithIdentity(t, "app", "tenant-b")
@@ -66,8 +71,9 @@ func TestParseToken_RejectsForeignAudience(t *testing.T) {
 	assert.Contains(t, err.Error(), "audience")
 }
 
-// TestParseToken_AcceptsOverlappingAudience 验证受众存在交集时可通过
-// （WithAudience 语义：令牌 aud 包含任一配置值即可）。
+// TestParseToken_AcceptsOverlappingAudience verifies that overlapping audiences
+// pass (WithAudience semantics: the token aud only needs to contain one of the
+// configured values).
 func TestParseToken_AcceptsOverlappingAudience(t *testing.T) {
 	issuer := newJWTWithIdentity(t, "app", "web", "app")
 	verifier := newJWTWithIdentity(t, "app", "app", "internal")
@@ -79,22 +85,24 @@ func TestParseToken_AcceptsOverlappingAudience(t *testing.T) {
 	assert.NoError(t, err, "overlapping audience must be accepted")
 }
 
-// TestParseToken_IssuerAudienceOptional 验证未配置 iss/aud 时不做对应校验
-// （保持"仅用密钥校验"的既有用法可用）。
+// TestParseToken_IssuerAudienceOptional verifies that iss/aud are not validated
+// when they are not configured (keeping the existing "secret-only validation"
+// usage working).
 func TestParseToken_IssuerAudienceOptional(t *testing.T) {
-	// 签发方带 iss/aud
+	// The signer carries iss/aud
 	withIdentity := newJWTWithIdentity(t, "app-a", "tenant-a")
 	token, err := withIdentity.GenerateAccessToken(Claims{"user_id": "1"})
 	require.NoError(t, err)
 
-	// 校验方只配密钥（不配 iss/aud）→ 接受
+	// The verifier only configures the secret (no iss/aud) → accepted
 	bare, err := New(Config{Secret: crossTenantSecret})
 	require.NoError(t, err)
 	claims, err := bare.ParseAccessToken(token)
 	require.NoError(t, err)
 	assert.Equal(t, "1", claims["user_id"])
 
-	// 反向：签发方不带 iss/aud，校验方配置了 iss → 令牌无 iss，必须拒绝
+	// Reverse: the signer has no iss/aud while the verifier configures iss →
+	// the token has no iss and must be rejected
 	noIdentity, err := New(Config{Secret: crossTenantSecret})
 	require.NoError(t, err)
 	bareToken, err := noIdentity.GenerateAccessToken(Claims{"user_id": "2"})
@@ -105,7 +113,8 @@ func TestParseToken_IssuerAudienceOptional(t *testing.T) {
 	assert.Error(t, err, "when Issuer is configured, a token without iss must be rejected")
 }
 
-// TestParseToken_WrongAlgorithmRejected 验证算法不匹配的令牌被拒绝。
+// TestParseToken_WrongAlgorithmRejected verifies that a token with a mismatched
+// algorithm is rejected.
 func TestParseToken_WrongAlgorithmRejected(t *testing.T) {
 	hs256, err := New(Config{Secret: crossTenantSecret, Algorithm: AlgorithmHS256})
 	require.NoError(t, err)
@@ -115,13 +124,14 @@ func TestParseToken_WrongAlgorithmRejected(t *testing.T) {
 	token256, err := hs256.GenerateAccessToken(Claims{"user_id": "1"})
 	require.NoError(t, err)
 
-	// HS512 实例不得接受 HS256 令牌（即使密钥相同）
+	// An HS512 instance must not accept an HS256 token (even with the same secret)
 	_, err = hs512.ParseAccessToken(token256)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrInvalidToken)
 }
 
-// TestParseToken_AlgNoneRejected 验证 alg=none 的未签名令牌被拒绝。
+// TestParseToken_AlgNoneRejected verifies that unsigned alg=none tokens are
+// rejected.
 func TestParseToken_AlgNoneRejected(t *testing.T) {
 	j := newJWTWithIdentity(t, "app", "web")
 
@@ -138,8 +148,10 @@ func TestParseToken_AlgNoneRejected(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidToken)
 }
 
-// TestParseToken_AlgConfusionRejected 验证用 HS512 重签、但声称 alg=HS256 的令牌被拒绝。
-// 这类构造用于绕过只信任 Header["alg"] 的实现。
+// TestParseToken_AlgConfusionRejected verifies that a token re-signed with HS512
+// while claiming alg=HS256 is rejected.
+// Such constructions are used to bypass implementations that only trust
+// Header["alg"].
 func TestParseToken_AlgConfusionRejected(t *testing.T) {
 	verifier, err := New(Config{
 		Secret:    crossTenantSecret,
@@ -148,7 +160,7 @@ func TestParseToken_AlgConfusionRejected(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// 用 HS512 实际签名，但把 header 的 alg 改成 HS256
+	// Actually sign with HS512 but change the header alg to HS256
 	claims := Claims{
 		ClaimKeyIssuer:         "app",
 		ClaimKeyExpirationTime: time.Now().Add(time.Hour).Unix(),
@@ -163,16 +175,18 @@ func TestParseToken_AlgConfusionRejected(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidToken)
 }
 
-// TestGenerateToken_ConfigOverridesCallerIssuerAudience 验证调用方传入的 iss/aud
-// 会被配置值覆盖，无法伪造签发行/受众。
+// TestGenerateToken_ConfigOverridesCallerIssuerAudience verifies that iss/aud
+// supplied by the caller are overwritten by the configured values, so the
+// signing issuer/audience cannot be forged.
 //
-// 这是重要的安全属性：GenerateToken 无条件写入 config.Issuer / config.Audience，
-// 因此调用方无法通过 claims 把自己的令牌伪装成其他应用的令牌。
+// This is an important security property: GenerateToken unconditionally writes
+// config.Issuer / config.Audience, so a caller cannot disguise its own token as
+// another application's token through claims.
 func TestGenerateToken_ConfigOverridesCallerIssuerAudience(t *testing.T) {
 	appA := newJWTWithIdentity(t, "app-a", "tenant-a")
 	appB := newJWTWithIdentity(t, "app-b", "tenant-b")
 
-	// 调用方试图把 iss/aud 伪造成 app-b / tenant-b
+	// The caller tries to forge iss/aud as app-b / tenant-b
 	token, err := appA.GenerateAccessToken(Claims{
 		ClaimKeyIssuer:   "app-b",
 		ClaimKeyAudience: []string{"tenant-b"},
@@ -180,20 +194,21 @@ func TestGenerateToken_ConfigOverridesCallerIssuerAudience(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// app-a 校验通过（iss 实际为 app-a）
+	// app-a validates it (iss is actually app-a)
 	claims, err := appA.ParseAccessToken(token)
 	require.NoError(t, err)
 	assert.Equal(t, "app-a", claims[ClaimKeyIssuer], "caller-supplied iss must be overwritten")
 	assert.Equal(t, []any{"tenant-a"}, claims[ClaimKeyAudience],
 		"caller-supplied aud must be overwritten")
 
-	// app-b 必须拒绝（伪造失败）
+	// app-b must reject it (the forgery failed)
 	_, err = appB.ParseAccessToken(token)
 	require.Error(t, err, "forging iss/aud via claims must not work")
 	assert.ErrorIs(t, err, ErrInvalidToken)
 }
 
-// TestParseToken_CrossInstanceRejectedBothWays 验证两个不同身份的实例互相拒绝对方的令牌。
+// TestParseToken_CrossInstanceRejectedBothWays verifies that two instances with
+// different identities reject each other's tokens.
 func TestParseToken_CrossInstanceRejectedBothWays(t *testing.T) {
 	appA := newJWTWithIdentity(t, "app-a", "tenant-a")
 	appB := newJWTWithIdentity(t, "app-b", "tenant-b")
@@ -209,7 +224,7 @@ func TestParseToken_CrossInstanceRejectedBothWays(t *testing.T) {
 	_, err = appA.ParseAccessToken(tokenB)
 	assert.Error(t, err, "app-a must reject app-b's token")
 
-	// 各自校验自己的令牌仍然正常
+	// Each instance still validates its own token normally
 	_, err = appA.ParseAccessToken(tokenA)
 	assert.NoError(t, err)
 	_, err = appB.ParseAccessToken(tokenB)

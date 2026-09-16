@@ -9,14 +9,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 本文件验证 GetAs 在两个后端的返回值一致（消除 Cache.Get 的类型差异）。
+// This file verifies that GetAs returns consistent values on both backends (removing
+// the type differences of Cache.Get).
 
 type getAsUser struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
 }
 
-// bothBackends 返回两个后端的实例，便于对同一组断言跑两遍。
+// bothBackends returns instances of both backends so that the same set of assertions
+// can run twice.
 func bothBackends(t *testing.T) map[string]Cache {
 	t.Helper()
 	ctx := context.Background()
@@ -32,8 +34,9 @@ func bothBackends(t *testing.T) map[string]Cache {
 	}
 }
 
-// TestGetAs_ScalarConsistentAcrossBackends 验证标量在两个后端读回一致的类型。
-// 直接用 Get 时 mem 返回 int、redis 返回 json.Number，按 int 断言会在 redis 上失败。
+// TestGetAs_ScalarConsistentAcrossBackends verifies that scalars read back with a
+// consistent type on both backends. When Get is used directly, mem returns an int
+// while redis returns a json.Number, so asserting an int fails on redis.
 func TestGetAs_ScalarConsistentAcrossBackends(t *testing.T) {
 	ctx := context.Background()
 
@@ -53,7 +56,7 @@ func TestGetAs_ScalarConsistentAcrossBackends(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, float64(42), f)
 
-			// 字符串值在两个后端都应原样读回
+			// A string value should read back unchanged on both backends.
 			require.NoError(t, c.Set(ctx, "name", "chihqiang"))
 			s, err := GetAs[string](ctx, c, "name")
 			require.NoError(t, err)
@@ -62,11 +65,11 @@ func TestGetAs_ScalarConsistentAcrossBackends(t *testing.T) {
 	}
 }
 
-// TestGetAs_Int64WithinFloat64Range 验证在 float64 可精确表示的范围内，
-// 两个后端都能原样读回 int64。
+// TestGetAs_Int64WithinFloat64Range verifies that both backends read back an int64
+// unchanged as long as it is exactly representable as a float64.
 func TestGetAs_Int64WithinFloat64Range(t *testing.T) {
 	ctx := context.Background()
-	const exact = int64(9007199254740992) // 2^53，float64 可精确表示
+	const exact = int64(9007199254740992) // 2^53, exactly representable as a float64
 
 	for name, c := range bothBackends(t) {
 		t.Run(name, func(t *testing.T) {
@@ -79,10 +82,12 @@ func TestGetAs_Int64WithinFloat64Range(t *testing.T) {
 	}
 }
 
-// TestGetAs_LargeInt64Precision 验证两个后端都能精确保存超过 2^53 的 int64。
+// TestGetAs_LargeInt64Precision verifies that both backends preserve an int64 above
+// 2^53 exactly.
 //
-// Redis 后端依赖 RedisCache.Get 的 UseNumber 解码：若退回默认的 float64，
-// 精度会在 Get 阶段就丢失，GetAs 无法补救。
+// The Redis backend relies on the UseNumber decoding of RedisCache.Get: falling back
+// to the default float64 loses precision already at the Get stage, which GetAs cannot
+// repair.
 func TestGetAs_LargeInt64Precision(t *testing.T) {
 	ctx := context.Background()
 	const big = int64(9007199254740993) // 2^53 + 1
@@ -98,9 +103,12 @@ func TestGetAs_LargeInt64Precision(t *testing.T) {
 	}
 }
 
-// TestGetAs_StructConsistentAcrossBackends 验证结构体在两个后端都能还原为具体类型。
-// 直接用 Get 时 mem 返回原结构体、redis 返回 map[string]any。
-// ID 取超过 2^53 的值，同时覆盖结构体字段中的大整数精度。
+// TestGetAs_StructConsistentAcrossBackends verifies that a struct is restored to its
+// concrete type on both backends.
+// When Get is used directly, mem returns the original struct while redis returns a
+// map[string]any.
+// ID is above 2^53 so that large-integer precision inside struct fields is covered as
+// well.
 func TestGetAs_StructConsistentAcrossBackends(t *testing.T) {
 	ctx := context.Background()
 	want := getAsUser{ID: 9007199254740993, Name: "chihqiang"}
@@ -116,7 +124,7 @@ func TestGetAs_StructConsistentAcrossBackends(t *testing.T) {
 	}
 }
 
-// TestGetAs_SliceConsistentAcrossBackends 验证切片类型。
+// TestGetAs_SliceConsistentAcrossBackends verifies a slice type.
 func TestGetAs_SliceConsistentAcrossBackends(t *testing.T) {
 	ctx := context.Background()
 
@@ -131,7 +139,7 @@ func TestGetAs_SliceConsistentAcrossBackends(t *testing.T) {
 	}
 }
 
-// TestGetAs_Miss 验证未命中时返回零值与 ErrNotFound。
+// TestGetAs_Miss verifies that a miss returns the zero value and ErrNotFound.
 func TestGetAs_Miss(t *testing.T) {
 	ctx := context.Background()
 
@@ -148,7 +156,8 @@ func TestGetAs_Miss(t *testing.T) {
 	}
 }
 
-// TestGetAs_TypeMismatch 验证无法解码为 T 时返回错误而不是静默零值。
+// TestGetAs_TypeMismatch verifies that a value which cannot be decoded into T returns
+// an error instead of a silent zero value.
 func TestGetAs_TypeMismatch(t *testing.T) {
 	ctx := context.Background()
 
@@ -156,14 +165,15 @@ func TestGetAs_TypeMismatch(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			require.NoError(t, c.Set(ctx, "user", map[string]any{"id": 1}))
 
-			// 对象 → 标量类型不兼容，应报错而不是返回 0
+			// object -> scalar is incompatible; it must error instead of returning 0
 			_, err := GetAs[int](ctx, c, "user")
 			assert.Error(t, err)
 		})
 	}
 }
 
-// TestGetAs_TakeWrittenValues 验证 Take 写入的值也能用 GetAs 读回。
+// TestGetAs_TakeWrittenValues verifies that values written by Take can be read back
+// with GetAs.
 func TestGetAs_TakeWrittenValues(t *testing.T) {
 	ctx := context.Background()
 

@@ -15,7 +15,7 @@ const (
 	testInterval = time.Millisecond * 10
 )
 
-// getTestGoogleBreaker 构造使用短窗口的熔断器，加速测试。
+// getTestGoogleBreaker builds a breaker with a short window to speed up tests.
 func getTestGoogleBreaker() *googleBreaker {
 	return &googleBreaker{
 		k:          5,
@@ -39,7 +39,8 @@ func markFailed(b *googleBreaker, count int) {
 	}
 }
 
-// verify 轮询断言，等待条件满足（熔断状态变化需要时间）。
+// verify polls an assertion until the condition holds (breaker state changes take
+// time).
 func verify(t *testing.T, fn func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
@@ -74,14 +75,14 @@ func TestGoogleBreakerOpen(t *testing.T) {
 func TestGoogleBreakerRecover(t *testing.T) {
 	b := getTestGoogleBreaker()
 
-	// 先制造大量失败触发熔断
+	// First generate plenty of failures to trip the breaker
 	markFailed(b, 100000)
 	time.Sleep(testInterval * 2)
 	verify(t, func() bool {
 		return b.accept() != nil
 	})
 
-	// 连续成功后恢复
+	// Recover after consecutive successes
 	markSuccess(b, 1000)
 	time.Sleep(testInterval * 2)
 	verify(t, func() bool {
@@ -96,7 +97,7 @@ func TestGoogleBreakerFallback(t *testing.T) {
 	markFailed(b, 10000)
 	time.Sleep(testInterval * 2)
 	verify(t, func() bool {
-		// 熔断打开时 fallback 生效，返回 nil
+		// When the breaker is open the fallback takes effect and returns nil
 		return b.doReq(func() error {
 			return errors.New("any")
 		}, func(error) error {
@@ -119,8 +120,10 @@ func TestGoogleBreakerReject(t *testing.T) {
 func TestBreakerDoWithAcceptable(t *testing.T) {
 	b := NewBreaker(WithName("test-ok"))
 
-	// 业务错误被 acceptable 接受，不计入失败，不触发熔断
-	// 注意：DoWithAcceptable 仍返回 req 的实际错误（acceptable 只决定是否计入失败）
+	// Business errors are accepted by acceptable, so they are not counted as
+	// failures and do not trip the breaker.
+	// Note: DoWithAcceptable still returns the actual error from req (acceptable only
+	// decides whether it counts as a failure)
 	for i := 0; i < 100; i++ {
 		err := b.DoWithAcceptable(func() error {
 			return errNotFound
@@ -130,7 +133,7 @@ func TestBreakerDoWithAcceptable(t *testing.T) {
 		assert.ErrorIs(t, err, errNotFound)
 	}
 
-	// 大量被接受的业务错误后，熔断器仍处于关闭状态
+	// After plenty of accepted business errors the breaker is still closed
 	assert.NoError(t, b.Do(func() error { return nil }))
 }
 
@@ -139,7 +142,7 @@ func TestBreakerDoWithFallbackAcceptable(t *testing.T) {
 	markFailed(b, 10000)
 	time.Sleep(testInterval * 2)
 
-	// 熔断打开：fallback 返回 nil
+	// Breaker open: fallback returns nil
 	err := b.doReq(func() error {
 		return errors.New("upstream down")
 	}, func(err error) error {
@@ -170,10 +173,10 @@ func TestBreakerPromiseReject(t *testing.T) {
 
 	promise, err := b.allow()
 	require.NoError(t, err)
-	// Reject 路径：标记失败
+	// Reject path: mark a failure
 	promise.Reject()
 
-	// 大量失败后熔断打开
+	// The breaker opens after plenty of failures
 	markFailed(b, 100000)
 	time.Sleep(testInterval * 2)
 	verify(t, func() bool {
@@ -194,15 +197,15 @@ func TestAtomicNanoSetLoad(t *testing.T) {
 func TestRollingWindowExpiredBuckets(t *testing.T) {
 	b := getTestGoogleBreaker()
 
-	// 第一个桶写入数据
+	// Write data into the first bucket
 	b.stat.add(success)
 
-	// 等待窗口过期后，旧数据不应再被统计
+	// After the window expires the old data must no longer be counted
 	time.Sleep(testInterval * (testBuckets + 1))
 	b.stat.add(fail)
 
 	result := b.history()
-	// 旧桶已过期被重置，只剩新写入的 fail
+	// The old bucket expired and was reset, so only the freshly added fail remains
 	assert.Equal(t, int64(1), result.total)
 	assert.Equal(t, int64(0), result.accepts)
 }
@@ -235,7 +238,7 @@ func TestBreakerName(t *testing.T) {
 	b := NewBreaker(WithName("payment"))
 	assert.Equal(t, "payment", b.Name())
 
-	// 未指定名称使用默认
+	// An unspecified name falls back to the default
 	d := NewBreaker()
 	assert.Equal(t, "breaker", d.Name())
 }
@@ -243,7 +246,7 @@ func TestBreakerName(t *testing.T) {
 func TestGetBreaker(t *testing.T) {
 	b1 := GetBreaker("my-service")
 	b2 := GetBreaker("my-service")
-	assert.Same(t, b1, b2, "同名熔断器应共享实例")
+	assert.Same(t, b1, b2, "breakers with the same name must share an instance")
 	assert.Equal(t, "my-service", b1.Name())
 }
 
@@ -252,7 +255,7 @@ func TestNoBreakerFor(t *testing.T) {
 	b := GetBreaker("no-breaker")
 	assert.Equal(t, nopBreakerName, b.Name())
 
-	// nopBreaker 永不熔断
+	// nopBreaker never trips
 	for i := 0; i < 100; i++ {
 		_ = b.Do(func() error {
 			return errors.New("always fail")
@@ -273,7 +276,7 @@ func TestNopBreaker(t *testing.T) {
 }
 
 func TestDoGlobal(t *testing.T) {
-	// 全局 Do 便捷函数
+	// Global Do convenience function
 	var called bool
 	err := Do("global-test", func() error {
 		called = true
@@ -295,49 +298,52 @@ func TestRollingWindowHistory(t *testing.T) {
 	assert.Equal(t, int64(3), result.total)
 }
 
-// errNotFound 用于 DoWithAcceptable 测试的哨兵业务错误。
+// errNotFound is the sentinel business error used by the DoWithAcceptable test.
 var errNotFound = errors.New("not found")
 
-// --- SRE 算法参数 Option 测试 ---
+// --- SRE algorithm parameter Option tests ---
 
-// sreOf 通过 NewBreaker 应用 opts 后，取出底层 googleBreaker 以便断言参数。
+// sreOf applies opts through NewBreaker and then extracts the underlying
+// googleBreaker so the parameters can be asserted.
 func sreOf(opts ...Option) *googleBreaker {
 	return NewBreaker(opts...).(*circuitBreaker).throttle.(*loggedThrottle).internalThrottle.(*googleBreaker)
 }
 
 func TestDefaultSREConfig(t *testing.T) {
 	cfg := defaultSREConfig()
-	assert.Equal(t, window, cfg.window, "默认窗口应为 10s")
-	assert.Equal(t, k, cfg.k, "默认 K 应为 1.5")
-	assert.Equal(t, minK, cfg.minK, "默认 minK 应为 1.1")
-	assert.Equal(t, int64(protection), cfg.protection, "默认 protection 应为 5")
+	assert.Equal(t, window, cfg.window, "the default window should be 10s")
+	assert.Equal(t, k, cfg.k, "the default K should be 1.5")
+	assert.Equal(t, minK, cfg.minK, "the default minK should be 1.1")
+	assert.Equal(t, int64(protection), cfg.protection, "the default protection should be 5")
 }
 
 func TestWithSREDefaults(t *testing.T) {
 	b := sreOf(WithSREDefaults())
-	assert.Equal(t, 2*time.Minute, b.stat.interval*time.Duration(b.stat.size), "SRE 默认窗口应为 2 分钟")
-	assert.Equal(t, 2.0, b.k, "SRE 默认 K 应为 2")
+	assert.Equal(t, 2*time.Minute, b.stat.interval*time.Duration(b.stat.size),
+		"the SRE default window should be 2 minutes")
+	assert.Equal(t, 2.0, b.k, "the SRE default K should be 2")
 	assert.Equal(t, 1.1, b.minK)
 	assert.Equal(t, int64(5), b.protection)
 }
 
 func TestBreakerWithWindow(t *testing.T) {
-	// 指定窗口：覆盖默认 10s
+	// Explicit window: overrides the default 10s
 	b := sreOf(WithWindow(time.Minute))
 	assert.Equal(t, time.Minute, b.stat.interval*time.Duration(b.stat.size))
 
-	// 非法值被忽略，保留默认
+	// Invalid values are ignored and the default is kept
 	b2 := sreOf(WithWindow(0), WithWindow(-time.Second))
-	assert.Equal(t, window, b2.stat.interval*time.Duration(b2.stat.size), "非正窗口应被忽略")
+	assert.Equal(t, window, b2.stat.interval*time.Duration(b2.stat.size),
+		"a non-positive window should be ignored")
 }
 
 func TestBreakerWithK(t *testing.T) {
 	b := sreOf(WithK(2))
 	assert.Equal(t, 2.0, b.k)
 
-	// 非法值被忽略
+	// Invalid values are ignored
 	b2 := sreOf(WithK(0), WithK(-1))
-	assert.Equal(t, k, b2.k, "非正 K 应被忽略")
+	assert.Equal(t, k, b2.k, "a non-positive K should be ignored")
 }
 
 func TestBreakerWithMinK(t *testing.T) {
@@ -345,22 +351,24 @@ func TestBreakerWithMinK(t *testing.T) {
 	assert.Equal(t, 1.5, b.minK)
 
 	b2 := sreOf(WithMinK(0))
-	assert.Equal(t, minK, b2.minK, "非正 minK 应被忽略")
+	assert.Equal(t, minK, b2.minK, "a non-positive minK should be ignored")
 }
 
 func TestBreakerWithProtection(t *testing.T) {
 	b := sreOf(WithProtection(20))
 	assert.Equal(t, int64(20), b.protection)
 
-	// 负值被忽略，0 是合法值（关闭小流量保护）
+	// Negative values are ignored; 0 is a valid value (disables low-traffic protection)
 	b2 := sreOf(WithProtection(-1))
-	assert.Equal(t, int64(protection), b2.protection, "负 protection 应被忽略")
+	assert.Equal(t, int64(protection), b2.protection, "a negative protection should be ignored")
 	b3 := sreOf(WithProtection(0))
-	assert.Equal(t, int64(0), b3.protection, "0 protection 合法（不保护）")
+	assert.Equal(t, int64(0), b3.protection, "0 protection is valid (no protection)")
 }
 
-// TestSREDefaultsStillTrips 验证 SRE 参数（2min/K=2）下熔断仍能正常打开与恢复。
-// 使用短窗口近似：直接构造短窗口的 googleBreaker 但套用 SRE 的 K=2。
+// TestSREDefaultsStillTrips verifies that with the SRE parameters (2min/K=2) the
+// breaker still opens and recovers normally.
+// A short window is used as an approximation: build a short-window googleBreaker
+// directly but apply the SRE K=2.
 func TestSREDefaultsStillTrips(t *testing.T) {
 	b := &googleBreaker{
 		k:          2,
@@ -378,7 +386,7 @@ func TestSREDefaultsStillTrips(t *testing.T) {
 		return b.accept() != nil
 	})
 
-	// 恢复
+	// Recover
 	markSuccess(b, 1000)
 	time.Sleep(testInterval * 2)
 	verify(t, func() bool {
@@ -386,7 +394,8 @@ func TestSREDefaultsStillTrips(t *testing.T) {
 	})
 }
 
-// TestWithSREDefaultsEndToEnd 走公开 NewBreaker 接口验证 SRE 参数可正常创建。
+// TestWithSREDefaultsEndToEnd goes through the public NewBreaker interface to
+// verify that the SRE parameters can be created normally.
 func TestWithSREDefaultsEndToEnd(t *testing.T) {
 	b := NewBreaker(WithName("sre"), WithSREDefaults())
 	assert.NoError(t, b.Do(func() error { return nil }))

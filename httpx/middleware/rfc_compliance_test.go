@@ -12,15 +12,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 本文件验证错误响应的状态码与响应头符合 HTTP 规范：
+// This file verifies that the status codes and response headers of error responses comply
+// with the HTTP specifications:
 //
-//   - RFC 9110 §15.5.2：401 响应 MUST 携带 WWW-Authenticate
-//   - RFC 6750 §3：Bearer 质询的 error 参数取值
-//   - RFC 9110 §10.2.3：Retry-After 取值规则（delay-seconds）
-//   - RFC 9110 §15.6.4：503 SHOULD 携带 Retry-After
-//   - RFC 6585 §4：429 MAY 携带 Retry-After
+//   - RFC 9110 §15.5.2: a 401 response MUST carry WWW-Authenticate
+//   - RFC 6750 §3: allowed values of the Bearer challenge error parameter
+//   - RFC 9110 §10.2.3: rules for Retry-After values (delay-seconds)
+//   - RFC 9110 §15.6.4: a 503 SHOULD carry Retry-After
+//   - RFC 6585 §4: a 429 MAY carry Retry-After
 
-// --- Challenge 渲染 ---
+// --- Challenge rendering ---
 
 func TestChallenge_String(t *testing.T) {
 	tests := []struct {
@@ -45,8 +46,9 @@ func TestChallenge_String(t *testing.T) {
 	}
 }
 
-// TestChallenge_EscapesCRLF 验证头值中的 CR/LF 与控制字符被剔除，
-// 避免响应头注入（RFC 9110 §11.2 的 quoted-string 不允许控制字符）。
+// TestChallenge_EscapesCRLF verifies CR/LF and control characters are stripped from the
+// header value, preventing response header injection (the RFC 9110 §11.2 quoted-string does
+// not allow control characters).
 func TestChallenge_EscapesCRLF(t *testing.T) {
 	c := Challenge{Scheme: "Bearer", Realm: "ap\r\ni", Error: "bad\nvalue"}
 
@@ -54,13 +56,13 @@ func TestChallenge_EscapesCRLF(t *testing.T) {
 	assert.NotContains(t, got, "\r")
 	assert.NotContains(t, got, "\n")
 
-	// 通过真实响应写入，确认 net/http 不会因非法头值而异常
+	// write through a real response to confirm net/http does not choke on the illegal header value
 	rec := httptest.NewRecorder()
 	WriteUnauthorized(context.Background(), rec, c, "x")
 	assert.NotContains(t, rec.Header().Get(HeaderWWWAuthenticate), "\n")
 }
 
-// TestChallenge_EscapesQuotes 验证内嵌引号被反斜杠转义（quoted-string 规则）。
+// TestChallenge_EscapesQuotes verifies embedded quotes are backslash-escaped (quoted-string rule).
 func TestChallenge_EscapesQuotes(t *testing.T) {
 	c := Challenge{Scheme: "Bearer", Realm: `a"b`}
 	assert.Equal(t, `Bearer realm="a\"b"`, c.String())
@@ -89,9 +91,9 @@ func TestRetryAfterSeconds(t *testing.T) {
 	}
 }
 
-// --- 401 必须带 WWW-Authenticate ---
+// --- a 401 must carry WWW-Authenticate ---
 
-// TestWriteUnauthorized_SetsHeader 验证 WriteUnauthorized 写入规范要求的头。
+// TestWriteUnauthorized_SetsHeader verifies WriteUnauthorized writes the headers the spec requires.
 func TestWriteUnauthorized_SetsHeader(t *testing.T) {
 	rec := httptest.NewRecorder()
 	WriteUnauthorized(context.Background(), rec,
@@ -101,10 +103,11 @@ func TestWriteUnauthorized_SetsHeader(t *testing.T) {
 	assert.Equal(t, `Bearer error="invalid_token"`, rec.Header().Get(HeaderWWWAuthenticate))
 }
 
-// TestContentSecurity_AllUnauthorizedCarryChallenge 回归测试：content_security 的
-// 每条 401 路径都必须带 WWW-Authenticate。
+// TestContentSecurity_AllUnauthorizedCarryChallenge is a regression test: every 401 path of
+// content_security must carry WWW-Authenticate.
 //
-// 历史缺陷：仅返回状态码与消息，未提供质询，违反 RFC 9110 §15.5.2 的 MUST。
+// Historical defect: it returned only a status code and message with no challenge, violating
+// the MUST in RFC 9110 §15.5.2.
 func TestContentSecurity_AllUnauthorizedCarryChallenge(t *testing.T) {
 	silenceLogger(t)
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
@@ -150,16 +153,17 @@ func TestContentSecurity_AllUnauthorizedCarryChallenge(t *testing.T) {
 	}
 }
 
-// --- Retry-After 集成 ---
+// --- Retry-After integration ---
 
-// TestMaxConns_ServiceUnavailableCarriesRetryAfter 验证并发超限的 503 带 Retry-After。
-// RFC 9110 §15.6.4：服务器因过载返回 503 时 SHOULD 给出该提示。
+// TestMaxConns_ServiceUnavailableCarriesRetryAfter verifies the 503 returned when the
+// concurrency limit is exceeded carries Retry-After.
+// RFC 9110 §15.6.4: a server returning 503 because of overload SHOULD give this hint.
 func TestMaxConns_ServiceUnavailableCarriesRetryAfter(t *testing.T) {
 	silenceLogger(t)
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 
 	mw := NewMaxConns(1)
-	// 占满唯一的信号量
+	// occupy the single semaphore slot
 	block := make(chan struct{})
 	hold := func(w http.ResponseWriter, r *http.Request) { <-block }
 	go func() {
@@ -175,23 +179,24 @@ func TestMaxConns_ServiceUnavailableCarriesRetryAfter(t *testing.T) {
 		"503 SHOULD carry Retry-After (RFC 9110 §15.6.4)")
 }
 
-// TestRateLimit_TooManyRequestsCarriesRetryAfter 验证限流的 429 带 Retry-After。
-// RFC 6585 §4 允许携带；客户端退避普遍依赖该头。
+// TestRateLimit_TooManyRequestsCarriesRetryAfter verifies the 429 from rate limiting carries
+// Retry-After.
+// RFC 6585 §4 permits it; client backoff widely relies on this header.
 func TestRateLimit_TooManyRequestsCarriesRetryAfter(t *testing.T) {
 	silenceLogger(t)
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 
-	// 自定义限流器实现 RetryAfterProvider → 应使用其精确值
+	// a custom limiter implementing RetryAfterProvider -> its exact value must be used
 	lim := &retryAfterLimiter{after: 2500 * time.Millisecond}
 	rec := perform(NewRateLimit(lim).Middleware(), ok, httptest.NewRequest(http.MethodGet, "/x", nil))
 
 	require.Equal(t, http.StatusTooManyRequests, rec.Code)
-	// 2.5s 向上取整为 3 秒
+	// 2.5s rounds up to 3 seconds
 	assert.Equal(t, "3", rec.Header().Get(HeaderRetryAfter))
 }
 
-// TestRateLimit_RetryAfterFallback 验证限流器未实现 RetryAfterProvider 时
-// 回退到 WithRetryAfter 配置值。
+// TestRateLimit_RetryAfterFallback verifies that a limiter not implementing RetryAfterProvider
+// falls back to the WithRetryAfter configuration value.
 func TestRateLimit_RetryAfterFallback(t *testing.T) {
 	silenceLogger(t)
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
@@ -204,8 +209,9 @@ func TestRateLimit_RetryAfterFallback(t *testing.T) {
 	assert.Equal(t, "5", rec.Header().Get(HeaderRetryAfter))
 }
 
-// TestRateLimit_RetryAfterOmittedWhenUnknown 验证无法估计时**不**发送该头。
-// 与其给出编造的时长（客户端可能据此长时间不重试），不如省略。
+// TestRateLimit_RetryAfterOmittedWhenUnknown verifies the header is **not** sent when the
+// interval cannot be estimated.
+// Better to omit it than to fabricate a duration the client might back off by for a long time.
 func TestRateLimit_RetryAfterOmittedWhenUnknown(t *testing.T) {
 	silenceLogger(t)
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
@@ -218,8 +224,8 @@ func TestRateLimit_RetryAfterOmittedWhenUnknown(t *testing.T) {
 		"an unknown retry interval must be omitted rather than fabricated")
 }
 
-// TestRateLimit_RetryAfterIgnoresZeroFromProvider 验证 provider 返回 0 时
-// 继续回退到配置值，而不是发送 Retry-After: 0。
+// TestRateLimit_RetryAfterIgnoresZeroFromProvider verifies that a provider returning 0 falls
+// back to the configured value rather than sending Retry-After: 0.
 func TestRateLimit_RetryAfterIgnoresZeroFromProvider(t *testing.T) {
 	silenceLogger(t)
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
@@ -233,9 +239,9 @@ func TestRateLimit_RetryAfterIgnoresZeroFromProvider(t *testing.T) {
 	assert.NotEqual(t, "0", rec.Header().Get(HeaderRetryAfter))
 }
 
-// --- 测试用限流器 ---
+// --- limiters used by the tests ---
 
-// plainDenyLimiter 始终拒绝且不实现 RetryAfterProvider。
+// plainDenyLimiter always denies and does not implement RetryAfterProvider.
 type plainDenyLimiter struct{}
 
 func (plainDenyLimiter) Allow() bool { return false }
@@ -243,7 +249,7 @@ func (plainDenyLimiter) AllowContext(context.Context) (bool, error) {
 	return false, nil
 }
 
-// retryAfterLimiter 始终拒绝，并实现 RetryAfterProvider。
+// retryAfterLimiter always denies and implements RetryAfterProvider.
 type retryAfterLimiter struct{ after time.Duration }
 
 func (l *retryAfterLimiter) Allow() bool { return false }
@@ -252,7 +258,8 @@ func (l *retryAfterLimiter) AllowContext(context.Context) (bool, error) {
 }
 func (l *retryAfterLimiter) RetryAfter() time.Duration { return l.after }
 
-// TestRetryAfterProvider_IsOptional 验证未实现该接口时不会误判。
+// TestRetryAfterProvider_IsOptional verifies there is no false positive when the interface is
+// not implemented.
 func TestRetryAfterProvider_IsOptional(t *testing.T) {
 	var lim RateLimiter = plainDenyLimiter{}
 	_, ok := lim.(RetryAfterProvider)

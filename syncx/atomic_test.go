@@ -6,10 +6,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// --- hashKey 测试 ---
+// --- hashKey tests ---
 
 func TestHashKey_Deterministic(t *testing.T) {
-	// 覆盖所有高效路径分支 + 默认回退分支，并断言结果确定（同值同 hash）。
+	// Covers every fast-path branch plus the default fallback, and asserts the
+	// result is deterministic (same value, same hash).
 	tests := []any{
 		"hello",
 		"",
@@ -28,7 +29,7 @@ func TestHashKey_Deterministic(t *testing.T) {
 		float64(2.5),
 		true,
 		false,
-		// 默认分支：不可直接命中高效路径的复合类型
+		// Default branch: a composite type that cannot hit the fast path directly.
 		struct{ A int }{A: 1},
 	}
 
@@ -40,8 +41,9 @@ func TestHashKey_Deterministic(t *testing.T) {
 }
 
 func TestHashKey_DistinguishesValues(t *testing.T) {
-	// 不同值应（极大概率）得到不同 hash；
-	// 至少保证同类型内给定样本互不冲突，验证 hash 有效分散。
+	// Different values should (with overwhelming probability) produce different
+	// hashes; at minimum the samples of the same type must not collide, which
+	// shows the hash spreads well.
 	vals := []int{1, 2, 3, 100, -1, -999}
 	seen := make(map[uint64]bool)
 	for _, v := range vals {
@@ -52,7 +54,8 @@ func TestHashKey_DistinguishesValues(t *testing.T) {
 }
 
 func TestHashKey_StructFallback(t *testing.T) {
-	// 默认分支走 fmt.Sprint：结构相同但值不同应产生不同 hash。
+	// The default branch uses fmt.Sprint: same shape, different values must
+	// produce different hashes.
 	type pair struct {
 		A int
 		B string

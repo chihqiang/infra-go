@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// --- 请求 ID 测试 ---
+// --- Request ID tests ---
 
 func TestContextWithRequestID_RoundTrip(t *testing.T) {
 	ctx := ContextWithRequestID(context.Background(), "req-123")

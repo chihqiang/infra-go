@@ -10,65 +10,71 @@ import (
 	"github.com/chihqiang/infra-go/cast"
 )
 
-// jsonTagKey json 标签键名。
+// jsonTagKey is the json tag key name.
 const jsonTagKey = "json"
 
 var emptyMap = map[string]any{}
 
-// Unmarshaler 是配置反序列化器，负责将 map[string]any 反序列化到结构体，
-// 并处理默认值、环境变量、选项验证、范围验证等扩展功能。
+// Unmarshaler is the configuration deserializer; it maps a map[string]any onto a
+// struct and handles extended features such as defaults, environment variables,
+// option validation and range validation.
 type Unmarshaler struct {
-	key          string              // 结构体标签键名，通常是 "json"
-	fillDefault  bool                // 是否仅填充默认值
-	fromString   bool                // 是否从字符串解析所有值
-	canonicalKey func(string) string // 键名规范化函数（如转小写）
+	key          string              // struct tag key name, usually "json"
+	fillDefault  bool                // whether to only fill defaults
+	fromString   bool                // whether to parse every value from a string
+	canonicalKey func(string) string // key canonicalization function (e.g. lower-casing)
 }
 
-// UnmarshalOption 定义 Unmarshaler 的配置选项。
+// UnmarshalOption defines a configuration option for Unmarshaler.
 type UnmarshalOption func(*Unmarshaler)
 
-// WithDefault 设置仅填充默认值模式。
+// WithDefault enables the fill-defaults-only mode.
 func WithDefault() UnmarshalOption {
 	return func(u *Unmarshaler) {
 		u.fillDefault = true
 	}
 }
 
-// WithStringValues 设置从字符串模式解析所有值。
+// WithStringValues enables parsing every value from a string.
 func WithStringValues() UnmarshalOption {
 	return func(u *Unmarshaler) {
 		u.fromString = true
 	}
 }
 
-// WithCanonicalKeyFunc 设置键名规范化函数，用于大小写不敏感匹配。
-// 例如传入 strings.ToLower 后，配置文件中的 "logMode" 可以匹配字段名 "LogMode"。
+// WithCanonicalKeyFunc sets the key canonicalization function, used for
+// case-insensitive matching. With strings.ToLower, for example, "logMode" in the
+// config file can match the field name "LogMode".
 func WithCanonicalKeyFunc(f func(string) string) UnmarshalOption {
 	return func(u *Unmarshaler) {
 		u.canonicalKey = f
 	}
 }
 
-// NewDefaultUnmarshaler 创建一个用于填充默认值的反序列化器。
-// 等价于 NewUnmarshaler("json", WithDefault())。
-// 是 conf、redisx、orm 等模块中 fillDefault 模式的推荐入口。
+// NewDefaultUnmarshaler creates a deserializer that fills defaults.
+// It is equivalent to NewUnmarshaler("json", WithDefault())
+// and is the recommended entry point for the fillDefault pattern in modules such
+// as conf, redisx and orm.
 func NewDefaultUnmarshaler() *Unmarshaler {
 	return NewUnmarshaler("json", WithDefault())
 }
 
-// defaultUnmarshaler 包级默认反序列化器，用于 FillDefault。
-// Unmarshaler 的方法只读其自身字段、不修改状态，因此可安全并发复用。
+// defaultUnmarshaler is the package-level default deserializer used by
+// FillDefault.
+// Unmarshaler methods only read their own fields and never mutate state, so this
+// instance is safe for concurrent reuse.
 var defaultUnmarshaler = NewDefaultUnmarshaler()
 
-// FillDefault 为给定结构体填充默认值和环境变量。
-// 前提是结构体的所有字段必须为零值。
-// 等价于 NewDefaultUnmarshaler().Unmarshal(map[string]any{}, v)，
-// 是 conf、redisx、orm、jwt、httpx、logger 等模块 fillDefault 模式的统一入口。
+// FillDefault fills defaults and environment variables into the given struct.
+// The struct's fields must all be zero values beforehand.
+// It is equivalent to NewDefaultUnmarshaler().Unmarshal(map[string]any{}, v)
+// and is the unified entry point for the fillDefault pattern in modules such as
+// conf, redisx, orm, jwt, httpx and logger.
 func FillDefault(v any) error {
 	return defaultUnmarshaler.Unmarshal(emptyMap, v)
 }
 
-// NewUnmarshaler 创建一个新的反序列化器。
+// NewUnmarshaler creates a new deserializer.
 func NewUnmarshaler(key string, opts ...UnmarshalOption) *Unmarshaler {
 	u := &Unmarshaler{key: key}
 	for _, opt := range opts {
@@ -77,7 +83,7 @@ func NewUnmarshaler(key string, opts ...UnmarshalOption) *Unmarshaler {
 	return u
 }
 
-// Unmarshal 将 map 数据反序列化到目标结构体 v 中。
+// Unmarshal deserializes the map data into the target struct v.
 func (u *Unmarshaler) Unmarshal(m map[string]any, v any) error {
 	rv := reflect.ValueOf(v)
 	if err := ValidatePtr(rv); err != nil {
@@ -103,7 +109,7 @@ func (u *Unmarshaler) Unmarshal(m map[string]any, v any) error {
 	return u.processStruct(elemType, valElem, m, "")
 }
 
-// fillDefaultStruct 仅填充默认值和环境变量。
+// fillDefaultStruct fills only defaults and environment variables.
 func (u *Unmarshaler) fillDefaultStruct(structType reflect.Type, structValue reflect.Value, fullName string) error {
 	for i := 0; i < structType.NumField(); i++ {
 		field := structType.Field(i)
@@ -133,12 +139,12 @@ func (u *Unmarshaler) fillDefaultStruct(structType reflect.Type, structValue ref
 
 		fn := joinName(fullName, key)
 
-		// 检查字段是否已有非零值
+		// Check whether the field already holds a non-zero value
 		if !fieldValue.IsZero() {
 			return fmt.Errorf("field %q must be zero value when filling default", fn)
 		}
 
-		// 优先从环境变量读取
+		// Prefer the environment variable
 		if opts != nil && opts.EnvVar != "" {
 			if envVal := os.Getenv(opts.EnvVar); envVal != "" {
 				if err := u.setEnvValue(field.Type, fieldValue, envVal, opts, fn); err != nil {
@@ -148,7 +154,7 @@ func (u *Unmarshaler) fillDefaultStruct(structType reflect.Type, structValue ref
 			}
 		}
 
-		// 填充默认值
+		// Fill the default value
 		if defaultValue, ok := opts.hasDefault(); ok {
 			if err := u.setDefaultValue(field.Type, fieldValue, defaultValue, opts, fn); err != nil {
 				return err
@@ -156,7 +162,7 @@ func (u *Unmarshaler) fillDefaultStruct(structType reflect.Type, structValue ref
 			continue
 		}
 
-		// 对于非指针的嵌套结构体，递归填充
+		// For a non-pointer nested struct, fill recursively
 		derefedType := Deref(field.Type)
 		if field.Type.Kind() != reflect.Ptr && derefedType.Kind() == reflect.Struct {
 			if err := u.fillDefaultStruct(derefedType, fieldValue, fn); err != nil {
@@ -167,9 +173,10 @@ func (u *Unmarshaler) fillDefaultStruct(structType reflect.Type, structValue ref
 	return nil
 }
 
-// processStruct 处理结构体的所有字段。
+// processStruct processes all fields of the struct.
 func (u *Unmarshaler) processStruct(structType reflect.Type, structValue reflect.Value, m map[string]any, fullName string) error {
-	// 先校验 optional 依赖名有效，避免依赖写错导致条件可选静默失效
+	// Validate the optional dependency names first, so that a misspelled
+	// dependency does not silently break conditional optionality
 	if err := u.validateOptionalDeps(structType, fullName); err != nil {
 		return err
 	}
@@ -195,7 +202,7 @@ func (u *Unmarshaler) processStruct(structType reflect.Type, structValue reflect
 	return nil
 }
 
-// processAnonymousField 处理匿名（嵌入）字段。
+// processAnonymousField handles anonymous (embedded) fields.
 func (u *Unmarshaler) processAnonymousField(field reflect.StructField, value reflect.Value, m map[string]any, fullName string) error {
 	key, opts, err := parseKeyAndOptions(u.key, field)
 	if err != nil {
@@ -207,7 +214,7 @@ func (u *Unmarshaler) processAnonymousField(field reflect.StructField, value ref
 
 	derefedType := Deref(field.Type)
 
-	// 如果嵌入类型不是结构体，按普通字段处理
+	// If the embedded type is not a struct, treat it as a regular field
 	if derefedType.Kind() != reflect.Struct {
 		return u.processNamedField(field, value, m, fullName)
 	}
@@ -215,7 +222,7 @@ func (u *Unmarshaler) processAnonymousField(field reflect.StructField, value ref
 	maybeNewValue(field.Type, value)
 	indirectValue := reflect.Indirect(value)
 
-	// 处理可选的嵌入结构体
+	// Handle an optional embedded struct
 	if opts != nil && opts.isOptional() {
 		hasValue := u.hasAnySubField(derefedType, m)
 		if !hasValue {
@@ -223,7 +230,7 @@ func (u *Unmarshaler) processAnonymousField(field reflect.StructField, value ref
 		}
 	}
 
-	// 递归处理嵌入结构体的字段
+	// Recursively process the fields of the embedded struct
 	for i := 0; i < derefedType.NumField(); i++ {
 		subField := derefedType.Field(i)
 		if !subField.IsExported() {
@@ -237,7 +244,7 @@ func (u *Unmarshaler) processAnonymousField(field reflect.StructField, value ref
 	return nil
 }
 
-// processNamedField 处理命名字段。
+// processNamedField handles a named field.
 func (u *Unmarshaler) processNamedField(field reflect.StructField, value reflect.Value, m map[string]any, fullName string) error {
 	if !field.IsExported() {
 		return nil
@@ -245,7 +252,7 @@ func (u *Unmarshaler) processNamedField(field reflect.StructField, value reflect
 	return u.processField(field, value, m, fullName)
 }
 
-// processField 处理单个字段（统一入口）。
+// processField handles a single field (the unified entry point).
 func (u *Unmarshaler) processField(field reflect.StructField, value reflect.Value, m map[string]any, fullName string) error {
 	if usingDifferentKeys(u.key, field) {
 		return nil
@@ -265,16 +272,17 @@ func (u *Unmarshaler) processField(field reflect.StructField, value reflect.Valu
 
 	fn := joinName(fullName, key)
 
-	// 优先从环境变量读取
+	// Prefer the environment variable
 	if opts != nil && opts.EnvVar != "" {
 		if envVal := os.Getenv(opts.EnvVar); envVal != "" {
 			return u.setEnvValue(field.Type, value, envVal, opts, fn)
 		}
 	}
 
-	// 从配置 map 中查找值
-	// 设置 canonicalKey 时使用不敏感匹配，而不是要求调用方预先改写 map 的键
-	// （map 的键可能同时是 map 字段的数据，改写会破坏用户数据）。
+	// Look the value up in the config map.
+	// When canonicalKey is set, matching is case-insensitive rather than requiring
+	// the caller to pre-rewrite the map keys (a map key may also be the data of a
+	// map-typed field, and rewriting it would corrupt user data).
 	var (
 		mapValue any
 		hasValue bool
@@ -289,11 +297,14 @@ func (u *Unmarshaler) processField(field reflect.StructField, value reflect.Valu
 	}
 
 	if !hasValue {
-		// 条件可选：optional=Dep / optional=!Dep。
-		// 依赖不满足时按"必填"处理，满足时按"可选"处理。
+		// Conditional optionality: optional=Dep / optional=!Dep.
+		// When the dependency is unmet the field is treated as required, when it
+		// is met as optional.
 		//
-		// 有 default 时跳过依赖检查：字段总能被填上，依赖与之无关
-		// （否则 `default` + `optional=dep` 会在依赖未满足时误报必填）。
+		// The dependency check is skipped when a default exists: the field always
+		// gets a value, so the dependency is irrelevant (otherwise `default` +
+		// `optional=dep` would wrongly report the field as required whenever the
+		// dependency is unmet).
 		if opts != nil && opts.OptionalDep != "" {
 			if _, hasDefault := opts.hasDefault(); !hasDefault {
 				depMet, err := u.optionalDepMet(opts, m)
@@ -312,14 +323,16 @@ func (u *Unmarshaler) processField(field reflect.StructField, value reflect.Valu
 	return u.processFieldWithValue(field.Type, value, mapValue, opts, fn)
 }
 
-// optionalDepMet 判断条件可选的依赖是否满足。
+// optionalDepMet reports whether the conditional-optional dependency is met.
 //
-// 语义（与文档一致）：
-//   - `optional=Other`  ：Other **已设置** 时此字段可选
-//   - `optional=!Other` ：Other **未设置** 时此字段可选
+// Semantics (matching the documentation):
+//   - `optional=Other`  : this field is optional when Other **is set**
+//   - `optional=!Other` : this field is optional when Other **is not set**
 //
-// 依赖名按**配置键**解析（即依赖字段的 json/yaml 标签键，如 `other`），
-// 与字段取值的查找路径一致；依赖是否指向真实字段由 processStruct 预先校验。
+// Dependency names are resolved as **configuration keys** (that is, the
+// json/yaml tag key of the dependency field, such as `other`), following the
+// same lookup path as field values; whether the dependency points at a real
+// field is validated in advance by processStruct.
 func (u *Unmarshaler) optionalDepMet(opts *fieldOptions, m map[string]any) (bool, error) {
 	var present bool
 	var err error
@@ -332,14 +345,15 @@ func (u *Unmarshaler) optionalDepMet(opts *fieldOptions, m map[string]any) (bool
 		_, present = lookupKey(m, opts.OptionalDep)
 	}
 
-	// Dep：依赖存在 → 可选；!Dep：依赖不存在 → 可选
+	// Dep: dependency present -> optional; !Dep: dependency absent -> optional
 	if opts.OptionalDepNegate {
 		return !present, nil
 	}
 	return present, nil
 }
 
-// buildDependencyKeys 收集结构体所有字段的配置键，用于校验 optional 依赖是否有效。
+// buildDependencyKeys collects the config keys of all struct fields; it is used
+// to validate that optional dependencies are valid.
 func (u *Unmarshaler) buildDependencyKeys(structType reflect.Type) map[string]struct{} {
 	keys := make(map[string]struct{}, structType.NumField())
 	for i := 0; i < structType.NumField(); i++ {
@@ -348,7 +362,7 @@ func (u *Unmarshaler) buildDependencyKeys(structType reflect.Type) map[string]st
 			continue
 		}
 		if field.Anonymous {
-			// 匿名嵌入字段的子字段也在同一命名空间内
+			// Sub-fields of an anonymous embedded field share the same namespace
 			for k := range u.buildDependencyKeys(Deref(field.Type)) {
 				keys[k] = struct{}{}
 			}
@@ -363,10 +377,12 @@ func (u *Unmarshaler) buildDependencyKeys(structType reflect.Type) map[string]st
 	return keys
 }
 
-// validateOptionalDeps 校验结构体内所有 optional 依赖都指向真实存在的配置键。
+// validateOptionalDeps verifies that every optional dependency inside the struct
+// points at a configuration key that really exists.
 //
-// 不校验的话，依赖名写错会让字段**永久变为必填**（依赖永远找不到），
-// 属于难以定位的静默行为偏差。
+// Without the check a misspelled dependency name makes the field
+// **permanently required** (the dependency is never found), a silent behavioural
+// deviation that is hard to track down.
 func (u *Unmarshaler) validateOptionalDeps(structType reflect.Type, fullName string) error {
 	var validKeys map[string]struct{}
 
@@ -395,7 +411,8 @@ func (u *Unmarshaler) validateOptionalDeps(structType reflect.Type, fullName str
 	return nil
 }
 
-// optionalDepStateDesc 生成错误信息中的依赖状态描述。
+// optionalDepStateDesc produces the dependency state description used in error
+// messages.
 func optionalDepStateDesc(negate bool) string {
 	if negate {
 		return "set"
@@ -403,7 +420,7 @@ func optionalDepStateDesc(negate bool) string {
 	return "not set"
 }
 
-// processFieldWithValue 当配置中存在值时处理字段。
+// processFieldWithValue handles a field when a value exists in the config.
 func (u *Unmarshaler) processFieldWithValue(fieldType reflect.Type, value reflect.Value, mapValue any, opts *fieldOptions, fullName string) error {
 	if mapValue == nil {
 		if opts.isOptional() {
@@ -420,9 +437,10 @@ func (u *Unmarshaler) processFieldWithValue(fieldType reflect.Type, value reflec
 
 	derefedType := Deref(fieldType)
 
-	// time.Duration 底层类型是 int64，需要优先处理
+	// time.Duration's underlying type is int64, so it must be handled first
 	if derefedType == durationType {
-		// duration 字段此前完全跳过校验，导致 range 约束形同虚设。
+		// Duration fields used to skip validation entirely, which made the range
+		// constraint meaningless.
 		if err := validateRangeForType(derefedType, mapValue, opts, fullName); err != nil {
 			return err
 		}
@@ -443,16 +461,16 @@ func (u *Unmarshaler) processFieldWithValue(fieldType reflect.Type, value reflec
 	}
 }
 
-// processFieldWithoutValue 当配置中不存在值时处理字段。
+// processFieldWithoutValue handles a field when the config holds no value.
 func (u *Unmarshaler) processFieldWithoutValue(fieldType reflect.Type, value reflect.Value, opts *fieldOptions, fullName string) error {
-	// 优先使用默认值
+	// Prefer the default value
 	if defaultValue, ok := opts.hasDefault(); ok {
 		return u.setDefaultValue(fieldType, value, defaultValue, opts, fullName)
 	}
 
 	derefedType := Deref(fieldType)
 
-	// time.Duration 底层类型是 int64，需要优先处理
+	// time.Duration's underlying type is int64, so it must be handled first
 	if derefedType == durationType {
 		if opts.isOptional() {
 			return nil
@@ -464,13 +482,13 @@ func (u *Unmarshaler) processFieldWithoutValue(fieldType reflect.Type, value ref
 
 	switch typeKind {
 	case reflect.Struct:
-		// 对于结构体，检查是否有必填字段
+		// For structs, check whether any field is required
 		if !opts.isOptional() {
 			required := structValueRequired(u.key, derefedType)
 			if required {
 				return fmt.Errorf("field %q not set", fullName)
 			}
-			// 结构体没有必填字段，用空 map 递归处理
+			// The struct has no required fields, so recurse with an empty map
 			return u.processStruct(derefedType, ensureValue(value), emptyMap, fullName)
 		}
 	case reflect.Slice, reflect.Map:
@@ -486,12 +504,12 @@ func (u *Unmarshaler) processFieldWithoutValue(fieldType reflect.Type, value ref
 	return nil
 }
 
-// setBasicValue 设置基本类型字段的值。
+// setBasicValue sets the value of a basic-typed field.
 func (u *Unmarshaler) setBasicValue(fieldType reflect.Type, value reflect.Value, mapValue any, opts *fieldOptions, fullName string) error {
 	derefedType := Deref(fieldType)
 	typeKind := derefedType.Kind()
 
-	// 如果是 fromString 模式，将值转为字符串再解析
+	// In fromString mode, convert the value to a string and parse that
 	if u.fromString || opts.isFromString() {
 		strVal, err := cast.ToStringE(mapValue)
 		if err != nil {
@@ -506,12 +524,12 @@ func (u *Unmarshaler) setBasicValue(fieldType reflect.Type, value reflect.Value,
 		return setStringValue(typeKind, value, strVal, fullName)
 	}
 
-	// 处理 json.Number 类型
+	// Handle the json.Number type
 	if numVal, ok := mapValue.(json.Number); ok {
 		return u.setNumberValue(fieldType, value, numVal, opts, fullName)
 	}
 
-	// 处理原生类型
+	// Handle native types
 	valueKind := reflect.TypeOf(mapValue).Kind()
 	if typeKind == valueKind {
 		if err := validateValueRange(mapValue, opts, fullName); err != nil {
@@ -525,16 +543,16 @@ func (u *Unmarshaler) setBasicValue(fieldType reflect.Type, value reflect.Value,
 		return nil
 	}
 
-	// 尝试将值转为字符串再解析
+	// Try converting the value to a string and parsing that
 	return u.setConvertedValue(fieldType, value, mapValue, opts, fullName)
 }
 
-// setNumberValue 设置数值类型字段的值（从 json.Number）。
+// setNumberValue sets a numeric field's value (from a json.Number).
 func (u *Unmarshaler) setNumberValue(fieldType reflect.Type, value reflect.Value, numVal json.Number, opts *fieldOptions, fullName string) error {
 	derefedType := Deref(fieldType)
 	typeKind := derefedType.Kind()
 
-	// 范围验证
+	// Range validation
 	if opts != nil && opts.Range != nil {
 		fv, err := numVal.Float64()
 		if err != nil {
@@ -545,7 +563,7 @@ func (u *Unmarshaler) setNumberValue(fieldType reflect.Type, value reflect.Value
 		}
 	}
 
-	// 选项验证
+	// Option validation
 	if err := validateOptions(numVal.String(), opts.allowedOptions(), fullName); err != nil {
 		return err
 	}
@@ -559,7 +577,7 @@ func (u *Unmarshaler) setNumberValue(fieldType reflect.Type, value reflect.Value
 	return nil
 }
 
-// setConvertedValue 尝试将值转换为目标类型。
+// setConvertedValue tries to convert the value to the target type.
 func (u *Unmarshaler) setConvertedValue(fieldType reflect.Type, value reflect.Value, mapValue any, opts *fieldOptions, fullName string) error {
 	derefedType := Deref(fieldType)
 	typeKind := derefedType.Kind()
@@ -572,8 +590,9 @@ func (u *Unmarshaler) setConvertedValue(fieldType reflect.Type, value reflect.Va
 	if err := validateOptions(strVal, opts.allowedOptions(), fullName); err != nil {
 		return err
 	}
-	// 值类型与字段类型不一致时（如 YAML 中的 port: "9090" 对应 int 字段）
-	// 此前会绕过 range 校验，使同一语义值因表示形式不同而校验结果不同。
+	// When the value type and the field type differ (e.g. port: "9090" in YAML for
+	// an int field), range validation used to be bypassed, so the same semantic
+	// value validated differently depending on its representation.
 	if err := validateRangeForType(derefedType, strVal, opts, fullName); err != nil {
 		return err
 	}
@@ -587,7 +606,7 @@ func (u *Unmarshaler) setConvertedValue(fieldType reflect.Type, value reflect.Va
 	return nil
 }
 
-// setStringValue 将字符串值设置到目标 reflect.Value 上（带验证）。
+// setStringValue sets a string value onto the target reflect.Value (with validation).
 func setStringValue(kind reflect.Kind, value reflect.Value, str string, fullName string) error {
 	if !value.CanSet() {
 		return errValueNotSettable
@@ -600,7 +619,7 @@ func setStringValue(kind reflect.Kind, value reflect.Value, str string, fullName
 	return setMatchedPrimitiveValue(kind, value, v)
 }
 
-// setStructValue 设置结构体类型字段的值。
+// setStructValue sets the value of a struct-typed field.
 func (u *Unmarshaler) setStructValue(fieldType reflect.Type, value reflect.Value, mapValue any, opts *fieldOptions, fullName string) error {
 	nestedMap, ok := mapValue.(map[string]any)
 	if !ok {
@@ -614,7 +633,7 @@ func (u *Unmarshaler) setStructValue(fieldType reflect.Type, value reflect.Value
 	return u.processStruct(derefedType, indirectValue, nestedMap, fullName)
 }
 
-// setSliceValue 设置切片类型字段的值。
+// setSliceValue sets the value of a slice-typed field.
 func (u *Unmarshaler) setSliceValue(fieldType reflect.Type, value reflect.Value, mapValue any, opts *fieldOptions, fullName string) error {
 	if !value.CanSet() {
 		return errValueNotSettable
@@ -671,7 +690,7 @@ func (u *Unmarshaler) setSliceValue(fieldType reflect.Type, value reflect.Value,
 	return nil
 }
 
-// fillStructElement 填充结构体元素。
+// fillStructElement fills a struct element.
 func (u *Unmarshaler) fillStructElement(baseType reflect.Type, target reflect.Value, value any, fullName string) error {
 	nestedMap, ok := value.(map[string]any)
 	if !ok {
@@ -687,7 +706,7 @@ func (u *Unmarshaler) fillStructElement(baseType reflect.Type, target reflect.Va
 	return nil
 }
 
-// fillSliceValue 填充切片中的基本类型值。
+// fillSliceValue fills a basic-typed value inside a slice.
 func (u *Unmarshaler) fillSliceValue(slice reflect.Value, index int, baseKind reflect.Kind, value any, fullName string) error {
 	if value == nil {
 		return fmt.Errorf("slice element of field %q is nil", fullName)
@@ -713,7 +732,7 @@ func (u *Unmarshaler) fillSliceValue(slice reflect.Value, index int, baseKind re
 	default:
 		derefedType := Deref(ithValType)
 		if !reflect.TypeOf(value).AssignableTo(derefedType) {
-			// 尝试字符串转换
+			// Try a string conversion
 			if strVal, err := cast.ToStringE(value); err == nil {
 				return setStringValue(baseKind, ithVal, strVal, fullName)
 			}
@@ -724,7 +743,7 @@ func (u *Unmarshaler) fillSliceValue(slice reflect.Value, index int, baseKind re
 	}
 }
 
-// setMapValue 设置 map 类型字段的值。
+// setMapValue sets the value of a map-typed field.
 func (u *Unmarshaler) setMapValue(fieldType reflect.Type, value reflect.Value, mapValue any, opts *fieldOptions, fullName string) error {
 	if !value.CanSet() {
 		return errValueNotSettable
@@ -819,13 +838,13 @@ func (u *Unmarshaler) setMapValue(fieldType reflect.Type, value reflect.Value, m
 	return nil
 }
 
-// SetMapIndexValue 设置 map 索引值，处理指针类型。
+// SetMapIndexValue sets a map index value, handling pointer types.
 func SetMapIndexValue(tp reflect.Type, value, key, target reflect.Value) {
 	value.SetMapIndex(key, convertTypeOfPtr(tp, target))
 }
 
-// setDurationValue 设置 time.Duration 类型字段的值。
-// 使用 cast.ToDurationE 支持数值和字符串类型的 duration 转换。
+// setDurationValue sets the value of a time.Duration field.
+// cast.ToDurationE supports converting both numeric and string durations.
 func (u *Unmarshaler) setDurationValue(fieldType reflect.Type, value reflect.Value, mapValue any, fullName string) error {
 	d, err := cast.ToDurationE(mapValue)
 	if err != nil {
@@ -836,8 +855,9 @@ func (u *Unmarshaler) setDurationValue(fieldType reflect.Type, value reflect.Val
 	return nil
 }
 
-// setEnvValue 从环境变量值设置字段。
-// 与配置值路径一致，环境变量同样需要满足 options 与 range 约束。
+// setEnvValue sets a field from an environment variable value.
+// As on the config value path, environment variables must satisfy the options and
+// range constraints too.
 func (u *Unmarshaler) setEnvValue(fieldType reflect.Type, value reflect.Value, envVal string, opts *fieldOptions, fullName string) error {
 	if err := validateOptions(envVal, opts.allowedOptions(), fullName); err != nil {
 		return err
@@ -846,8 +866,9 @@ func (u *Unmarshaler) setEnvValue(fieldType reflect.Type, value reflect.Value, e
 	derefType := Deref(fieldType)
 	derefKind := derefType.Kind()
 
-	// 环境变量此前只校验 options，不校验 range，导致用环境变量覆盖配置时
-	// 越界值被接受（如 range=[1:65535] 的端口被 PORT=99999 绕过）。
+	// Environment variables used to validate only options, not range, so an
+	// out-of-range value was accepted when overriding config from the environment
+	// (e.g. a port with range=[1:65535] bypassed by PORT=99999).
 	if err := validateRangeForType(derefType, envVal, opts, fullName); err != nil {
 		return err
 	}
@@ -873,9 +894,10 @@ func (u *Unmarshaler) setEnvValue(fieldType reflect.Type, value reflect.Value, e
 	}
 }
 
-// setDefaultValue 设置字段的默认值。
-// 默认值同样需要满足 range 约束：标签里声明了越界的 default 属于配置错误，
-// 应在加载期暴露，而不是把一个越界值静默写进配置对象。
+// setDefaultValue sets the field's default value.
+// A default must satisfy the range constraint too: an out-of-range default
+// declared in a tag is a configuration error and should surface at load time
+// rather than being silently written into the config object.
 func (u *Unmarshaler) setDefaultValue(fieldType reflect.Type, value reflect.Value, defaultValue string, opts *fieldOptions, fullName string) error {
 	derefedType := Deref(fieldType)
 
@@ -906,12 +928,12 @@ func (u *Unmarshaler) setDefaultValue(fieldType reflect.Type, value reflect.Valu
 	}
 }
 
-// fillSliceWithDefault 填充切片的默认值。
+// fillSliceWithDefault fills a slice's default value.
 func (u *Unmarshaler) fillSliceWithDefault(derefedType reflect.Type, value reflect.Value, defaultValue string, fullName string) error {
 	var slice []any
-	// 尝试作为 JSON 数组解析
+	// Try to parse it as a JSON array
 	if err := json.Unmarshal([]byte(defaultValue), &slice); err != nil {
-		// 如果不是 JSON 数组，尝试作为分隔字符串
+		// If it is not a JSON array, try a delimited string
 		strVal := defaultValue
 		strVal = trimBrackets(strVal)
 		if len(strVal) == 0 {
@@ -927,7 +949,7 @@ func (u *Unmarshaler) fillSliceWithDefault(derefedType reflect.Type, value refle
 	return u.setSliceValue(derefedType, value, slice, nil, fullName)
 }
 
-// trimBrackets 去除字符串两端的方括号。
+// trimBrackets strips square brackets from both ends of the string.
 func trimBrackets(val string) string {
 	val = trimLeftBrackets(val)
 	val = trimRightBrackets(val)
@@ -953,7 +975,8 @@ func trimRightBrackets(val string) string {
 	return val
 }
 
-// hasAnySubField 检查嵌入结构体的子字段是否在配置 map 中存在。
+// hasAnySubField reports whether any sub-field of the embedded struct exists in
+// the config map.
 func (u *Unmarshaler) hasAnySubField(structType reflect.Type, m map[string]any) bool {
 	for i := 0; i < structType.NumField(); i++ {
 		field := structType.Field(i)
@@ -980,17 +1003,17 @@ func (u *Unmarshaler) hasAnySubField(structType reflect.Type, m map[string]any) 
 	return false
 }
 
-// setValue 内部设置值。
+// setValue sets a value internally.
 func setValue(fieldType reflect.Type, value, target reflect.Value) {
 	SetValue(fieldType, value, target)
 }
 
-// UnmarshalKey 使用默认的 json 标签将 m 反序列化到 v 中。
+// UnmarshalKey deserializes m into v using the default json tag.
 func UnmarshalKey(m map[string]any, v any) error {
 	return NewUnmarshaler(jsonTagKey).Unmarshal(m, v)
 }
 
-// UnmarshalJsonMap 使用默认的 json 标签将 m 反序列化到 v 中。
+// UnmarshalJsonMap deserializes m into v using the default json tag.
 func UnmarshalJsonMap(m map[string]any, v any, opts ...UnmarshalOption) error {
 	u := NewUnmarshaler(jsonTagKey, opts...)
 	return u.Unmarshal(m, v)

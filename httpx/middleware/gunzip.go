@@ -8,43 +8,47 @@ import (
 	"strings"
 )
 
-// defaultMaxDecompressedBytes 默认解压后请求体上限（5MB，与 Cryption 的上限一致）。
+// defaultMaxDecompressedBytes is the default limit on the decompressed request body (5MB, the same
+// as the Cryption limit).
 const defaultMaxDecompressedBytes = 5 << 20
 
-// errDecompressedTooLarge 解压后超过上限。
+// errDecompressedTooLarge means the decompressed size exceeded the limit.
 var errDecompressedTooLarge = errors.New("middleware: decompressed body exceeds limit")
 
-// Gunzip 是 gzip 请求体自动解压中间件。
-// 请求头 Content-Encoding 含 "gzip" 时，将请求体包装为 gzip 读取器；
-// 解压失败返回 400 Bad Request。
+// Gunzip is a middleware that automatically decompresses gzip request bodies.
+// When the Content-Encoding request header contains "gzip", the request body is wrapped in a gzip
+// reader; a failed decompression returns 400 Bad Request.
 //
-// 安全说明：gzip 可被用于"解压炸弹"——极小体积的压缩数据能展开为极大的内容。
-// 若只限制压缩后的大小（MaxBytes 依赖 Content-Length），限额会被绕过。
-// 本中间件对**解压后**的字节数设上限（默认 5MB），超限时下游读取会收到错误，
-// 避免解压结果撑爆内存。
+// Security note: gzip can be abused as a "decompression bomb" — a tiny compressed payload can
+// expand into a huge amount of content. Limiting only the compressed size (MaxBytes relies on
+// Content-Length) would let the limit be bypassed. This middleware caps the number of bytes
+// **after decompression** (5MB by default); once the limit is exceeded the downstream read
+// receives an error, so the decompressed result cannot blow up memory.
 //
-// 建议与 MaxBytes 组合使用，且本中间件注册在更内层，
-// 由 MaxBytes 先限制压缩体、再由本中间件限制解压体，两者互补：
+// It is best combined with MaxBytes, with this middleware registered in an inner layer: MaxBytes
+// limits the compressed body first and this middleware then limits the decompressed body, the two
+// being complementary:
 //
 //	server.Use(httpx.WithMaxBytes(1<<20), httpx.WithGunzip())
 type Gunzip struct {
 	maxDecompressedBytes int64
 }
 
-// NewGunzip 创建 gzip 解压中间件。
-// 解压后上限默认为 5MB，可用 WithMaxDecompressedBytes 调整。
+// NewGunzip creates the gzip decompression middleware.
+// The decompressed limit defaults to 5MB and can be adjusted with WithMaxDecompressedBytes.
 func NewGunzip() *Gunzip {
 	return &Gunzip{maxDecompressedBytes: defaultMaxDecompressedBytes}
 }
 
-// WithMaxDecompressedBytes 设置解压后的请求体上限（字节）。
-// n <= 0 表示不限制（不推荐：会重新引入解压炸弹风险）。
+// WithMaxDecompressedBytes sets the limit on the decompressed request body (in bytes).
+// n <= 0 means unlimited (not recommended: it reintroduces the decompression bomb risk).
 func (g *Gunzip) WithMaxDecompressedBytes(n int64) *Gunzip {
 	g.maxDecompressedBytes = n
 	return g
 }
 
-// Middleware 返回标准形式 func(http.Handler) http.Handler 的 gzip 解压中间件。
+// Middleware returns the gzip decompression middleware in the standard func(http.Handler)
+// http.Handler form.
 func (g *Gunzip) Middleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -63,10 +67,11 @@ func (g *Gunzip) Middleware() func(http.Handler) http.Handler {
 				reader: reader,
 				limit:  g.maxDecompressedBytes,
 			}
-			// 解压后长度未知，且与压缩体的 Content-Length 不一致，必须清除，
-			// 否则下游（含 MaxBytes）会按压缩体长度误判。
+			// The decompressed length is unknown and does not match the compressed body's
+			// Content-Length, so it must be cleared; otherwise downstream (including MaxBytes) would
+			// misjudge based on the compressed length.
 			r.ContentLength = -1
-			// 请求体已解压，标识不应继续向下游传递。
+			// The body is decompressed now, so the marker must not be passed downstream.
 			r.Header.Del("Content-Encoding")
 
 			next.ServeHTTP(w, r)
@@ -74,11 +79,12 @@ func (g *Gunzip) Middleware() func(http.Handler) http.Handler {
 	}
 }
 
-// limitedReadCloser 限制从底层 reader 读取的总字节数，超过 limit 后返回错误。
+// limitedReadCloser caps the total number of bytes read from the underlying reader and returns an
+// error once limit is exceeded.
 //
-// 最多读取 limit+1 字节：多出的 1 字节用于区分"恰好等于上限"与"超过上限"。
-// 一旦确认超限，已读到的越界字节会被丢弃（返回 0, err），
-// 调用方（如 io.ReadAll）随即停止读取。
+// At most limit+1 bytes are read: the extra byte distinguishes "exactly at the limit" from "above
+// the limit". Once the limit is known to be exceeded, the out-of-range bytes already read are
+// discarded (returning 0, err) and the caller (e.g. io.ReadAll) stops reading right away.
 type limitedReadCloser struct {
 	reader   io.ReadCloser
 	limit    int64
@@ -87,7 +93,7 @@ type limitedReadCloser struct {
 
 func (l *limitedReadCloser) Read(p []byte) (int, error) {
 	if l.limit > 0 {
-		// 上限 +1 用于探测溢出
+		// limit + 1 is used to detect overflow
 		remaining := l.limit + 1 - l.consumed
 		if remaining <= 0 {
 			return 0, errDecompressedTooLarge
@@ -106,7 +112,7 @@ func (l *limitedReadCloser) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// Close 关闭底层 gzip reader，同时释放其包装的原始 Body。
+// Close closes the underlying gzip reader and also releases the original Body it wraps.
 func (l *limitedReadCloser) Close() error {
 	return l.reader.Close()
 }

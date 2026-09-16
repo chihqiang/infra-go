@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// --- ConcurrentMap 测试 ---
+// --- ConcurrentMap tests ---
 
 func TestConcurrentMap_Basic(t *testing.T) {
 	m := NewConcurrentMap[string, int]()
@@ -49,7 +49,7 @@ func TestConcurrentMap_GetAndDelete(t *testing.T) {
 	assert.Equal(t, 100, val)
 	assert.False(t, m.Has("a"))
 
-	// 删除不存在的
+	// Deleting a key that does not exist
 	_, ok = m.GetAndDelete("not-exist")
 	assert.False(t, ok)
 }
@@ -57,22 +57,22 @@ func TestConcurrentMap_GetAndDelete(t *testing.T) {
 func TestConcurrentMap_GetOrSet(t *testing.T) {
 	m := NewConcurrentMap[string, int]()
 
-	// 不存在时设置
+	// Sets the default value when the key is absent
 	val, existed := m.GetOrSet("a", 1)
 	assert.False(t, existed)
 	assert.Equal(t, 1, val)
 
-	// 已存在时返回现有值
+	// Returns the existing value when the key is already present
 	val, existed = m.GetOrSet("a", 999)
 	assert.True(t, existed)
-	assert.Equal(t, 1, val) // 返回旧值
+	assert.Equal(t, 1, val) // returns the old value
 }
 
 func TestConcurrentMap_Concurrent(t *testing.T) {
 	m := NewConcurrentMap[int, int]()
 
 	var wg sync.WaitGroup
-	// 100 个协程并发写
+	// 100 goroutines writing concurrently
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		go func(n int) {
@@ -84,7 +84,7 @@ func TestConcurrentMap_Concurrent(t *testing.T) {
 
 	assert.Equal(t, 100, m.Len())
 
-	// 验证值
+	// Verify the values
 	for i := 0; i < 100; i++ {
 		val, ok := m.Get(i)
 		assert.True(t, ok)
@@ -121,7 +121,7 @@ func TestConcurrentMap_RangeStop(t *testing.T) {
 	var count int
 	m.Range(func(key string, value int) bool {
 		count++
-		return false // 立即停止
+		return false // stop right away
 	})
 
 	assert.Equal(t, 1, count)
@@ -171,7 +171,7 @@ func TestConcurrentMap_WithSize(t *testing.T) {
 }
 
 func TestConcurrentMap_WithSize_Invalid(t *testing.T) {
-	// shardCount < 1 时回退为 1
+	// shardCount < 1 falls back to 1
 	m := NewConcurrentMapWithSize[string, int](0)
 	m.Set("a", 1)
 	assert.Equal(t, 1, m.Len())

@@ -9,28 +9,32 @@ import (
 	"github.com/chihqiang/infra-go/logger"
 )
 
-// AccessLogger 是请求访问日志中间件。
-// 记录每个请求的方法、路径、状态码、响应字节数和耗时。
+// AccessLogger is a request access log middleware.
+// It logs the method, path, status code, response byte count and latency of every request.
 type AccessLogger struct {
 	matcher *x.PathMatcher
 }
 
-// NewAccessLogger 创建访问日志中间件。
-// skipPaths 为不记录日志的路径列表，常用于健康检查、心跳等高频探活接口。
-// 匹配方式：精确匹配（如 "/healthz"）或以 "*" 结尾的前缀通配（如 "/internal/*"）。
+// NewAccessLogger creates the access log middleware.
+// skipPaths lists the paths that are not logged, commonly used for high-frequency liveness
+// endpoints such as health checks and heartbeats.
+// Matching is either exact (e.g. "/healthz") or a prefix wildcard ending in "*" (e.g.
+// "/internal/*").
 func NewAccessLogger(skipPaths ...string) *AccessLogger {
 	return &AccessLogger{matcher: x.NewPathMatcher(skipPaths)}
 }
 
-// Middleware 返回标准形式 func(http.Handler) http.Handler 的访问日志中间件。
-// 配合 trace 包使用时，logger 的 Ctx 提取器会自动带上 trace_id/span_id。
+// Middleware returns the access log middleware in the standard func(http.Handler) http.Handler
+// form. When used together with the trace package, the logger's Ctx extractor automatically adds
+// trace_id/span_id.
 func (l *AccessLogger) Middleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 			rec := respw.NewRecorderWriter(w)
 			next.ServeHTTP(rec, r)
-			// 命中忽略规则的路径不写访问日志（业务照常处理）
+			// Paths matching an ignore rule are not written to the access log (the business logic
+			// still runs as usual)
 			if l.matcher.Match(r.URL.Path) {
 				return
 			}

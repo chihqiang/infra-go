@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var testAESKey = []byte("0123456789abcdef") // 16 字节，AES-128
+var testAESKey = []byte("0123456789abcdef") // 16 bytes, AES-128
 
 // --- AES-GCM ---
 
@@ -23,16 +23,17 @@ func TestAESGCMEncryptDecrypt(t *testing.T) {
 func TestAESGCMEncrypt_RandomNonce(t *testing.T) {
 	e1, _ := AESGCMEncrypt(testAESKey, []byte("same"))
 	e2, _ := AESGCMEncrypt(testAESKey, []byte("same"))
-	assert.NotEqual(t, e1, e2, "nonce 每次随机，同一明文密文应不同")
+	assert.NotEqual(t, e1, e2, "the nonce is random each time, so identical plaintext must differ")
 }
 
 func TestAESGCMDecrypt_Tampered(t *testing.T) {
 	enc, err := AESGCMEncrypt(testAESKey, []byte("secret"))
 	require.NoError(t, err)
 
-	// 篡改密文（翻转中间一个字符）。
-	// 替换字符必须与原文不同：base64 字母表包含 'X'，
-	// 若该位置恰好就是 'X'，替换会成为空操作，解密成功导致测试偶发失败。
+	// Tamper with the ciphertext (flip a character in the middle).
+	// The replacement character must differ from the original: the base64 alphabet
+	// contains 'X', so if that position happens to be 'X' the replacement becomes a no-op,
+	// decryption succeeds and the test fails intermittently.
 	i := len(enc) / 2
 	replacement := byte('X')
 	if enc[i] == replacement {
@@ -44,13 +45,13 @@ func TestAESGCMDecrypt_Tampered(t *testing.T) {
 	require.NotEqual(t, enc, tampered, "tampering must actually change the ciphertext")
 
 	_, err = AESGCMDecrypt(testAESKey, tampered)
-	assert.Error(t, err, "篡改后的密文应校验失败")
+	assert.Error(t, err, "tampered ciphertext must fail verification")
 }
 
 func TestAESGCMDecrypt_WrongKey(t *testing.T) {
 	enc, _ := AESGCMEncrypt(testAESKey, []byte("secret"))
 	_, err := AESGCMDecrypt([]byte("abcdefghijklmnop"), enc)
-	assert.Error(t, err, "错误密钥应解密失败")
+	assert.Error(t, err, "a wrong key must fail decryption")
 }
 
 func TestAESGCM_InvalidKey(t *testing.T) {
@@ -58,7 +59,7 @@ func TestAESGCM_InvalidKey(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidAESKey)
 }
 
-// --- HMAC 签名 ---
+// --- HMAC signing ---
 
 func TestHMACSignVerify(t *testing.T) {
 	sig := HMACSign(testAESKey, "hello")

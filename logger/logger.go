@@ -16,23 +16,24 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-// Encoding 日志编码格式类型。
+// Encoding is the log encoding format type.
 type Encoding string
 
 const (
-	// JSONEncoding JSON 格式输出。
+	// JSONEncoding outputs JSON.
 	JSONEncoding Encoding = "json"
-	// ConsoleEncoding 控制台格式输出，人类可读。
+	// ConsoleEncoding outputs the console format, which is human readable.
 	ConsoleEncoding Encoding = "console"
 )
 
-// ContextExtractor 从 context 中提取日志字段的函数。
+// ContextExtractor is a function that extracts log fields from a context.
 type ContextExtractor func(ctx context.Context) []Field
 
-// registeredExtractor 已注册的上下文字段提取器。
+// registeredExtractor is a registered context field extractor.
 //
-// removed 用原子标记而不是从切片中删除：读取路径（extractContextFields）
-// 在锁外遍历切片底层数组，原地删除/搬移元素会与正在遍历的 goroutine 构成数据竞争。
+// removed is an atomic flag rather than a slice deletion: the read path
+// (extractContextFields) walks the backing array outside the lock, so deleting or moving
+// elements in place would race with a goroutine that is iterating it.
 type registeredExtractor struct {
 	fn      ContextExtractor
 	removed atomic.Bool
@@ -43,17 +44,20 @@ var (
 	extractorsMu      sync.RWMutex
 )
 
-// RegisterContextExtractor 注册一个上下文字段提取器，返回注销函数。
+// RegisterContextExtractor registers a context field extractor and returns an unregister
+// function.
 //
-// 历史问题：注册是**追加**式的且没有注销入口，而函数值在 Go 中不可比较，
-// 无法在注册时去重。因此初始化流程若被多次执行（重试、多阶段配置、测试复用），
-// 同一个提取器会被注册多次，导致每条日志里相同字段重复输出多遍。
-// 返回的注销函数解决了这一点：它是幂等的，重复调用只生效一次。
+// Historical problem: registration only **appended** and had no unregister entry point,
+// while function values are not comparable in Go, so registration could not be
+// de-duplicated. Whenever the initialisation flow ran more than once (retries, multi-stage
+// configuration, test reuse) the same extractor was registered several times, printing the
+// same fields over and over on every log entry. The returned unregister function solves
+// this: it is idempotent, so repeated calls take effect only once.
 //
 //	unregister := logger.RegisterContextExtractor(myExtractor)
-//	defer unregister() // 不再使用时撤销
+//	defer unregister() // undo it when no longer needed
 //
-// extractor 为 nil 时不注册，返回的注销函数为空操作。
+// A nil extractor is not registered and the returned unregister function is a no-op.
 func RegisterContextExtractor(extractor ContextExtractor) (unregister func()) {
 	if extractor == nil {
 		return func() {}
@@ -69,9 +73,11 @@ func RegisterContextExtractor(extractor ContextExtractor) (unregister func()) {
 		once.Do(func() {
 			entry.removed.Store(true)
 
-			// 顺带压实切片，避免长期反复注册/注销导致切片无限增长。
-			// 整体替换切片头部是安全的：读路径已拷贝旧头部，
-			// 旧底层数组不会被修改，仍按 removed 标记跳过该元素。
+			// Also compact the slice, so that repeated register/unregister cycles over a
+			// long period cannot grow it without bound.
+			// Replacing the slice header wholesale is safe: the read path has already
+			// copied the old header, so the old backing array is not modified and the
+			// element is still skipped through its removed flag.
 			extractorsMu.Lock()
 			defer extractorsMu.Unlock()
 			live := make([]*registeredExtractor, 0, len(contextExtractors))
@@ -90,7 +96,7 @@ func extractContextFields(ctx context.Context) []Field {
 	extractors := contextExtractors
 	extractorsMu.RUnlock()
 
-	// 预分配容量，避免多次扩容
+	// Pre-allocate the capacity to avoid repeated growth
 	fields := make([]Field, 0, len(extractors)*2)
 	for _, e := range extractors {
 		if e.removed.Load() {
@@ -101,45 +107,50 @@ func extractContextFields(ctx context.Context) []Field {
 	return fields
 }
 
-// RotationConfig 日志文件轮转配置。
-// 基于 lumberjack 实现，支持按文件大小切割、按天数保留。
+// RotationConfig configures log file rotation.
+// It is implemented on top of lumberjack and supports splitting by file size and keeping
+// files for a number of days.
 type RotationConfig struct {
-	// MaxSize 单个日志文件的最大大小（MB），默认 100MB。
+	// MaxSize is the maximum size of a single log file in MB; defaults to 100MB.
 	MaxSize int `json:",default=100"`
-	// MaxBackups 保留的旧日志文件最大数量，默认 7。
+	// MaxBackups is the maximum number of old log files to keep; defaults to 7.
 	MaxBackups int `json:",default=7"`
-	// MaxAge 保留旧日志文件的最大天数，默认 30。
+	// MaxAge is the maximum number of days old log files are kept; defaults to 30.
 	MaxAge int `json:",default=30"`
-	// Compress 是否压缩旧日志文件（gzip），默认 false。
+	// Compress reports whether old log files are compressed (gzip); defaults to false.
 	Compress bool `json:",optional"`
-	// LocalTime 是否使用本地时间命名备份文件，默认 true。
+	// LocalTime reports whether backup files are named using local time; defaults to true.
 	LocalTime bool `json:",default=true"`
 }
 
-// Config 日志配置。
+// Config is the log configuration.
 type Config struct {
-	// Level 日志级别，默认 InfoLevel（zapcore.InfoLevel = 0）。
+	// Level is the log level; defaults to InfoLevel (zapcore.InfoLevel = 0).
 	Level Level `json:",default=0"`
-	// Encoding 编码格式，默认 JSONEncoding。
+	// Encoding is the encoding format; defaults to JSONEncoding.
 	Encoding Encoding `json:",default=json"`
-	// Output 输出目标，支持 "stdout"、"stderr" 或文件路径，默认 ["stdout"]。
+	// Output lists the output targets, which may be "stdout", "stderr" or a file path;
+	// defaults to ["stdout"].
 	Output []string `json:",default=[stdout]"`
-	// ErrorOutput 错误输出目标，默认 "stderr"。
+	// ErrorOutput is the error output target; defaults to "stderr".
 	ErrorOutput string `json:",default=stderr"`
-	// Caller 是否记录调用者信息（文件名和行号），默认 true。
+	// Caller reports whether caller information (file name and line number) is recorded;
+	// defaults to true.
 	Caller bool `json:",default=true"`
-	// Stacktrace 是否在 Error 及以上级别记录堆栈，默认 false。
+	// Stacktrace reports whether a stack trace is recorded at Error level and above;
+	// defaults to false.
 	Stacktrace bool `json:",optional"`
-	// TimeLayout 时间格式布局，默认 ISO8601。
+	// TimeLayout is the time format layout; defaults to ISO8601.
 	TimeLayout string `json:",default=2006-01-02T15:04:05.000Z07:00"`
-	// AppName 应用名称，会作为固定字段输出，默认空。
+	// AppName is the application name, emitted as a fixed field; defaults to empty.
 	AppName string `json:",optional"`
-	// Rotation 日志文件轮转配置。
+	// Rotation is the log file rotation configuration.
 	Rotation RotationConfig
 }
 
-// Logger 是 ILogger 接口的默认实现，内部封装 zap.Logger。
-// 通过 New / Default 创建；通常以 ILogger 接口形式使用，Close 负责刷新并关闭输出。
+// Logger is the default implementation of the ILogger interface and wraps a zap.Logger.
+// Create it with New / Default; it is normally used through the ILogger interface, and
+// Close flushes the buffers and closes the outputs.
 type Logger struct {
 	zap     *zap.Logger
 	sugar   *zap.SugaredLogger
@@ -147,7 +158,7 @@ type Logger struct {
 	closers []io.Closer
 }
 
-// New 根据配置创建并返回一个 ILogger。
+// New creates and returns an ILogger from the configuration.
 func New(cfg Config) ILogger {
 	c := fillDefault(cfg)
 
@@ -156,7 +167,7 @@ func New(cfg Config) ILogger {
 		return lvl >= c.Level
 	})
 
-	// 构建输出写入器
+	// Build the output writers
 	cores := make([]zapcore.Core, 0, len(c.Output))
 	var closers []io.Closer
 	for _, output := range c.Output {
@@ -170,7 +181,7 @@ func New(cfg Config) ILogger {
 		cores = append(cores, zapcore.NewCore(encoder, zapcore.AddSync(w), levelEnabler))
 	}
 
-	// 构建错误输出写入器
+	// Build the error output writer
 	errW, _, err := openOutput(c.ErrorOutput, c.Rotation)
 	if err != nil {
 		errW = os.Stderr
@@ -191,77 +202,79 @@ func New(cfg Config) ILogger {
 	}
 }
 
-// Default 返回一个使用默认配置的 Logger。
+// Default returns a Logger that uses the default configuration.
 func Default() ILogger {
 	return New(Config{})
 }
 
-// --- 结构化日志方法 ---
+// --- Structured logging methods ---
 
-// Debug 以 Debug 级别记录一条结构化日志。
+// Debug logs one structured entry at Debug level.
 func (l *Logger) Debug(msg string, fields ...Field) { l.zap.Debug(msg, fields...) }
 
-// Info 以 Info 级别记录一条结构化日志。
+// Info logs one structured entry at Info level.
 func (l *Logger) Info(msg string, fields ...Field) { l.zap.Info(msg, fields...) }
 
-// Warn 以 Warn 级别记录一条结构化日志。
+// Warn logs one structured entry at Warn level.
 func (l *Logger) Warn(msg string, fields ...Field) { l.zap.Warn(msg, fields...) }
 
-// Error 以 Error 级别记录一条结构化日志。
+// Error logs one structured entry at Error level.
 func (l *Logger) Error(msg string, fields ...Field) { l.zap.Error(msg, fields...) }
 
-// Panic 以 Panic 级别记录日志后触发 panic。
+// Panic logs at Panic level and then panics.
 func (l *Logger) Panic(msg string, fields ...Field) { l.zap.Panic(msg, fields...) }
 
-// Fatal 以 Fatal 级别记录日志后调用 os.Exit(1)。
+// Fatal logs at Fatal level and then calls os.Exit(1).
 func (l *Logger) Fatal(msg string, fields ...Field) { l.zap.Fatal(msg, fields...) }
 
-// --- 格式化日志方法 ---
+// --- Formatted logging methods ---
+//
+// The formatted logging methods skip fmt.Sprintf when the level is not enabled, avoiding
+// pointless formatting work. The Panic/Fatal variants are kept as they are: zap's
+// Panic/Fatal trigger panic/os.Exit even when the level is disabled, and that behaviour is
+// not changed here.
 
-// 格式化日志方法在级别未启用时跳过 fmt.Sprintf，避免无谓的格式化开销。
-// Panic/Fatal 系列保持原样：zap 的 Panic/Fatal 即使级别未启用也会触发
-// panic/os.Exit，此处不改变其行为。
-
-// Debugf 以 Debug 级别记录格式化日志。
+// Debugf logs a formatted entry at Debug level.
 func (l *Logger) Debugf(format string, args ...any) {
 	if l.zap.Core().Enabled(zapcore.DebugLevel) {
 		l.zap.Debug(fmt.Sprintf(format, args...))
 	}
 }
 
-// Infof 以 Info 级别记录格式化日志。
+// Infof logs a formatted entry at Info level.
 func (l *Logger) Infof(format string, args ...any) {
 	if l.zap.Core().Enabled(zapcore.InfoLevel) {
 		l.zap.Info(fmt.Sprintf(format, args...))
 	}
 }
 
-// Warnf 以 Warn 级别记录格式化日志。
+// Warnf logs a formatted entry at Warn level.
 func (l *Logger) Warnf(format string, args ...any) {
 	if l.zap.Core().Enabled(zapcore.WarnLevel) {
 		l.zap.Warn(fmt.Sprintf(format, args...))
 	}
 }
 
-// Errorf 以 Error 级别记录格式化日志。
+// Errorf logs a formatted entry at Error level.
 func (l *Logger) Errorf(format string, args ...any) {
 	if l.zap.Core().Enabled(zapcore.ErrorLevel) {
 		l.zap.Error(fmt.Sprintf(format, args...))
 	}
 }
 
-// Panicf 以 Panic 级别记录格式化日志后触发 panic。
+// Panicf logs a formatted entry at Panic level and then panics.
 func (l *Logger) Panicf(format string, args ...any) { l.zap.Panic(fmt.Sprintf(format, args...)) }
 
-// Fatalf 以 Fatal 级别记录格式化日志后调用 os.Exit(1)。
+// Fatalf logs a formatted entry at Fatal level and then calls os.Exit(1).
 func (l *Logger) Fatalf(format string, args ...any) { l.zap.Fatal(fmt.Sprintf(format, args...)) }
 
-// --- 带上下文的结构化日志方法 ---
+// --- Structured logging methods with context ---
 //
-// 带上下文方法把 context 中注册的上下文提取器字段自动并入日志（如 request_id），
-// 便于链路追踪。实现上先检查级别，未启用时直接返回，避免提取字段的开销。
+// The context-aware methods merge the context extractor fields registered in the context
+// (such as request_id) into the log entry, which helps with tracing. They check the level
+// first and return immediately when it is disabled, avoiding the cost of extracting fields.
 
-// DebugCtx 以 Debug 级别记录日志，自动并入 ctx 的上下文提取器字段。
+// DebugCtx logs at Debug level, merging in the extractor fields of ctx.
 func (l *Logger) DebugCtx(ctx context.Context, msg string, fields ...Field) {
 	if !l.zap.Core().Enabled(zapcore.DebugLevel) {
 		return
@@ -269,7 +282,7 @@ func (l *Logger) DebugCtx(ctx context.Context, msg string, fields ...Field) {
 	l.zap.Debug(msg, append(extractContextFields(ctx), fields...)...)
 }
 
-// InfoCtx 以 Info 级别记录日志，自动并入 ctx 的上下文提取器字段。
+// InfoCtx logs at Info level, merging in the extractor fields of ctx.
 func (l *Logger) InfoCtx(ctx context.Context, msg string, fields ...Field) {
 	if !l.zap.Core().Enabled(zapcore.InfoLevel) {
 		return
@@ -277,7 +290,7 @@ func (l *Logger) InfoCtx(ctx context.Context, msg string, fields ...Field) {
 	l.zap.Info(msg, append(extractContextFields(ctx), fields...)...)
 }
 
-// WarnCtx 以 Warn 级别记录日志，自动并入 ctx 的上下文提取器字段。
+// WarnCtx logs at Warn level, merging in the extractor fields of ctx.
 func (l *Logger) WarnCtx(ctx context.Context, msg string, fields ...Field) {
 	if !l.zap.Core().Enabled(zapcore.WarnLevel) {
 		return
@@ -285,7 +298,7 @@ func (l *Logger) WarnCtx(ctx context.Context, msg string, fields ...Field) {
 	l.zap.Warn(msg, append(extractContextFields(ctx), fields...)...)
 }
 
-// ErrorCtx 以 Error 级别记录日志，自动并入 ctx 的上下文提取器字段。
+// ErrorCtx logs at Error level, merging in the extractor fields of ctx.
 func (l *Logger) ErrorCtx(ctx context.Context, msg string, fields ...Field) {
 	if !l.zap.Core().Enabled(zapcore.ErrorLevel) {
 		return
@@ -293,19 +306,20 @@ func (l *Logger) ErrorCtx(ctx context.Context, msg string, fields ...Field) {
 	l.zap.Error(msg, append(extractContextFields(ctx), fields...)...)
 }
 
-// PanicCtx 以 Panic 级别记录日志后触发 panic，并自动并入 ctx 的上下文提取器字段。
+// PanicCtx logs at Panic level, then panics, merging in the extractor fields of ctx.
 func (l *Logger) PanicCtx(ctx context.Context, msg string, fields ...Field) {
 	l.zap.With(extractContextFields(ctx)...).Panic(msg, fields...)
 }
 
-// FatalCtx 以 Fatal 级别记录日志后调用 os.Exit(1)，并自动并入 ctx 的上下文提取器字段。
+// FatalCtx logs at Fatal level, then calls os.Exit(1), merging in the extractor fields of
+// ctx.
 func (l *Logger) FatalCtx(ctx context.Context, msg string, fields ...Field) {
 	l.zap.With(extractContextFields(ctx)...).Fatal(msg, fields...)
 }
 
-// --- 带上下文的格式化日志方法 ---
+// --- Formatted logging methods with context ---
 
-// DebugfCtx 以 Debug 级别记录格式化日志，自动并入 ctx 的上下文提取器字段。
+// DebugfCtx logs a formatted entry at Debug level, merging in the extractor fields of ctx.
 func (l *Logger) DebugfCtx(ctx context.Context, format string, args ...any) {
 	if !l.zap.Core().Enabled(zapcore.DebugLevel) {
 		return
@@ -313,7 +327,7 @@ func (l *Logger) DebugfCtx(ctx context.Context, format string, args ...any) {
 	l.zap.Debug(fmt.Sprintf(format, args...), extractContextFields(ctx)...)
 }
 
-// InfofCtx 以 Info 级别记录格式化日志，自动并入 ctx 的上下文提取器字段。
+// InfofCtx logs a formatted entry at Info level, merging in the extractor fields of ctx.
 func (l *Logger) InfofCtx(ctx context.Context, format string, args ...any) {
 	if !l.zap.Core().Enabled(zapcore.InfoLevel) {
 		return
@@ -321,7 +335,7 @@ func (l *Logger) InfofCtx(ctx context.Context, format string, args ...any) {
 	l.zap.Info(fmt.Sprintf(format, args...), extractContextFields(ctx)...)
 }
 
-// WarnfCtx 以 Warn 级别记录格式化日志，自动并入 ctx 的上下文提取器字段。
+// WarnfCtx logs a formatted entry at Warn level, merging in the extractor fields of ctx.
 func (l *Logger) WarnfCtx(ctx context.Context, format string, args ...any) {
 	if !l.zap.Core().Enabled(zapcore.WarnLevel) {
 		return
@@ -329,7 +343,7 @@ func (l *Logger) WarnfCtx(ctx context.Context, format string, args ...any) {
 	l.zap.Warn(fmt.Sprintf(format, args...), extractContextFields(ctx)...)
 }
 
-// ErrorfCtx 以 Error 级别记录格式化日志，自动并入 ctx 的上下文提取器字段。
+// ErrorfCtx logs a formatted entry at Error level, merging in the extractor fields of ctx.
 func (l *Logger) ErrorfCtx(ctx context.Context, format string, args ...any) {
 	if !l.zap.Core().Enabled(zapcore.ErrorLevel) {
 		return
@@ -337,26 +351,28 @@ func (l *Logger) ErrorfCtx(ctx context.Context, format string, args ...any) {
 	l.zap.Error(fmt.Sprintf(format, args...), extractContextFields(ctx)...)
 }
 
-// PanicfCtx 以 Panic 级别记录格式化日志后触发 panic，并自动并入 ctx 的上下文提取器字段。
+// PanicfCtx logs a formatted entry at Panic level, then panics, merging in the extractor
+// fields of ctx.
 func (l *Logger) PanicfCtx(ctx context.Context, format string, args ...any) {
 	l.zap.With(extractContextFields(ctx)...).Panic(fmt.Sprintf(format, args...))
 }
 
-// FatalfCtx 以 Fatal 级别记录格式化日志后调用 os.Exit(1)，并自动并入 ctx 的上下文提取器字段。
+// FatalfCtx logs a formatted entry at Fatal level, then calls os.Exit(1), merging in the
+// extractor fields of ctx.
 func (l *Logger) FatalfCtx(ctx context.Context, format string, args ...any) {
 	l.zap.With(extractContextFields(ctx)...).Fatal(fmt.Sprintf(format, args...))
 }
 
 // --- Sync ---
 
-// Sync 刷新缓冲区中的日志。
+// Sync flushes buffered log entries.
 func (l *Logger) Sync() error {
 	return l.zap.Sync()
 }
 
-// --- 额外方法（不在接口中） ---
+// --- Extra methods (not part of the interface) ---
 
-// Close 关闭日志记录器，刷新缓冲区并关闭文件输出。
+// Close shuts the logger down, flushing buffers and closing file outputs.
 func (l *Logger) Close() error {
 	var errs []string
 	if err := l.zap.Sync(); err != nil {
@@ -373,12 +389,12 @@ func (l *Logger) Close() error {
 	return nil
 }
 
-// --- 内部函数 ---
+// --- Internal functions ---
 
-// fillDefault 填充默认值，然后用用户配置中的非零字段覆盖。
-// 使用 mapping.FillAndOverride 统一处理。
-// AppName 为空字符串时也视为有效值（始终覆盖），
-// 这通过标签 optional 且无 default 实现。
+// fillDefault fills in the default values and then overrides them with the non-zero fields
+// of the user configuration, using mapping.FillAndOverride for both steps.
+// An empty AppName is also treated as a valid value (it always overrides); this is achieved
+// by the optional tag with no default.
 func fillDefault(cfg Config) Config {
 	var c Config
 	mapping.MustFillAndOverride(&c, cfg)

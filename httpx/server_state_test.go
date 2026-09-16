@@ -11,24 +11,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 本文件覆盖 Server 可变状态的并发安全（回归）：
-//   - routes：AddRoutes 写入、Routes/PrintRoutes 读取
-//   - httpServer：Start 写入、Shutdown/Stop 读取
-// 两者此前均无锁保护，-race 可检出数据竞争。
+// This file covers the concurrency safety of the Server's mutable state (regression):
+//   - routes: written by AddRoutes, read by Routes/PrintRoutes
+//   - httpServer: written by Start, read by Shutdown/Stop
+// Both previously had no lock protection, so -race could detect data races.
 
 func okHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 }
 
-// TestServer_RoutesConcurrentWithAddRoute 回归测试：并发 AddRoute 与 Routes 不得竞争。
+// TestServer_RoutesConcurrentWithAddRoute is a regression test: concurrent AddRoute and
+// Routes must not race.
 func TestServer_RoutesConcurrentWithAddRoute(t *testing.T) {
 	s := newTestServer()
 
 	const n = 200
 	var wg sync.WaitGroup
 
-	// 并发写：注册路由（每个 goroutine 使用独立路径前缀，
-	// 因为 http.ServeMux 对重复 pattern 会 panic）
+	// Concurrent writes: register routes (each goroutine uses its own path prefix,
+	// because http.ServeMux panics on duplicate patterns)
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func(id int) {
@@ -43,7 +44,7 @@ func TestServer_RoutesConcurrentWithAddRoute(t *testing.T) {
 		}(i)
 	}
 
-	// 并发读：Routes / routesSnapshot
+	// Concurrent reads: Routes / routesSnapshot
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func() {
@@ -59,7 +60,8 @@ func TestServer_RoutesConcurrentWithAddRoute(t *testing.T) {
 	assert.Len(t, s.Routes(), 4*n)
 }
 
-// TestServer_RoutesSnapshotIsACopy 验证 Routes 返回副本，修改不影响内部状态。
+// TestServer_RoutesSnapshotIsACopy verifies Routes returns a copy, so mutations do not
+// affect the internal state.
 func TestServer_RoutesSnapshotIsACopy(t *testing.T) {
 	s := newTestServer()
 	s.AddRoute(Route{Method: "GET", Path: "/a", Handler: okHandler()})
@@ -71,17 +73,18 @@ func TestServer_RoutesSnapshotIsACopy(t *testing.T) {
 	assert.Equal(t, "/a", s.Routes()[0].Path, "mutating the returned slice must not affect the server")
 }
 
-// TestServer_StopConcurrentWithStart 回归测试：Stop/Shutdown 与 Start 并发不得竞争
-// httpServer 字段。
+// TestServer_StopConcurrentWithStart is a regression test: Stop/Shutdown running
+// concurrently with Start must not race on the httpServer field.
 //
-// 历史缺陷：Start 无锁写 s.httpServer，Shutdown/Stop 无锁读，
-// -race 可检出（service.ServiceGroup 会在不同 goroutine 中启停）。
+// Historical defect: Start wrote s.httpServer without a lock while Shutdown/Stop read
+// it without one, detectable by -race (service.ServiceGroup starts and stops in
+// different goroutines).
 func TestServer_StopConcurrentWithStart(t *testing.T) {
 	s := NewServer(ServerConfig{Host: "127.0.0.1", Port: 0})
 	s.AddRoute(Route{Method: "GET", Path: "/ok", Handler: okHandler()})
 
 	var wg sync.WaitGroup
-	// 并发调用 Stop/Shutdown（读取 httpServer）
+	// Concurrent Stop/Shutdown calls (reading httpServer)
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func() {
@@ -89,7 +92,7 @@ func TestServer_StopConcurrentWithStart(t *testing.T) {
 			_ = s.Stop()
 		}()
 	}
-	// 并发模拟 Start 阶段的登记（写入 httpServer）
+	// Concurrently simulate the registration done during Start (writing httpServer)
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func() {
@@ -102,7 +105,8 @@ func TestServer_StopConcurrentWithStart(t *testing.T) {
 	wg.Wait()
 }
 
-// TestServer_StopBeforeStartIsNoop 验证 Start 未调用时 Stop/Shutdown 是空操作且不 panic。
+// TestServer_StopBeforeStartIsNoop verifies that when Start was not called, Stop/Shutdown
+// are no-ops and do not panic.
 func TestServer_StopBeforeStartIsNoop(t *testing.T) {
 	s := NewServer(ServerConfig{Host: "127.0.0.1", Port: 0})
 
@@ -113,7 +117,8 @@ func TestServer_StopBeforeStartIsNoop(t *testing.T) {
 	})
 }
 
-// TestServer_ShutdownAfterRegister 验证登记后 Shutdown 会真正作用于该实例。
+// TestServer_ShutdownAfterRegister verifies that after registration, Shutdown really
+// acts on that instance.
 func TestServer_ShutdownAfterRegister(t *testing.T) {
 	s := NewServer(ServerConfig{Host: "127.0.0.1", Port: 0})
 	srv := &http.Server{Addr: "127.0.0.1:0", Handler: http.HandlerFunc(okHandler())}
@@ -123,12 +128,14 @@ func TestServer_ShutdownAfterRegister(t *testing.T) {
 	s.stateLk.Unlock()
 
 	require.NotNil(t, s.currentHTTPServer())
-	// 未启动的 http.Server 调用 Shutdown 返回 ErrServerClosed 之外的结果或 nil，
-	// 此处只断言不 panic 且不误报为 nil 分支
+	// Calling Shutdown on a never-started http.Server returns either nil or something
+	// other than ErrServerClosed; here we only assert it does not panic and is not
+	// mistakenly reported as the nil branch
 	require.NotPanics(t, func() { _ = s.Shutdown() })
 }
 
-// TestServer_ConcurrentRoutesAndHandler 验证路由注册与 Handler 构建并发安全。
+// TestServer_ConcurrentRoutesAndHandler verifies route registration and Handler
+// construction are concurrency-safe.
 func TestServer_ConcurrentRoutesAndHandler(t *testing.T) {
 	s := newTestServer()
 
@@ -151,15 +158,17 @@ func TestServer_ConcurrentRoutesAndHandler(t *testing.T) {
 	require.NotNil(t, s.Handler())
 }
 
-// --- 路由模板注入（供按路由聚合的中间件使用）---
+// --- Route template injection (for middleware that aggregates per route) ---
 
-// TestServer_GlobalMiddlewareSeesRoutePattern 回归测试：全局中间件必须能通过
-// context 读到路由模板。
+// TestServer_GlobalMiddlewareSeesRoutePattern is a regression test: global middleware
+// must be able to read the route template from the context.
 //
-// 背景：全局中间件包在 mux 外层，net/http 只在分发到命中 handler 时才填充
-// r.Pattern，因此中间件里读 r.Pattern 恒为空。需要"按路由聚合"的中间件
-// （熔断/指标）会退化成按具体路径聚合，导致统计割裂与内存无界增长。
-// httpx.Server 现在会预判路由并把模板写入 context。
+// Background: global middleware wraps the mux from the outside, and net/http only fills
+// r.Pattern when dispatching to the matched handler, so reading r.Pattern inside
+// middleware is always empty. Middleware that needs to aggregate per route (circuit
+// breaking/metrics) then degrades to aggregating per concrete path, fragmenting the
+// statistics and growing memory without bound.
+// httpx.Server now pre-checks the route and writes the template into the context.
 func TestServer_GlobalMiddlewareSeesRoutePattern(t *testing.T) {
 	s := newTestServer()
 
@@ -189,8 +198,8 @@ func TestServer_GlobalMiddlewareSeesRoutePattern(t *testing.T) {
 	}
 }
 
-// TestServer_GlobalMiddlewarePatternEmptyForUnmatched 验证未匹配路由时模板为空
-// （不应把 404 请求归到某个路由上）。
+// TestServer_GlobalMiddlewarePatternEmptyForUnmatched verifies the template is empty
+// when no route matches (a 404 request must not be attributed to some route).
 func TestServer_GlobalMiddlewarePatternEmptyForUnmatched(t *testing.T) {
 	s := newTestServer()
 
@@ -209,8 +218,8 @@ func TestServer_GlobalMiddlewarePatternEmptyForUnmatched(t *testing.T) {
 	assert.Empty(t, seen[0], "unmatched requests must not resolve to a route pattern")
 }
 
-// TestServer_GlobalMiddlewarePatternWithNotFoundHandler 验证自定义 404 处理器
-// 与模板注入共存时行为正确。
+// TestServer_GlobalMiddlewarePatternWithNotFoundHandler verifies correct behavior when
+// a custom 404 handler coexists with template injection.
 func TestServer_GlobalMiddlewarePatternWithNotFoundHandler(t *testing.T) {
 	s := newTestServer()
 
@@ -226,11 +235,11 @@ func TestServer_GlobalMiddlewarePatternWithNotFoundHandler(t *testing.T) {
 	})
 	s.AddRoute(Route{Method: "GET", Path: "/users/{id}", Handler: okHandler()})
 
-	// 命中路由
+	// Matched route
 	rec := doRequest(t, s, http.MethodGet, "/users/1", nil)
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	// 未命中：走自定义 404
+	// Unmatched: goes to the custom 404
 	rec = doRequest(t, s, http.MethodGet, "/nope", nil)
 	require.Equal(t, http.StatusNotFound, rec.Code)
 	assert.Contains(t, rec.Body.String(), "custom not found")

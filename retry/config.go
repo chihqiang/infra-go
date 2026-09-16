@@ -1,125 +1,130 @@
-// Package retry 提供简洁的重试机制，支持指数退避、固定/线性延迟、自定义重试判定、随机抖动与 Context 取消。
+// Package retry provides a concise retry mechanism with exponential backoff, fixed/linear
+// delays, custom retry predicates, random jitter and Context cancellation.
 //
-// 基本用法：
+// Basic usage:
 //
 //	err := retry.Do(ctx, func(ctx context.Context) error {
 //	    return callRemote(ctx)
 //	})
 //
-// 文件组织：
+// File layout:
 //
-//	config.go  默认常量、类型定义、Option 与 With* 系列
-//	retry.go   错误定义、入口 Do*/DoWithRetryConfig、核心 doRetry、辅助函数
-//	delay.go   延迟计算 computeDelay/capDelay 与延迟策略
+//	config.go  default constants, type definitions, Option and the With* helpers
+//	retry.go   error definitions, entry points Do*/DoWithRetryConfig, core doRetry, helpers
+//	delay.go   delay computation computeDelay/capDelay and the delay strategies
 package retry
 
 import "time"
 
-// --- 默认常量 ---
+// --- Default constants ---
 
 const (
-	// defaultMaxRetries 默认最大重试次数。
+	// defaultMaxRetries is the default maximum number of retries.
 	defaultMaxRetries = 3
-	// defaultDelay 默认初始重试延迟。
+	// defaultDelay is the default initial retry delay.
 	defaultDelay = 100 * time.Millisecond
-	// defaultMaxDelay 默认最大重试延迟。
+	// defaultMaxDelay is the default maximum retry delay.
 	defaultMaxDelay = 10 * time.Second
 )
 
-// RetryIfFunc 判断是否需要重试的函数。
-// 返回 true 表示需要重试，false 表示不再重试。
+// RetryIfFunc decides whether another retry is needed.
+// Returning true means retry again and false means stop retrying.
 type RetryIfFunc func(error) bool
 
-// OnRetryFunc 每次重试前的回调函数。
-// attempt 为当前重试次数（从 1 开始）。
+// OnRetryFunc is the callback invoked before every retry.
+// attempt is the current retry number (starting at 1).
 type OnRetryFunc func(attempt int, err error)
 
-// DelayFunc 计算重试延迟时间的函数。
-// attempt 为当前重试次数（从 1 开始），上一次的延迟为 previousDelay。
+// DelayFunc computes the retry delay.
+// attempt is the current retry number (starting at 1) and previousDelay is the delay used
+// last time.
 type DelayFunc func(attempt int, previousDelay time.Duration) time.Duration
 
-// Config 重试配置。
+// Config is the retry configuration.
 //
-// 局限：无法用本结构体表达显式 0（MaxRetries=0 表示不重试、Delay=0 表示立即重试，
-// 但如果字段值为 0 会被视为未设置并填充默认值）。
-// 需要这些语义时请使用 Option 形式，如
-// retry.DoWithConfig(ctx, fn, retry.WithMaxRetries(0), retry.WithDelay(0))，
-// 或 retry.DoWithRetryConfig(ctx, fn, c, retry.WithMaxRetries(0))。
+// Limitation: an explicit 0 cannot be expressed with this struct (MaxRetries=0 means no
+// retry and Delay=0 means retry immediately, but a field value of 0 is treated as unset and
+// filled with the default).
+// Use the Option form when those semantics are needed, for example
+// retry.DoWithConfig(ctx, fn, retry.WithMaxRetries(0), retry.WithDelay(0))
+// or retry.DoWithRetryConfig(ctx, fn, c, retry.WithMaxRetries(0)).
 type Config struct {
-	// MaxRetries 最大重试次数，默认 3。
-	// 总执行次数 = MaxRetries + 1（首次执行 + 重试次数）。
+	// MaxRetries is the maximum number of retries; defaults to 3.
+	// Total executions = MaxRetries + 1 (the first execution plus the retries).
 	MaxRetries int
-	// Delay 初始重试延迟，默认 100 毫秒。
+	// Delay is the initial retry delay; defaults to 100 milliseconds.
 	Delay time.Duration
-	// MaxDelay 最大重试延迟，默认 10 秒。
-	// 指数退避时延迟不会超过此值；通过 WithMaxDelay(0) 可显式表示不限制上限。
+	// MaxDelay is the maximum retry delay; defaults to 10 seconds.
+	// Exponential backoff never exceeds this value; WithMaxDelay(0) explicitly means no upper
+	// limit.
 	MaxDelay time.Duration
-	// DelayFunc 自定义延迟计算函数。
-	// 设置后会覆盖默认的延迟策略。
+	// DelayFunc is a custom delay computation function.
+	// Setting it overrides the default delay strategy.
 	DelayFunc DelayFunc
-	// RetryIf 自定义重试判定函数。
-	// 默认所有 error 都重试。
+	// RetryIf is a custom retry predicate.
+	// By default every error is retried.
 	RetryIf RetryIfFunc
-	// OnRetry 每次重试前的回调函数。
+	// OnRetry is the callback invoked before every retry.
 	OnRetry OnRetryFunc
-	// Jitter 是否添加随机抖动，避免惊群效应，默认 false。
-	// 启用后会在延迟基础上添加 0~50% 的随机时间。
+	// Jitter reports whether random jitter is added to avoid the thundering herd effect;
+	// defaults to false.
+	// When enabled, a random 0~50% is added on top of the delay.
 	Jitter bool
 }
 
-// Option 配置选项。
+// Option is a configuration option.
 type Option func(*Config)
 
-// WithMaxRetries 设置最大重试次数。
+// WithMaxRetries sets the maximum number of retries.
 func WithMaxRetries(max int) Option {
 	return func(c *Config) {
 		c.MaxRetries = max
 	}
 }
 
-// WithDelay 设置初始重试延迟。
+// WithDelay sets the initial retry delay.
 func WithDelay(delay time.Duration) Option {
 	return func(c *Config) {
 		c.Delay = delay
 	}
 }
 
-// WithMaxDelay 设置最大重试延迟。
+// WithMaxDelay sets the maximum retry delay.
 func WithMaxDelay(maxDelay time.Duration) Option {
 	return func(c *Config) {
 		c.MaxDelay = maxDelay
 	}
 }
 
-// WithDelayFunc 设置自定义延迟计算函数。
+// WithDelayFunc sets a custom delay computation function.
 func WithDelayFunc(fn DelayFunc) Option {
 	return func(c *Config) {
 		c.DelayFunc = fn
 	}
 }
 
-// WithRetryIf 设置自定义重试判定函数。
+// WithRetryIf sets a custom retry predicate.
 func WithRetryIf(fn RetryIfFunc) Option {
 	return func(c *Config) {
 		c.RetryIf = fn
 	}
 }
 
-// WithOnRetry 设置每次重试前的回调函数。
+// WithOnRetry sets the callback invoked before every retry.
 func WithOnRetry(fn OnRetryFunc) Option {
 	return func(c *Config) {
 		c.OnRetry = fn
 	}
 }
 
-// WithJitter 启用随机抖动。
+// WithJitter enables random jitter.
 func WithJitter() Option {
 	return func(c *Config) {
 		c.Jitter = true
 	}
 }
 
-// defaultConfig 返回带默认值的配置。
+// defaultConfig returns a configuration populated with the default values.
 func defaultConfig(opts ...Option) Config {
 	c := Config{
 		MaxRetries: defaultMaxRetries,

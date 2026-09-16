@@ -1,24 +1,24 @@
 # cast
 
-类型安全转换工具包，从 `any` 安全转换为各种 Go 基本类型。
+Type-safe conversion toolkit, converting from `any` to the various Go primitive types safely.
 
-## 特性
+## Features
 
-- **全面类型支持**：int/uint/float/bool/string/time.Duration/time.Time
-- **多源类型**：原生类型、string、json.Number、fmt.Stringer、[]byte 等
-- **安全转换**：`ToXxxE` 系列返回 error，`ToXxx` 系列返回零值
-- **指针转换**：`ToXxxPtr` 系列（失败返 nil）与泛型 `Ptr`/`Val`（取址/安全解引用）
-- **切片转换**：`ToIntSlice`、`ToStringSlice`，支持逗号分隔字符串
-- **泛型转换**：`To[T]` 一行搞定，类型安全
-- **json.Number 支持**：与 `conf`/`mapping` 包无缝配合
+- **Comprehensive type support**: int/uint/float/bool/string/time.Duration/time.Time
+- **Many source types**: native types, string, json.Number, fmt.Stringer, []byte, etc.
+- **Safe conversion**: the `ToXxxE` family returns an error, the `ToXxx` family returns the zero value
+- **Pointer conversion**: the `ToXxxPtr` family (nil on failure) plus the generic `Ptr`/`Val` (take address / safe dereference)
+- **Slice conversion**: `ToIntSlice`, `ToStringSlice`, with comma-separated string support
+- **Generic conversion**: `To[T]` in one line, type safe
+- **json.Number support**: works seamlessly with the `conf`/`mapping` packages
 
-## 安装
+## Installation
 
 ```bash
 go get github.com/chihqiang/infra-go/cast
 ```
 
-## 快速开始
+## Quick start
 
 ```go
 package main
@@ -31,22 +31,22 @@ import (
 )
 
 func main() {
-    // 基本转换
+    // basic conversions
     fmt.Println(cast.ToInt("123"))        // 123
     fmt.Println(cast.ToString(456))       // "456"
     fmt.Println(cast.ToBool("true"))      // true
     fmt.Println(cast.ToFloat64("3.14"))   // 3.14
     fmt.Println(cast.ToDuration("5s"))    // 5s
 
-    // 泛型转换
+    // generic conversions
     n := cast.To[int]("42")               // 42
     d := cast.To[time.Duration]("100ms")  // 100ms
 
-    // 切片转换
+    // slice conversions
     fmt.Println(cast.ToIntSlice("1,2,3"))       // [1 2 3]
     fmt.Println(cast.ToStringSlice("a,b,c"))    // [a b c]
 
-    // 安全转换（带 error）
+    // safe conversion (with error)
     val, err := cast.ToIntE("abc")
     if err != nil {
         fmt.Println("convert failed:", err)
@@ -56,90 +56,90 @@ func main() {
 
 ## API
 
-### 数值转换
+### Numeric conversion
 
-| 函数 | 说明 |
+| Function | Description |
 | ------ | ------ |
-| `ToInt(v any) int` | 转为 int |
-| `ToInt64(v any) int64` | 转为 int64 |
-| `ToUint(v any) uint` | 转为 uint |
-| `ToUint64(v any) uint64` | 转为 uint64 |
-| `ToFloat32(v any) float32` | 转为 float32 |
-| `ToFloat64(v any) float64` | 转为 float64 |
+| `ToInt(v any) int` | Convert to int |
+| `ToInt64(v any) int64` | Convert to int64 |
+| `ToUint(v any) uint` | Convert to uint |
+| `ToUint64(v any) uint64` | Convert to uint64 |
+| `ToFloat32(v any) float32` | Convert to float32 |
+| `ToFloat64(v any) float64` | Convert to float64 |
 
-### 字符串/布尔转换
+### String/boolean conversion
 
-| 函数 | 说明 |
+| Function | Description |
 | ------ | ------ |
-| `ToString(v any) string` | 转为 string，支持 []byte、fmt.Stringer、error |
-| `ToBool(v any) bool` | 转为 bool，支持 "true"/"1"/"T" 等多种格式 |
+| `ToString(v any) string` | Convert to string; supports []byte, fmt.Stringer, error |
+| `ToBool(v any) bool` | Convert to bool; accepts "true"/"1"/"T" and other forms |
 
-### 时间转换
+### Time conversion
 
-| 函数 | 说明 |
+| Function | Description |
 | ------ | ------ |
-| `ToDuration(v any) time.Duration` | 转为 Duration，数值按纳秒、字符串按 "5s" 解析 |
-| `ToTime(v any) time.Time` | 转为 Time，支持 RFC3339 字符串和 Unix 时间戳 |
+| `ToDuration(v any) time.Duration` | Convert to Duration; numbers are treated as nanoseconds, strings parsed as "5s" |
+| `ToTime(v any) time.Time` | Convert to Time; supports RFC3339 strings and Unix timestamps |
 
-### 切片转换
+### Slice conversion
 
-| 函数 | 说明 |
+| Function | Description |
 | ------ | ------ |
-| `ToIntSlice(v any) []int` | 转为 []int，支持逗号分隔字符串 |
-| `ToStringSlice(v any) []string` | 转为 []string，支持逗号分隔字符串 |
+| `ToIntSlice(v any) []int` | Convert to []int; supports comma-separated strings |
+| `ToStringSlice(v any) []string` | Convert to []string; supports comma-separated strings |
 
-### 泛型转换
+### Generic conversion
 
-| 函数 | 说明 |
+| Function | Description |
 | ------ | ------ |
-| `To[T any](v any) T` | 泛型转换，支持所有基本类型和结构体（JSON），失败返回零值 |
-| `ToE[T any](v any) (T, error)` | 泛型转换的 error 版本，失败返回零值与错误，便于回退默认值 |
+| `To[T any](v any) T` | Generic conversion; supports all primitive types and structs (JSON); returns the zero value on failure |
+| `ToE[T any](v any) (T, error)` | Error-returning version of the generic conversion; returns the zero value and an error on failure, handy for falling back to a default |
 
 ```go
-// ToE 便于判断转换是否成功
+// ToE makes it easy to tell whether the conversion succeeded
 v, err := cast.ToE[int]("123")
 if err != nil {
-    v = 0 // 回退默认值
+    v = 0 // fall back to a default
 }
 ```
 
-### 指针转换
+### Pointer conversion
 
-| 函数 | 说明 |
+| Function | Description |
 | ------ | ------ |
-| `Ptr[T any](v T) *T` | 对任意值/字面量取址，便于给指针字段赋常量 |
-| `Val[T any](p *T, def ...T) T` | 安全解引用，p 为 nil 时返回默认值或零值 |
-| `ToIntPtr/ToInt64Ptr/ToUintPtr/ToUint64Ptr(v any) *int/*int64/*uint/*uint64` | any → 数字指针，失败返回 nil |
-| `ToFloat32Ptr/ToFloat64Ptr(v any) *float32/*float64` | any → 浮点指针，失败返回 nil |
-| `ToStringPtr(v any) *string` | any → 字符串指针，失败返回 nil |
-| `ToBoolPtr(v any) *bool` | any → 布尔指针，失败返回 nil |
-| `ToDurationPtr/ToTimePtr(v any) *time.Duration/*time.Time` | any → 时间指针，失败返回 nil |
+| `Ptr[T any](v T) *T` | Take the address of any value/literal, handy for assigning constants to pointer fields |
+| `Val[T any](p *T, def ...T) T` | Safe dereference; returns the default (or zero) value when p is nil |
+| `ToIntPtr/ToInt64Ptr/ToUintPtr/ToUint64Ptr(v any) *int/*int64/*uint/*uint64` | any → numeric pointer, nil on failure |
+| `ToFloat32Ptr/ToFloat64Ptr(v any) *float32/*float64` | any → float pointer, nil on failure |
+| `ToStringPtr(v any) *string` | any → string pointer, nil on failure |
+| `ToBoolPtr(v any) *bool` | any → bool pointer, nil on failure |
+| `ToDurationPtr/ToTimePtr(v any) *time.Duration/*time.Time` | any → time pointer, nil on failure |
 
 ```go
-// 取址 / 解引用
+// take address / dereference
 name := cast.Ptr("default")        // *string
 s := cast.Val(name)                 // "default"
-s2 := cast.Val(nilString, "fb")    // nil 时得到 "fb"
+s2 := cast.Val(nilString, "fb")    // "fb" when nil
 
-// 转换到指针，失败返回 nil，可直接用于可选指针字段
+// convert to a pointer; nil on failure, ready for optional pointer fields
 limit := cast.ToIntPtr("10")       // *int(10)
 if limit == nil {
-    // 转换失败
+    // conversion failed
 }
 ```
 
-### 带 error 版本
+### Error-returning variants
 
-每个 `ToXxx` 都有对应的 `ToXxxE` 版本，返回 `(value, error)`：
+Every `ToXxx` has a corresponding `ToXxxE` that returns `(value, error)`:
 
 ```go
 val, err := cast.ToIntE("abc")
 // err != nil, val == 0
 ```
 
-## 支持的源类型
+## Supported source types
 
-| 源类型 | 示例 |
+| Source type | Example |
 | ------ | ------ |
 | `int/int8/.../int64` | `cast.ToString(42)` → "42" |
 | `uint/uint8/.../uint64` | `cast.ToInt(uint(42))` → 42 |
@@ -149,13 +149,13 @@ val, err := cast.ToIntE("abc")
 | `[]byte` | `cast.ToString([]byte("hi"))` → "hi" |
 | `json.Number` | `cast.ToInt(json.Number("42"))` → 42 |
 | `fmt.Stringer` | `cast.ToString(err)` → err.Error() |
-| `nil` | 所有转换返回零值 |
+| `nil` | all conversions return the zero value |
 | `time.Duration` | `cast.ToDuration(time.Second)` → 1s |
-| `time.Time` | `cast.ToTime(time.Now())` → 原值 |
+| `time.Time` | `cast.ToTime(time.Now())` → the original value |
 
-## 错误处理
+## Error handling
 
-转换失败时返回 `*ErrCastFailed` 错误，包含原始类型和目标类型信息：
+A failed conversion returns a `*ErrCastFailed` error carrying the source and target type information:
 
 ```go
 _, err := cast.ToIntE("abc")

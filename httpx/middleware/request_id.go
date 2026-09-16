@@ -7,20 +7,23 @@ import (
 	"github.com/google/uuid"
 )
 
-// HeaderRequestID 请求 ID 使用的 HTTP Header 名。
+// HeaderRequestID is the HTTP header name used for the request ID.
 const HeaderRequestID = "X-Request-Id"
 
-// requestIDKey request_id 的 context key 类型（私有类型，避免与其他库冲突）。
+// requestIDKey is the context key type for request_id (a private type to avoid
+// clashing with other libraries).
 type requestIDKey struct{}
 
-// ContextWithRequestID 将 request_id 注入 context。
-// httpx 主包的 httpx.ContextWithRequestID 委托本实现，保证响应中的 request_id
-// 与 RequestID 中间件注入的 id 读取自同一 key。
+// ContextWithRequestID injects request_id into the context.
+// httpx.ContextWithRequestID in the httpx main package delegates to this
+// implementation, ensuring the request_id in the response and the ID injected by
+// the RequestID middleware are read from the same key.
 func ContextWithRequestID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, requestIDKey{}, id)
 }
 
-// RequestIDFromContext 从 context 提取 request_id，不存在时返回空字符串。
+// RequestIDFromContext extracts request_id from the context, returning an empty
+// string when absent.
 func RequestIDFromContext(ctx context.Context) string {
 	if ctx == nil {
 		return ""
@@ -31,17 +34,19 @@ func RequestIDFromContext(ctx context.Context) string {
 	return ""
 }
 
-// RequestID 是 request_id 中间件。
+// RequestID is the request_id middleware.
 type RequestID struct{}
 
-// NewRequestID 创建 RequestID 中间件。
+// NewRequestID creates the RequestID middleware.
 func NewRequestID() *RequestID {
 	return &RequestID{}
 }
 
-// Middleware 返回标准形式 func(http.Handler) http.Handler 的 request_id 中间件。
-// 从 X-Request-Id 请求头读取，不存在则自动生成（google/uuid），
-// 注入 context 并回写响应头 X-Request-Id。
+// Middleware returns the request_id middleware in the standard form
+// func(http.Handler) http.Handler.
+// It reads the X-Request-Id request header and generates one (google/uuid) when
+// absent, injects it into the context and writes it back to the X-Request-Id
+// response header.
 func (m *RequestID) Middleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

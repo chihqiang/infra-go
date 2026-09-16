@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// --- 测试用 Service ---
+// --- Service used by the tests ---
 
-// mockService 模拟一个服务：Start 阻塞直到 Stop 被调用。
+// mockService simulates a service: Start blocks until Stop is called.
 type mockService struct {
 	startCalled int32
 	stopCalled  int32
@@ -29,7 +29,7 @@ func newMockService() *mockService {
 
 func (m *mockService) Start() {
 	atomic.StoreInt32(&m.startCalled, 1)
-	<-m.stopCh // 阻塞直到 Stop
+	<-m.stopCh // block until Stop
 }
 
 func (m *mockService) Stop() {
@@ -37,10 +37,10 @@ func (m *mockService) Stop() {
 	if m.stopDelay > 0 {
 		time.Sleep(m.stopDelay)
 	}
-	m.stopOnce.Do(func() { close(m.stopCh) }) // 解除 Start 阻塞
+	m.stopOnce.Do(func() { close(m.stopCh) }) // unblock Start
 }
 
-// --- 基础测试 ---
+// --- Basic tests ---
 
 func TestServiceGroup_Start(t *testing.T) {
 	svc1 := newMockService()
@@ -146,10 +146,10 @@ func TestServiceGroup_Empty(t *testing.T) {
 	sg.Stop()
 }
 
-// --- Panic 测试 ---
+// --- Panic tests ---
 
 func TestServiceGroup_PanicInStart(t *testing.T) {
-	// 一个正常服务 + 一个会 panic 的服务
+	// One healthy service plus one service that panics
 	normal := newMockService()
 	panicSvc := &panicService{panicMsg: "boom"}
 
@@ -157,17 +157,17 @@ func TestServiceGroup_PanicInStart(t *testing.T) {
 	sg.Add(normal)
 	sg.Add(panicSvc)
 
-	// Start 不应 panic，而是记录日志后正常返回
+	// Start must not panic; it logs the error and returns normally
 	assert.NotPanics(t, func() {
 		sg.Start()
 	})
 
-	// 正常服务应该被 Stop 了（panic 触发了 stop）
+	// The healthy service must have been stopped (the panic triggered stop)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&normal.stopCalled))
 }
 
 func TestServiceGroup_PanicInStart_OtherServicesUnblocked(t *testing.T) {
-	// 验证 panic 后其他服务不再阻塞
+	// Verify that the other services are no longer blocked after the panic
 	svc := newMockService()
 	panicSvc := &panicService{panicMsg: "crash"}
 
@@ -183,7 +183,7 @@ func TestServiceGroup_PanicInStart_OtherServicesUnblocked(t *testing.T) {
 
 	select {
 	case <-done:
-		// Start 已正常返回（panic 被恢复）
+		// Start has returned normally (the panic was recovered)
 	case <-time.After(2 * time.Second):
 		t.Fatal("Start blocked after panic, other services not unblocked")
 	}
@@ -191,20 +191,23 @@ func TestServiceGroup_PanicInStart_OtherServicesUnblocked(t *testing.T) {
 	assert.Equal(t, int32(1), atomic.LoadInt32(&svc.stopCalled))
 }
 
-// --- 停止屏障 ---
+// --- Stop barrier ---
 
-// TestServiceGroup_DoStopWaitsForStartBarrier 白盒验证停止屏障：
-// Start 已开始但服务尚未进入 Start 时，doStop 必须等待屏障放行后才下发 Stop。
+// TestServiceGroup_DoStopWaitsForStartBarrier is a white-box verification of the stop barrier:
+// when Start has begun but a service has not entered Start yet, doStop must wait until the
+// barrier is released before dispatching Stop.
 //
-// 该屏障解决的是：某服务 panic 触发的 Stop 会立即作用于"Start 尚未被调用"的服务，
-// 它们的 Stop 先执行（对多数真实服务是空操作），随后才进入 Start 并永久阻塞，
-// 而 stopOnce 已耗尽，再也不会有人调用它们的 Stop。
+// The barrier solves this: a Stop triggered by a panicking service would immediately act on
+// the services whose Start has not been called, so their Stop runs first (a no-op for most
+// real services), they enter Start afterwards and block forever, and since stopOnce is already
+// exhausted nobody will ever call their Stop again.
 func TestServiceGroup_DoStopWaitsForStartBarrier(t *testing.T) {
 	svc := newMockService()
 	sg := NewServiceGroup()
 	sg.Add(svc)
 
-	// 构造"Start 已开始、但服务还没进入 Start"的中间态：allEntered 未关闭。
+	// Recreate the intermediate state "Start has begun but the service has not entered Start
+	// yet": allEntered is not closed.
 	sg.mu.Lock()
 	sg.started = true
 	sg.mu.Unlock()
@@ -215,12 +218,12 @@ func TestServiceGroup_DoStopWaitsForStartBarrier(t *testing.T) {
 		sg.doStop()
 	}()
 
-	// 屏障未放行前不得调用 Stop
+	// Stop must not be called while the barrier is still closed
 	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, int32(0), atomic.LoadInt32(&svc.stopCalled),
 		"Stop must not be issued before every service has entered Start")
 
-	// 放行屏障：doStop 应继续并完成停止
+	// Release the barrier: doStop should continue and finish stopping
 	close(sg.allEntered)
 
 	select {
@@ -231,8 +234,8 @@ func TestServiceGroup_DoStopWaitsForStartBarrier(t *testing.T) {
 	assert.Equal(t, int32(1), atomic.LoadInt32(&svc.stopCalled))
 }
 
-// TestServiceGroup_DoStopWithoutStartSkipsBarrier 验证未调用 Start 时
-// doStop 不会因等待屏障而永久阻塞。
+// TestServiceGroup_DoStopWithoutStartSkipsBarrier verifies that doStop does not block forever
+// on the barrier when Start was never called.
 func TestServiceGroup_DoStopWithoutStartSkipsBarrier(t *testing.T) {
 	svc := newMockService()
 	sg := NewServiceGroup()
@@ -252,8 +255,8 @@ func TestServiceGroup_DoStopWithoutStartSkipsBarrier(t *testing.T) {
 	assert.Equal(t, int32(1), atomic.LoadInt32(&svc.stopCalled))
 }
 
-// TestServiceGroup_ManyServicesWithPanic 在较多服务 + 延迟启动 + panic 的组合下
-// 验证不会死锁、不会 panic，且所有服务最终都被停止。
+// TestServiceGroup_ManyServicesWithPanic verifies, with many services plus delayed starts plus
+// a panic, that nothing deadlocks, nothing panics and every service ends up stopped.
 func TestServiceGroup_ManyServicesWithPanic(t *testing.T) {
 	sg := NewServiceGroup()
 	const n = 12
@@ -277,13 +280,15 @@ func TestServiceGroup_ManyServicesWithPanic(t *testing.T) {
 		t.Fatal("Start blocked after panic with many services")
 	}
 
-	// 所有已进入 Start 的服务都必须收到 Stop（否则会永久阻塞在 Start 内）
+	// Every service that entered Start must receive Stop (otherwise it blocks inside Start
+	// forever)
 	for i, s := range svcs {
 		assert.Equal(t, int32(1), atomic.LoadInt32(&s.stopCalled), "service %d must be stopped", i)
 	}
 }
 
-// delayedStartService 延迟片刻后进入阻塞的 Start，Stop 通过关闭 stopCh 解除阻塞。
+// delayedStartService waits a moment and then enters a blocking Start; Stop unblocks it by
+// closing stopCh.
 type delayedStartService struct {
 	delay       time.Duration
 	startCalled int32
@@ -309,15 +314,16 @@ func (s *delayedStartService) Stop() {
 	s.stopOnce.Do(func() { close(s.stopCh) })
 }
 
-// TestServiceGroup_ConcurrentAddAndStart 回归测试：Add 与 Start 并发不产生数据竞争。
-// 历史缺陷：services 是裸切片，Add 无同步追加，Start/Stop 在其它 goroutine 中遍历，
-// -race 可检出。
+// TestServiceGroup_ConcurrentAddAndStart is a regression test: Add and Start running
+// concurrently must not produce a data race.
+// Historical defect: services was a bare slice, Add appended without synchronisation and
+// Start/Stop iterated it in another goroutine, which -race could detect.
 func TestServiceGroup_ConcurrentAddAndStart(t *testing.T) {
 	sg := NewServiceGroup()
 	sg.Add(newMockService())
 
 	var wg sync.WaitGroup
-	// 与服务列表并发读取（doStart 的 snapshot）竞争
+	// Race with concurrent reads of the service list (the snapshot taken by doStart)
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func() {
@@ -334,12 +340,13 @@ func TestServiceGroup_ConcurrentAddAndStart(t *testing.T) {
 	}
 	wg.Wait()
 
-	// 停止以解除所有 mockService 的阻塞
+	// Stop everything to unblock all the mockServices
 	sg.Stop()
 }
 
-// TestServiceGroup_AddAfterStartNotStarted 验证 Start 后新增的服务不在快照内，
-// 因而不会被启动或停止（文档化的生命周期约束）。
+// TestServiceGroup_AddAfterStartNotStarted verifies that a service added after Start is not
+// part of the snapshot and therefore is neither started nor stopped (the documented lifecycle
+// constraint).
 func TestServiceGroup_AddAfterStartNotStarted(t *testing.T) {
 	first := newMockService()
 	sg := NewServiceGroup()
@@ -351,7 +358,7 @@ func TestServiceGroup_AddAfterStartNotStarted(t *testing.T) {
 		sg.Stop()
 	}()
 
-	// 在 Start 期间并发 Add：该服务不在快照内
+	// Add concurrently while Start runs: the service is not part of the snapshot
 	late := newMockService()
 	time.AfterFunc(10*time.Millisecond, func() { sg.Add(late) })
 
@@ -359,11 +366,12 @@ func TestServiceGroup_AddAfterStartNotStarted(t *testing.T) {
 	<-stopped
 
 	assert.Equal(t, int32(1), atomic.LoadInt32(&first.startCalled), "first must have started")
-	// 后加服务的启动与否取决于快照时机，此处只断言不 panic、无死锁
+	// Whether the late service starts depends on when the snapshot is taken; here we only
+	// assert that nothing panics and nothing deadlocks
 }
 
 func TestServiceGroup_PanicInStart_MultiplePanics(t *testing.T) {
-	// 多个服务同时 panic，不 panic，正常返回
+	// Several services panic at the same time: nothing panics and Start returns normally
 	svc1 := &panicService{panicMsg: "first"}
 	svc2 := &panicService{panicMsg: "second"}
 
@@ -377,7 +385,7 @@ func TestServiceGroup_PanicInStart_MultiplePanics(t *testing.T) {
 }
 
 func TestServiceGroup_PanicInStop(t *testing.T) {
-	// Stop 中的 panic 不应导致程序崩溃
+	// A panic in Stop must not crash the program
 	normal := newMockService()
 	panicSvc := &panicServiceStop{msg: "stop boom"}
 
@@ -385,17 +393,17 @@ func TestServiceGroup_PanicInStop(t *testing.T) {
 	sg.Add(normal)
 	sg.Add(panicSvc)
 
-	// Stop 不应 panic
+	// Stop must not panic
 	assert.NotPanics(t, func() {
 		sg.Stop()
 	})
 
-	// 正常服务应该被停止了
+	// The healthy service must have been stopped
 	assert.Equal(t, int32(1), atomic.LoadInt32(&normal.stopCalled))
 }
 
 func TestServiceGroup_PanicInStartAndStop(t *testing.T) {
-	// Start panic + Stop panic，不应互相干扰
+	// A panic in Start plus a panic in Stop must not interfere with each other
 	panicStart := &panicService{panicMsg: "start fail"}
 	panicStop := &panicServiceStop{msg: "stop fail"}
 
@@ -408,9 +416,9 @@ func TestServiceGroup_PanicInStartAndStop(t *testing.T) {
 	})
 }
 
-// --- 测试用 panic Service ---
+// --- panic Services used by the tests ---
 
-// panicService 在 Start 中 panic。
+// panicService panics inside Start.
 type panicService struct {
 	panicMsg any
 }
@@ -421,20 +429,20 @@ func (p *panicService) Start() {
 
 func (p *panicService) Stop() {}
 
-// panicServiceStop 在 Stop 中 panic。
+// panicServiceStop panics inside Stop.
 type panicServiceStop struct {
 	msg any
 }
 
 func (p *panicServiceStop) Start() {
-	// 非阻塞，立即返回
+	// Non-blocking, returns immediately
 }
 
 func (p *panicServiceStop) Stop() {
 	panic(p.msg)
 }
 
-// --- WithStart 测试 ---
+// --- WithStart tests ---
 
 func TestWithStart(t *testing.T) {
 	var started int32
@@ -462,7 +470,7 @@ func TestWithStart_InServiceGroup(t *testing.T) {
 	sg.Stop()
 }
 
-// --- WithStarter 测试 ---
+// --- WithStarter tests ---
 
 func TestWithStarter(t *testing.T) {
 	var started int32
@@ -483,7 +491,7 @@ func (m *mockStarter) Start() {
 	atomic.StoreInt32(m.started, 1)
 }
 
-// --- 并发安全测试 ---
+// --- Concurrency safety tests ---
 
 func TestServiceGroup_ConcurrentStop(t *testing.T) {
 	svc := newMockService()
@@ -510,10 +518,11 @@ func TestServiceGroup_ConcurrentStop(t *testing.T) {
 	assert.Equal(t, int32(1), atomic.LoadInt32(&svc.stopCalled))
 }
 
-// --- AsService 测试（Start() error + Stop() error 对象适配）---
+// --- AsService tests (adapting Start() error + Stop() error objects) ---
 
-// errStartService 模拟 Start() error + Stop() error 的对象（形如 *httpx.Server）。
-// block=true 时 Start 阻塞直到 Stop（贴近真实服务器语义）。
+// errStartService simulates an object with Start() error + Stop() error (shaped like
+// *httpx.Server).
+// With block=true, Start blocks until Stop is called (close to real server semantics).
 type errStartService struct {
 	startCalled int32
 	stopCalled  int32
@@ -559,7 +568,7 @@ func TestAsService_StartErrorDoesNotPanic(t *testing.T) {
 	s := &errStartService{startErr: errors.New("boom")}
 	svc := AsService(s)
 
-	assert.NotPanics(t, func() { svc.Start() }) // 错误仅记录日志，不 panic
+	assert.NotPanics(t, func() { svc.Start() }) // the error is only logged, no panic
 	assert.Equal(t, int32(1), atomic.LoadInt32(&s.startCalled))
 }
 
@@ -567,7 +576,7 @@ func TestAsService_StopErrorDoesNotPanic(t *testing.T) {
 	s := &errStartService{stopErr: errors.New("stop boom")}
 	svc := AsService(s)
 
-	assert.NotPanics(t, func() { svc.Stop() }) // 错误仅记录日志，不 panic
+	assert.NotPanics(t, func() { svc.Stop() }) // the error is only logged, no panic
 	assert.Equal(t, int32(1), atomic.LoadInt32(&s.stopCalled))
 }
 
@@ -582,7 +591,7 @@ func TestAsService_InServiceGroup(t *testing.T) {
 		sg.Stop()
 	}()
 
-	sg.Start() // Start 阻塞，直到 10ms 后 Stop 解除
+	sg.Start() // Start blocks until Stop releases it 10ms later
 	assert.Equal(t, int32(1), atomic.LoadInt32(&s.startCalled))
 	assert.Equal(t, int32(1), atomic.LoadInt32(&s.stopCalled))
 }

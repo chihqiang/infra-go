@@ -1,27 +1,28 @@
 package websocket
 
-// ConnID 连接 ID 类型。
+// ConnID is the connection ID type.
 type ConnID = uint64
 
-// Room 房间管理接口，维护 room → fds 和 fd → rooms 的双向映射。
-// 提供内存和 Redis 两种实现：
-//   - MemoryRoom：基于 sync.RWMutex + map，适用于单机部署。
-//   - RedisRoom：基于 Redis SET，适用于多实例部署。
+// Room is the room management interface; it keeps the bidirectional mapping between
+// room → fds and fd → rooms.
+// Two implementations are provided:
+//   - MemoryRoom: based on sync.RWMutex + map, for standalone deployments.
+//   - RedisRoom: based on Redis SET, for multi-instance deployments.
 type Room interface {
-	// Add 将连接加入房间。
-	// 如果连接已在房间中，不会重复添加。
+	// Add adds a connection to the given rooms.
+	// A connection that is already in a room is not added twice.
 	Add(fd ConnID, rooms ...string)
 
-	// Delete 将连接从房间移除。
-	// 如果 rooms 为空，则移除该连接所在的所有房间。
+	// Delete removes a connection from the given rooms.
+	// If rooms is empty, the connection is removed from all of its rooms.
 	Delete(fd ConnID, rooms ...string)
 
-	// GetClients 获取房间内的所有连接 ID。
+	// GetClients returns all connection IDs in the room.
 	GetClients(room string) []ConnID
 
-	// GetRooms 获取连接所在的所有房间名称。
+	// GetRooms returns the names of all rooms the connection is in.
 	GetRooms(fd ConnID) []string
 
-	// Clear 清空所有房间和连接映射。
+	// Clear clears all rooms and connection mappings.
 	Clear()
 }

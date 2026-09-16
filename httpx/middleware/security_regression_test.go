@@ -16,17 +16,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 本文件覆盖三个安全缺陷的回归测试：
-//  1. ContentSecurity 无限制读入请求体，且读取失败时按空体继续校验；
-//  2. Gunzip 不限制解压后大小（解压炸弹）；
-//  3. CORS 在 allowAll 下同时下发 "*" 与 Allow-Credentials（浏览器拒绝 + 过度授权）。
+// This file holds regression tests for three security defects:
+//  1. ContentSecurity read the request body without any limit and kept validating as an empty
+//     body when the read failed;
+//  2. Gunzip did not limit the size after decompression (decompression bomb);
+//  3. CORS sent both "*" and Allow-Credentials under allowAll (the browser rejects it, plus
+//     over-authorization).
 
 // --- 1. ContentSecurity ---
 
-// signContentSecurity 按中间件约定生成签名（timestamp\nmethod\npath\nquery\nbodyHex）。
+// signContentSecurity builds a signature as the middleware expects
+// (timestamp\nmethod\npath\nquery\nbodyHex).
 //
-// 注意：中间件对请求体**总是**计算 SHA-256（空体也不例外，得到 sha256("")），
-// 因此这里也必须始终哈希，不能把空体写成空字符串。
+// Note: the middleware **always** computes SHA-256 over the request body (an empty body is no
+// exception and yields sha256("")), so this must always hash too and never write the empty body
+// as an empty string.
 func signContentSecurity(t *testing.T, key []byte, ts, method, path, query, body string) string {
 	t.Helper()
 	bodyHex := hash.SHA256String(body)
@@ -34,7 +38,7 @@ func signContentSecurity(t *testing.T, key []byte, ts, method, path, query, body
 	return hash.HMACSign(key, content)
 }
 
-// TestContentSecurity_RawBodyRejected 基线：合法签名通过。
+// TestContentSecurity_RawBodyRejected baseline: a valid signature passes.
 func TestContentSecurity_RawBodyRejected(t *testing.T) {
 	key := []byte("content-security-key")
 	const body = `{"a":1}`
@@ -56,13 +60,15 @@ func TestContentSecurity_RawBodyRejected(t *testing.T) {
 	assert.Equal(t, body, got, "body must be restored for downstream handlers")
 }
 
-// TestContentSecurity_BodyTooLargeRejected 回归测试：超大请求体必须被拒绝而不是全量读入内存。
-// 历史缺陷：无限制 io.ReadAll(r.Body)，大 body 可耗尽内存（DoS）。
+// TestContentSecurity_BodyTooLargeRejected is a regression test: an oversized request body must
+// be rejected instead of being read fully into memory.
+// Historical defect: an unbounded io.ReadAll(r.Body) let a large body exhaust memory (DoS).
 func TestContentSecurity_BodyTooLargeRejected(t *testing.T) {
 	key := []byte("content-security-key")
 	const limit = 1024
 
-	// 构造超过上限的 body，并按其真实摘要签名（签名有效，仅体积超限）
+	// build a body over the limit and sign it with its real digest (valid signature, only the
+	// size is over the limit)
 	body := strings.Repeat("x", limit*3)
 	ts := fmt.Sprintf("%d", time.Now().Unix())
 	sig := signContentSecurity(t, key, ts, http.MethodPost, "/api", "", body)
@@ -78,7 +84,7 @@ func TestContentSecurity_BodyTooLargeRejected(t *testing.T) {
 		"oversized body must be rejected before being fully read")
 }
 
-// TestContentSecurity_BodyAtLimitAccepted 验证恰好等于上限的请求体仍可通过。
+// TestContentSecurity_BodyAtLimitAccepted verifies a body exactly at the limit still passes.
 func TestContentSecurity_BodyAtLimitAccepted(t *testing.T) {
 	key := []byte("content-security-key")
 	const limit = 64
@@ -97,26 +103,29 @@ func TestContentSecurity_BodyAtLimitAccepted(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code, "body exactly at the limit must be accepted")
 }
 
-// failingReader 读取时始终返回错误，用于验证读取失败不会被当作空体。
+// failingReader always fails on read, proving a read failure is not treated as an empty body.
 type failingReader struct{}
 
 func (failingReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
 func (failingReader) Close() error             { return nil }
 
-// TestContentSecurity_ReadErrorRejected 回归测试：请求体读取失败必须拒绝。
+// TestContentSecurity_ReadErrorRejected is a regression test: a request body read failure must
+// be rejected.
 //
-// 历史缺陷：`if b, err := io.ReadAll(r.Body); err == nil { ... }` 在 err != nil 时
-// 不返回错误，继续以 body="" 参与签名校验 —— 相当于把"读取失败"当作"空体"，
-// 请求体是否参与签名变得不可控，完整性约束可被绕过。
+// Historical defect: `if b, err := io.ReadAll(r.Body); err == nil { ... }` did not return an
+// error when err != nil and kept validating the signature against body="" — effectively
+// treating a "read failure" as an "empty body", so whether the body took part in the
+// signature became unpredictable and the integrity constraint could be bypassed.
 func TestContentSecurity_ReadErrorRejected(t *testing.T) {
 	key := []byte("content-security-key")
 
-	// 按"空体"签名：旧实现下这个签名会被接受（因为它也用空体计算）
+	// sign as an "empty body": under the old implementation this signature was accepted
+	// (because it also computed over the empty body)
 	ts := fmt.Sprintf("%d", time.Now().Unix())
 	sig := signContentSecurity(t, key, ts, http.MethodPost, "/api", "", "")
 
 	req := httptest.NewRequest(http.MethodPost, "/api", nil)
-	req.Body = failingReader{} // 读取必然失败
+	req.Body = failingReader{} // the read is guaranteed to fail
 	req.Header.Set(ContentSecurityHeader, "time="+ts+"; signature="+sig)
 
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
@@ -126,7 +135,7 @@ func TestContentSecurity_ReadErrorRejected(t *testing.T) {
 		"a body read failure must be rejected, not silently treated as an empty body")
 }
 
-// TestContentSecurity_EmptyBodyStillWorks 验证真正的空体请求不受影响。
+// TestContentSecurity_EmptyBodyStillWorks verifies a genuinely empty body is unaffected.
 func TestContentSecurity_EmptyBodyStillWorks(t *testing.T) {
 	key := []byte("content-security-key")
 	ts := fmt.Sprintf("%d", time.Now().Unix())
@@ -140,9 +149,9 @@ func TestContentSecurity_EmptyBodyStillWorks(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
-// --- 2. Gunzip 解压炸弹 ---
+// --- 2. Gunzip decompression bomb ---
 
-// gzipOf 将 content 压缩为 gzip 字节流。
+// gzipOf compresses content into a gzip byte stream.
 func gzipOf(t *testing.T, content []byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -153,14 +162,15 @@ func gzipOf(t *testing.T, content []byte) []byte {
 	return buf.Bytes()
 }
 
-// TestGunzip_RejectsDecompressionBomb 回归测试：解压后超过上限必须报错。
+// TestGunzip_RejectsDecompressionBomb is a regression test: exceeding the limit after
+// decompression must fail.
 //
-// 历史缺陷：只把 gzip.Reader 赋给 r.Body，不限制解压后大小。
-// 高度可压缩的数据（如 10MB 的 'a'）压缩后仅数 KB，
-// 任何基于 Content-Length 的限额都会被绕过（zip bomb → OOM）。
+// Historical defect: it merely assigned a gzip.Reader to r.Body without capping the size after
+// decompression. Highly compressible data (say 10MB of 'a') compresses down to a few KB, so any
+// Content-Length based limit is bypassed (zip bomb -> OOM).
 func TestGunzip_RejectsDecompressionBomb(t *testing.T) {
 	const limit = 4096
-	// 压缩后很小、解压后很大
+	// tiny once compressed, huge once decompressed
 	plain := bytes.Repeat([]byte("a"), limit*100)
 	compressed := gzipOf(t, plain)
 
@@ -183,7 +193,7 @@ func TestGunzip_RejectsDecompressionBomb(t *testing.T) {
 	assert.ErrorIs(t, readErr, errDecompressedTooLarge)
 }
 
-// TestGunzip_AllowsBodyWithinLimit 验证上限内的正常解压不受影响。
+// TestGunzip_AllowsBodyWithinLimit verifies normal decompression within the limit is unaffected.
 func TestGunzip_AllowsBodyWithinLimit(t *testing.T) {
 	plain := []byte("hello gzip body")
 	compressed := gzipOf(t, plain)
@@ -204,7 +214,8 @@ func TestGunzip_AllowsBodyWithinLimit(t *testing.T) {
 	assert.Equal(t, "hello gzip body", got)
 }
 
-// TestGunzip_ExactLimitAllowed 验证恰好等于上限的解压结果可完整读出。
+// TestGunzip_ExactLimitAllowed verifies a decompressed result exactly at the limit is fully
+// readable.
 func TestGunzip_ExactLimitAllowed(t *testing.T) {
 	const limit = 1024
 	plain := bytes.Repeat([]byte("z"), limit)
@@ -225,8 +236,8 @@ func TestGunzip_ExactLimitAllowed(t *testing.T) {
 	assert.Equal(t, limit, n, "a body exactly at the limit must be fully readable")
 }
 
-// TestGunzip_ClearsEncodingHeaders 验证解压后 Content-Encoding 被移除、
-// ContentLength 被重置（长度已与压缩体无关）。
+// TestGunzip_ClearsEncodingHeaders verifies Content-Encoding is removed after decompression and
+// ContentLength is reset (the length no longer relates to the compressed body).
 func TestGunzip_ClearsEncodingHeaders(t *testing.T) {
 	plain := []byte("payload")
 	compressed := gzipOf(t, plain)
@@ -248,7 +259,7 @@ func TestGunzip_ClearsEncodingHeaders(t *testing.T) {
 	assert.Equal(t, int64(-1), contentLength, "ContentLength must be reset (unknown)")
 }
 
-// TestGunzip_DefaultLimitIsBounded 验证默认配置即带上限。
+// TestGunzip_DefaultLimitIsBounded verifies the default configuration already carries a limit.
 func TestGunzip_DefaultLimitIsBounded(t *testing.T) {
 	g := NewGunzip()
 	assert.Equal(t, int64(defaultMaxDecompressedBytes), g.maxDecompressedBytes)
@@ -256,12 +267,13 @@ func TestGunzip_DefaultLimitIsBounded(t *testing.T) {
 
 // --- 3. CORS allowAll + credentials ---
 
-// TestCORS_AllowAllCredentialComboIsBrowserValid 回归测试：allowAll 下不得同时下发
-// `Allow-Origin: *` 与 `Allow-Credentials: true`。
+// TestCORS_AllowAllCredentialComboIsBrowserValid is a regression test: under allowAll,
+// `Allow-Origin: *` and `Allow-Credentials: true` must not be sent together.
 //
-// 历史缺陷：allowAll 分支固定写 "*"，同时无条件写 Allow-Credentials: true。
-// 按 Fetch 规范，携带凭证时不允许通配来源，浏览器会拒绝整个响应 ——
-// 即带 withCredentials 的跨域请求在旧实现下必然失败（且属过度授权）。
+// Historical defect: the allowAll branch always wrote "*" while unconditionally writing
+// Allow-Credentials: true. Per the Fetch spec a wildcard origin is not allowed with credentials,
+// so the browser rejects the whole response — cross-origin requests with withCredentials always
+// failed under the old implementation (and it was over-authorizing).
 func TestCORS_AllowAllCredentialComboIsBrowserValid(t *testing.T) {
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
@@ -279,12 +291,12 @@ func TestCORS_AllowAllCredentialComboIsBrowserValid(t *testing.T) {
 	assert.Equal(t, "Origin", rec.Header().Get("Vary"),
 		"a reflected origin requires Vary: Origin to avoid cache mixups")
 
-	// 显式断言不变量：永远不能同时出现 "*" 与凭证
+	// explicitly assert the invariant: "*" and credentials must never appear together
 	assert.False(t, origin == "*" && creds == "true",
 		"Access-Control-Allow-Origin: * must not be combined with credentials")
 }
 
-// TestCORS_AllowAllEchoesEachOrigin 验证 allowAll 下不同来源都被各自回显。
+// TestCORS_AllowAllEchoesEachOrigin verifies allowAll echoes each origin back to itself.
 func TestCORS_AllowAllEchoesEachOrigin(t *testing.T) {
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 	mw := NewCORS("*").Middleware()
@@ -298,7 +310,7 @@ func TestCORS_AllowAllEchoesEachOrigin(t *testing.T) {
 	}
 }
 
-// TestCORS_WithCredentialsDisabled 验证可关闭凭证下发。
+// TestCORS_WithCredentialsDisabled verifies credential sending can be turned off.
 func TestCORS_WithCredentialsDisabled(t *testing.T) {
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
@@ -310,7 +322,7 @@ func TestCORS_WithCredentialsDisabled(t *testing.T) {
 		"credentials must be omitted when disabled")
 }
 
-// TestCORS_PreflightUnderAllowAll 验证预检响应同样使用回显来源。
+// TestCORS_PreflightUnderAllowAll verifies preflight responses use the echoed origin as well.
 func TestCORS_PreflightUnderAllowAll(t *testing.T) {
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 	req := httptest.NewRequest(http.MethodOptions, "/x", nil)

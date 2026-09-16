@@ -12,83 +12,86 @@ import (
 	gws "github.com/gorilla/websocket"
 )
 
-// ErrConnClosed 连接已关闭。
+// ErrConnClosed means the connection is already closed.
 var ErrConnClosed = errors.New("websocket: connection closed")
 
-// defaultWriteTimeout 在 server 为 nil（如手工构造 Conn 的测试）时的写超时兜底。
+// defaultWriteTimeout is the write timeout fallback used when server is nil
+// (e.g. a Conn built by hand in tests).
 const defaultWriteTimeout = 10 * time.Second
 
-// Conn 封装 gorilla/websocket.Conn，提供线程安全的写入和连接管理。
+// Conn wraps gorilla/websocket.Conn and provides thread-safe writes and connection
+// management.
 //
-// 主要特性：
-//   - 每个连接拥有全局唯一的 ConnID
-//   - 所有写操作通过 mutex 保证线程安全（gorilla/websocket 不允许并发写入）
-//   - 支持用户自定义值存储（Set/Get），方便在 Handler 中传递上下文
-//   - 支持 Emit 事件发送（JSON 格式 {type, data}）
-//   - 支持 Join/Leave 房间
+// Main features:
+//   - Every connection has a globally unique ConnID
+//   - All writes are guarded by a mutex (gorilla/websocket forbids concurrent writes)
+//   - User-defined values can be stored (Set/Get) to pass context inside a Handler
+//   - Events can be emitted (JSON format {type, data})
+//   - Rooms can be joined/left
 type Conn struct {
 	id      ConnID
 	server  *Server
 	ws      *gws.Conn
-	mu      sync.Mutex // 保护 ws 写入
+	mu      sync.Mutex // guards writes to ws
 	closed  atomic.Bool
-	done    chan struct{} // Close 时关闭，用于通知 ping goroutine 退出
-	request *http.Request // 原始 HTTP 请求（只读）
-	values  sync.Map      // 用户自定义值
+	done    chan struct{} // closed by Close to signal the ping goroutine to exit
+	request *http.Request // original HTTP request (read-only)
+	values  sync.Map      // user-defined values
 }
 
-// ID 返回连接的唯一 ID。
+// ID returns the unique ID of the connection.
 func (c *Conn) ID() ConnID {
 	return c.id
 }
 
-// Server 返回所属的服务器实例。
+// Server returns the owning server instance.
 func (c *Conn) Server() *Server {
 	return c.server
 }
 
-// Request 返回升级时的原始 HTTP 请求。
-// 可在 OnOpen 中用于获取查询参数、请求头等。
+// Request returns the original HTTP request used for the upgrade.
+// It can be used in OnOpen to read query parameters, request headers, etc.
 func (c *Conn) Request() *http.Request {
 	return c.request
 }
 
-// RemoteAddr 返回客户端地址。
+// RemoteAddr returns the client address.
 func (c *Conn) RemoteAddr() net.Addr {
 	return c.ws.RemoteAddr()
 }
 
-// IsClosed 返回连接是否已关闭。
+// IsClosed reports whether the connection has been closed.
 func (c *Conn) IsClosed() bool {
 	return c.closed.Load()
 }
 
-// --- 写入方法 ---
+// --- Write methods ---
 
-// writeTimeout 返回本连接的单次写超时。
-// 返回 0 表示不限制（仅当配置显式设为负值时）。
+// writeTimeout returns the per-write timeout of this connection.
+// A return value of 0 means unlimited (only when the config is explicitly negative).
 func (c *Conn) writeTimeout() time.Duration {
 	if c.server == nil {
-		// 手工构造的 Conn（测试场景）没有配置，使用兜底值
+		// A hand-built Conn (test scenario) has no config, so use the fallback
 		return defaultWriteTimeout
 	}
 	switch {
 	case c.server.cfg.WriteTimeout < 0:
-		// 显式禁用写超时
+		// The write timeout is explicitly disabled
 		return 0
 	case c.server.cfg.WriteTimeout == 0:
-		// 配置未经过 fillDefault 时兜底，避免误判为"不限制"
+		// Fallback for a config that did not go through fillDefault, so that it is
+		// not mistaken for "unlimited"
 		return defaultWriteTimeout
 	default:
 		return c.server.cfg.WriteTimeout
 	}
 }
 
-// WriteMessage 写入指定类型的 WebSocket 消息。
-// messageType 取值为 TextMessage、BinaryMessage 等。
+// WriteMessage writes a WebSocket message of the given type.
+// messageType is one of TextMessage, BinaryMessage, etc.
 //
-// 写入前会设置写截止时间（见 Config.WriteTimeout），
-// 避免慢客户端让写入无限阻塞并连带阻塞广播与关闭流程。
+// A write deadline is set before writing (see Config.WriteTimeout) so that a slow
+// client cannot block the write forever and, with it, broadcasts and shutdown.
 func (c *Conn) WriteMessage(messageType int, data []byte) error {
 	if c.closed.Load() {
 		return ErrConnClosed
@@ -104,22 +107,22 @@ func (c *Conn) WriteMessage(messageType int, data []byte) error {
 	return c.ws.WriteMessage(messageType, data)
 }
 
-// WriteText 写入文本消息。
+// WriteText writes a text message.
 func (c *Conn) WriteText(data []byte) error {
 	return c.WriteMessage(TextMessage, data)
 }
 
-// WriteTextString 写入字符串文本消息。
+// WriteTextString writes a string text message.
 func (c *Conn) WriteTextString(data string) error {
 	return c.WriteMessage(TextMessage, []byte(data))
 }
 
-// WriteBinary 写入二进制消息。
+// WriteBinary writes a binary message.
 func (c *Conn) WriteBinary(data []byte) error {
 	return c.WriteMessage(BinaryMessage, data)
 }
 
-// WriteJSON 写入 JSON 消息（文本类型）。
+// WriteJSON writes a JSON message (text type).
 func (c *Conn) WriteJSON(v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -128,12 +131,12 @@ func (c *Conn) WriteJSON(v any) error {
 	return c.WriteMessage(TextMessage, data)
 }
 
-// Emit 发送事件消息（JSON 格式 {"type":..., "data":...}）。
+// Emit sends an event message (JSON format {"type":..., "data":...}).
 //
-// 用法：
+// Usage:
 //
 //	conn.Emit("chat", map[string]string{"msg": "hello"})
-//	// 客户端收到: {"type":"chat","data":{"msg":"hello"}}
+//	// the client receives: {"type":"chat","data":{"msg":"hello"}}
 func (c *Conn) Emit(event string, data any) error {
 	e, err := NewEvent(event, data)
 	if err != nil {
@@ -142,51 +145,52 @@ func (c *Conn) Emit(event string, data any) error {
 	return c.WriteJSON(e)
 }
 
-// Push 向当前连接推送消息（WriteText 的别名）。
+// Push pushes a message to the current connection (an alias of WriteText).
 func (c *Conn) Push(data []byte) error {
 	return c.WriteText(data)
 }
 
-// --- 房间操作 ---
+// --- Room operations ---
 
-// Join 将当前连接加入房间。
+// Join adds the current connection to the given rooms.
 func (c *Conn) Join(rooms ...string) {
 	c.server.room.Add(c.id, rooms...)
 }
 
-// Leave 将当前连接从房间移除。
-// 如果 rooms 为空，则离开所有房间。
+// Leave removes the current connection from the given rooms.
+// If rooms is empty, the connection leaves all rooms.
 func (c *Conn) Leave(rooms ...string) {
 	c.server.room.Delete(c.id, rooms...)
 }
 
-// Rooms 返回当前连接所在的所有房间名称。
+// Rooms returns the names of all rooms the current connection is in.
 func (c *Conn) Rooms() []string {
 	return c.server.room.GetRooms(c.id)
 }
 
-// --- 用户值 ---
+// --- User values ---
 
-// Set 设置用户自定义值。
+// Set stores a user-defined value.
 func (c *Conn) Set(key string, value any) {
 	c.values.Store(key, value)
 }
 
-// Get 获取用户自定义值。
+// Get loads a user-defined value.
 func (c *Conn) Get(key string) (any, bool) {
 	return c.values.Load(key)
 }
 
-// MustGet 获取用户自定义值，不存在时返回 nil。
+// MustGet loads a user-defined value and returns nil when it does not exist.
 func (c *Conn) MustGet(key string) any {
 	v, _ := c.values.Load(key)
 	return v
 }
 
-// --- 关闭 ---
+// --- Close ---
 
-// Close 关闭连接。
-// 内部使用原子操作保证只关闭一次，同时通知 ping goroutine 退出。
+// Close closes the connection.
+// An atomic operation makes sure it only closes once and it also signals the ping
+// goroutine to exit.
 func (c *Conn) Close() error {
 	if !c.closed.CompareAndSwap(false, true) {
 		return nil

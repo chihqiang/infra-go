@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- UnmarshalJsonMap / Unmarshal 测试 ---
+// --- UnmarshalJsonMap / Unmarshal tests ---
 
 func TestUnmarshal_Basic(t *testing.T) {
 	type Config struct {
@@ -276,7 +276,7 @@ func TestFillDefault(t *testing.T) {
 	assert.Equal(t, 8080, cfg.Port)
 }
 
-// --- 补充：选项与未覆盖分支 ---
+// --- Additional coverage: options and uncovered branches ---
 
 func TestUnmarshal_WithStringValues(t *testing.T) {
 	type Config struct {
@@ -299,7 +299,7 @@ func TestUnmarshal_WithCanonicalKeyFunc(t *testing.T) {
 		LogMode string `json:"logMode"`
 	}
 
-	m := map[string]any{"logmode": "console"} // 键为小写
+	m := map[string]any{"logmode": "console"} // the key is lower case
 	var cfg Config
 	err := UnmarshalJsonMap(m, &cfg, WithCanonicalKeyFunc(strings.ToLower))
 	assert.NoError(t, err)
@@ -337,7 +337,7 @@ func TestUnmarshal_NativeIntRange(t *testing.T) {
 		Port int `json:"port,range=[1:8080]"`
 	}
 
-	// 原生 int 值越界（非 json.Number）→ validateValueRange 报错
+	// A native int value out of range (not a json.Number) -> validateValueRange errors
 	var cfg Config
 	err := UnmarshalJsonMap(map[string]any{"port": 9090}, &cfg)
 	assert.Error(t, err)
@@ -348,7 +348,8 @@ func TestUnmarshal_ConvertedValue(t *testing.T) {
 		Port int `json:"port"`
 	}
 
-	// map 值为 int64（与 int 字段类型不同）→ 走 setConvertedValue 字符串转换成功
+	// The map value is an int64 (a type different from the int field) -> the string
+	// conversion in setConvertedValue succeeds
 	var cfg Config
 	err := UnmarshalJsonMap(map[string]any{"port": int64(8080)}, &cfg)
 	assert.NoError(t, err)
@@ -360,7 +361,7 @@ func TestUnmarshal_ConvertedValue_FloatToIntError(t *testing.T) {
 		Port int `json:"port"`
 	}
 
-	// 小数无法转 int → 报错
+	// A fraction cannot be converted to int -> error
 	var cfg Config
 	err := UnmarshalJsonMap(map[string]any{"port": 3.14}, &cfg)
 	assert.Error(t, err)
@@ -434,7 +435,7 @@ func TestUnmarshal_SliceOfDuration(t *testing.T) {
 		Timeouts []time.Duration `json:"timeouts"`
 	}
 
-	// duration 元素以纳秒数值形式提供
+	// Duration elements are provided as nanosecond numbers
 	m := map[string]any{"timeouts": []any{json.Number("1000000000"), json.Number("2000000000")}}
 	var cfg Config
 	err := UnmarshalJsonMap(m, &cfg)
@@ -487,7 +488,7 @@ func TestUnmarshal_MapSameType(t *testing.T) {
 	type Config struct {
 		Labels map[string]string `json:"labels"`
 	}
-	// map 已是同类型 → 直接 Set
+	// The map already has the same type -> set directly
 	existing := map[string]string{"a": "1"}
 	var cfg Config
 	cfg.Labels = existing
@@ -518,7 +519,7 @@ func TestUnmarshal_MapOfDuration(t *testing.T) {
 		Timeouts map[string]time.Duration `json:"timeouts"`
 	}
 
-	// duration 值以纳秒数值形式提供
+	// The duration value is provided as a nanosecond number
 	m := map[string]any{"timeouts": map[string]any{"a": json.Number("1000000000")}}
 	var cfg Config
 	err := UnmarshalJsonMap(m, &cfg)
@@ -566,7 +567,7 @@ func TestUnmarshal_MapKeyMismatch(t *testing.T) {
 	type Config struct {
 		M map[string]int `json:"m"`
 	}
-	// 键类型不匹配（int key）
+	// Key type mismatch (int key)
 	var cfg Config
 	err := UnmarshalJsonMap(map[string]any{"m": map[int]any{1: json.Number("5")}}, &cfg)
 	assert.Error(t, err)
@@ -583,7 +584,8 @@ func TestUnmarshal_DefaultSliceJSON(t *testing.T) {
 }
 
 func TestUnmarshal_DefaultSliceComma(t *testing.T) {
-	// 裸逗号需在标签中转义为 \,（否则标签解析阶段即被切分）
+	// A bare comma must be escaped as \, in the tag (otherwise the tag parser
+	// splits on it)
 	type Config struct {
 		Tags []string `json:"tags,default=a\\,b"`
 	}
@@ -688,27 +690,31 @@ func TestUnmarshal_EnvNotInOptions(t *testing.T) {
 }
 
 func TestUnmarshal_UsingDifferentTagKey(t *testing.T) {
-	// 字段只用 form 标签，无 json 标签 → json 解析时应跳过
+	// The field only has a form tag and no json tag -> json parsing must skip it
 	type Config struct {
 		Name string `form:"name"`
 	}
 	var cfg Config
 	err := UnmarshalJsonMap(map[string]any{"name": "x"}, &cfg)
 	assert.NoError(t, err)
-	assert.Equal(t, "", cfg.Name) // 未设置
+	assert.Equal(t, "", cfg.Name) // not set
 }
 
-// --- range 校验一致性（各写入路径都必须生效，不得因值来源/表示形式被绕过）---
+// --- range validation consistency (every write path must enforce it, no bypass
+// by value source or representation) ---
 
-// TestUnmarshal_RangeNotBypassedByStringValue 验证 range 校验不因值的类型
-// 与字段类型不一致而被绕过（如 YAML 中写作 port: "9090"）。
-// 历史缺陷：这类值走 setConvertedValue，完全没有范围校验。
+// TestUnmarshal_RangeNotBypassedByStringValue verifies that range validation is
+// not bypassed when the value type differs from the field type (e.g. port:
+// "9090" in YAML).
+// Historic defect: such values went through setConvertedValue with no range
+// validation at all.
 func TestUnmarshal_RangeNotBypassedByStringValue(t *testing.T) {
 	type Config struct {
 		Port int `json:"port,range=[1:8080]"`
 	}
 
-	// 同一语义值：原生 int 越界会报错，字符串形式也必须报错
+	// The same semantic value: a native int out of range errors, so the string form
+	// must error as well
 	var native Config
 	err := UnmarshalJsonMap(map[string]any{"port": 9090}, &native)
 	require.Error(t, err, "native int out of range must be rejected")
@@ -717,15 +723,16 @@ func TestUnmarshal_RangeNotBypassedByStringValue(t *testing.T) {
 	err = UnmarshalJsonMap(map[string]any{"port": "9090"}, &asString)
 	require.Error(t, err, "string value out of range must be rejected too")
 
-	// 边界内的字符串值仍可正常解析
+	// A string value within bounds still parses normally
 	var ok Config
 	err = UnmarshalJsonMap(map[string]any{"port": "8080"}, &ok)
 	require.NoError(t, err)
 	assert.Equal(t, 8080, ok.Port)
 }
 
-// TestUnmarshal_RangeNotBypassedByEnv 验证环境变量覆盖配置时 range 仍然生效。
-// 历史缺陷：setEnvValue 只校验 options，不校验 range。
+// TestUnmarshal_RangeNotBypassedByEnv verifies that range still applies when an
+// environment variable overrides the config.
+// Historic defect: setEnvValue validated options only, not range.
 func TestUnmarshal_RangeNotBypassedByEnv(t *testing.T) {
 	type Config struct {
 		Port int `json:",range=[1:8080],env=TEST_RANGE_BYPASS_PORT"`
@@ -743,12 +750,14 @@ func TestUnmarshal_RangeNotBypassedByEnv(t *testing.T) {
 	assert.Equal(t, 8080, ok.Port)
 }
 
-// TestUnmarshal_RangeOnDuration 验证 duration 字段的 range 约束生效。
-// 历史缺陷：duration 分支完全跳过校验；range 为纯数值（纳秒），
-// 与 time.Duration 的底层 int64 表示一致。
+// TestUnmarshal_RangeOnDuration verifies that the range constraint applies to
+// duration fields.
+// Historic defect: the duration branch skipped validation entirely; the range is a
+// plain number (nanoseconds), matching time.Duration's underlying int64
+// representation.
 func TestUnmarshal_RangeOnDuration(t *testing.T) {
 	type Config struct {
-		// 1ns <= timeout <= 10s（10s = 10000000000ns）
+		// 1ns <= timeout <= 10s (10s = 10000000000ns)
 		Timeout time.Duration `json:"timeout,range=[1:10000000000]"`
 	}
 
@@ -762,10 +771,12 @@ func TestUnmarshal_RangeOnDuration(t *testing.T) {
 	require.Error(t, err, "duration out of range must be rejected")
 }
 
-// TestUnmarshal_RangeOnDefaultValue 验证标签中声明的 default 也需满足 range。
-// 历史缺陷：setDefaultValue 不做范围校验，越界默认值被静默写入。
+// TestUnmarshal_RangeOnDefaultValue verifies that a default declared in the tag
+// must satisfy range as well.
+// Historic defect: setDefaultValue performed no range validation, so an
+// out-of-range default was written silently.
 func TestUnmarshal_RangeOnDefaultValue(t *testing.T) {
-	// 越界默认值：属于标签声明错误，应在加载期暴露
+	// Out-of-range default: a tag declaration error that must surface at load time
 	type BadConfig struct {
 		Port int `json:",default=99999,range=[1:8080]"`
 	}
@@ -773,7 +784,7 @@ func TestUnmarshal_RangeOnDefaultValue(t *testing.T) {
 	err := UnmarshalJsonMap(map[string]any{}, &bad)
 	require.Error(t, err, "out-of-range default must be rejected")
 
-	// 合法默认值仍正常填充
+	// A valid default is still filled normally
 	type OkConfig struct {
 		Port int `json:",default=8080,range=[1:8080]"`
 	}
@@ -783,7 +794,8 @@ func TestUnmarshal_RangeOnDefaultValue(t *testing.T) {
 	assert.Equal(t, 8080, ok.Port)
 }
 
-// TestFillDefault_RangeOnDefaultValue 验证 FillDefault 路径同样校验默认值范围。
+// TestFillDefault_RangeOnDefaultValue verifies that the FillDefault path validates
+// the default's range as well.
 func TestFillDefault_RangeOnDefaultValue(t *testing.T) {
 	type BadConfig struct {
 		Port int `json:",default=99999,range=[1:8080]"`
@@ -800,7 +812,8 @@ func TestFillDefault_RangeOnDefaultValue(t *testing.T) {
 	assert.Equal(t, 8080, ok.Port)
 }
 
-// TestUnmarshal_RangeOnEnvDuration 验证 duration 字段经环境变量覆盖时 range 生效。
+// TestUnmarshal_RangeOnEnvDuration verifies that range applies when a duration
+// field is overridden through an environment variable.
 func TestUnmarshal_RangeOnEnvDuration(t *testing.T) {
 	type Config struct {
 		Timeout time.Duration `json:",range=[1:10000000000],env=TEST_RANGE_DUR"`
@@ -818,7 +831,7 @@ func TestUnmarshal_RangeOnEnvDuration(t *testing.T) {
 	assert.Equal(t, 5*time.Second, ok.Timeout)
 }
 
-// TestValidateRangeForType 直接覆盖新的校验辅助函数。
+// TestValidateRangeForType directly covers the new validation helper.
 func TestValidateRangeForType(t *testing.T) {
 	rng, err := parseNumberRange("[1:10]")
 	require.NoError(t, err)
@@ -837,7 +850,7 @@ func TestValidateRangeForType(t *testing.T) {
 		assert.NoError(t, validateRangeForType(reflect.TypeOf(0), 999, &fieldOptions{}, "f"))
 	})
 	t.Run("duration compares in nanoseconds", func(t *testing.T) {
-		// 5ns 在 [1:10] 内，1h 不在
+		// 5ns lies within [1:10], 1h does not
 		assert.NoError(t, validateRangeForType(durationType, 5*time.Nanosecond, opts, "f"))
 		assert.NoError(t, validateRangeForType(durationType, "5ns", opts, "f"))
 		assert.Error(t, validateRangeForType(durationType, time.Hour, opts, "f"))
@@ -895,7 +908,7 @@ func TestFillDefault_NestedEnv(t *testing.T) {
 	assert.Equal(t, "envhost", cfg.DB.Host)
 }
 
-// --- 补充：tag 中 bool/uint/float 默认值经 setMatchedPrimitiveValue ---
+// --- Additional coverage: bool/uint/float tag defaults via setMatchedPrimitiveValue ---
 
 func TestUnmarshal_DefaultBool(t *testing.T) {
 	type Config struct {
@@ -928,7 +941,7 @@ func TestUnmarshal_DefaultUint(t *testing.T) {
 }
 
 func TestUnmarshal_NamedIntType(t *testing.T) {
-	// 自定义类型需 Convert
+	// Custom types require Convert
 	type Port int32
 	type Config struct {
 		Port Port `json:"port"`
@@ -946,7 +959,7 @@ func TestDeref_MultiPointer(t *testing.T) {
 }
 
 func TestUnmarshal_UnsupportedTypeDefault(t *testing.T) {
-	// default 值无法转成目标类型
+	// The default value cannot be converted to the target type
 	type Config struct {
 		Port int `json:",default=abc"`
 	}
@@ -956,7 +969,7 @@ func TestUnmarshal_UnsupportedTypeDefault(t *testing.T) {
 }
 
 func TestUnmarshal_NativeStringToIntField(t *testing.T) {
-	// map 中 string 值赋给 int 字段 → setStringValue 转换
+	// A string value in the map assigned to an int field -> setStringValue converts it
 	type Config struct {
 		Port int `json:"port"`
 	}

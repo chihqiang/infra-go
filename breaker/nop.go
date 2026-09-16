@@ -4,11 +4,11 @@ import "context"
 
 const nopBreakerName = "nopBreaker"
 
-// nopBreaker 不做任何熔断的实现，请求永远放行。
+// nopBreaker is an implementation that never trips: requests always pass.
 type nopBreaker struct{}
 
-// NopBreaker 返回一个永不触发熔断的 Breaker。
-// 适用于希望关闭某条调用链熔断保护的场景。
+// NopBreaker returns a Breaker that never trips.
+// Useful when breaker protection should be disabled for a call chain.
 func NopBreaker() Breaker {
 	return nopBreaker{}
 }
@@ -56,7 +56,7 @@ func (b nopBreaker) DoWithFallbackAcceptableCtx(_ context.Context, req func() er
 	return req()
 }
 
-// nopPromise 空实现 Promise，无需上报。
+// nopPromise is an empty Promise implementation; nothing to report.
 type nopPromise struct{}
 
 func (nopPromise) Accept()       {}

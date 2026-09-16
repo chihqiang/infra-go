@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- 基础哈希函数测试 ---
+// --- basic hash function tests ---
 
 func TestMD5(t *testing.T) {
 	tests := []struct {
@@ -103,7 +103,7 @@ func TestMD5_Bytes(t *testing.T) {
 	assert.Equal(t, "5d41402abc4b2a76b9719d911017c592", got)
 }
 
-// --- 文件哈希测试 ---
+// --- file hash tests ---
 
 func TestFileMD5(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -154,15 +154,16 @@ func TestFileMD5_NotExist(t *testing.T) {
 	require.Error(t, err)
 }
 
-// --- 通用哈希测试 ---
+// --- generic hash tests ---
 
 func TestHash(t *testing.T) {
 	got := Hash([]byte("hello"), sha256.New())
 	assert.Equal(t, SHA256String("hello"), got)
 }
 
-// TestHash_ReusedInstance 验证复用同一个 hash.Hash 实例时结果仍然正确。
-// 历史缺陷：未调用 h.Reset()，第二次调用会对累积数据求值，得到错误摘要且不报错。
+// TestHash_ReusedInstance verifies that the result is still correct when the same hash.Hash
+// instance is reused. Historical defect: h.Reset() was not called, so the second call
+// evaluated the accumulated data, producing a wrong digest without reporting any error.
 func TestHash_ReusedInstance(t *testing.T) {
 	h := sha256.New()
 
@@ -170,12 +171,13 @@ func TestHash_ReusedInstance(t *testing.T) {
 	assert.Equal(t, SHA256String("world"), Hash([]byte("world"), h))
 	assert.Equal(t, SHA256String("hello"), Hash([]byte("hello"), h))
 
-	// 同一输入重复调用必须稳定
+	// repeated calls with the same input must be stable
 	assert.Equal(t, SHA256String("abc"), Hash([]byte("abc"), h))
 	assert.Equal(t, SHA256String("abc"), Hash([]byte("abc"), h))
 }
 
-// TestHash_ReusedInstanceAcrossAlgorithms 验证不同算法的实例同样被正确重置。
+// TestHash_ReusedInstanceAcrossAlgorithms verifies that instances of other algorithms are
+// reset correctly too.
 func TestHash_ReusedInstanceAcrossAlgorithms(t *testing.T) {
 	md5h := md5.New()
 	assert.Equal(t, MD5String("a"), Hash([]byte("a"), md5h))
@@ -186,7 +188,7 @@ func TestHash_ReusedInstanceAcrossAlgorithms(t *testing.T) {
 	assert.Equal(t, SHA512String("ab"), Hash([]byte("ab"), sha512h))
 }
 
-// --- 编码辅助测试 ---
+// --- encoding helper tests ---
 
 func TestHexEncode(t *testing.T) {
 	assert.Equal(t, "68656c6c6f", HexEncode([]byte("hello")))
@@ -203,7 +205,7 @@ func TestHexDecode_Error(t *testing.T) {
 	require.Error(t, err)
 }
 
-// --- HMAC 测试 ---
+// --- HMAC tests ---
 
 func TestHMACSHA256(t *testing.T) {
 	key := "secret"
@@ -211,12 +213,12 @@ func TestHMACSHA256(t *testing.T) {
 	got := HMACSHA256String(key, data)
 	assert.NotEmpty(t, got)
 
-	// 验证确定性
+	// verify determinism
 	assert.Equal(t, HMACSHA256String(key, data), got)
 }
 
 func TestHMACSHA256_KnownValue(t *testing.T) {
-	// 使用已知向量验证正确性
+	// verify correctness against a known vector
 	key := []byte("key")
 	data := []byte("The quick brown fox jumps over the lazy dog")
 	got := HMACSHA256(key, data)
@@ -277,7 +279,7 @@ func TestEqualHex_Invalid(t *testing.T) {
 	assert.False(t, EqualHex("invalid", "aaf4c61d"))
 }
 
-// --- Bcrypt 测试 ---
+// --- Bcrypt tests ---
 
 func TestBcryptHashDefault(t *testing.T) {
 	password := "mySecretPassword"
@@ -297,7 +299,7 @@ func TestBcryptHash_CustomCost(t *testing.T) {
 }
 
 func TestBcryptHash_NegativeCost(t *testing.T) {
-	// cost < 0 时使用默认值
+	// when cost < 0 the default value is used
 	hashed, err := BcryptHash("password", -1)
 	require.NoError(t, err)
 	assert.NotEmpty(t, hashed)
@@ -346,7 +348,7 @@ func TestBcryptCostConstants(t *testing.T) {
 	assert.Equal(t, 10, BcryptCostDefault)
 }
 
-// --- 一致性测试 ---
+// --- consistency tests ---
 
 func TestMD5_FileVsString(t *testing.T) {
 	tmpDir := t.TempDir()

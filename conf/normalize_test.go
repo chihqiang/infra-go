@@ -8,13 +8,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- nil / 空值边界 ---
+// --- nil / empty value edge cases ---
 
 func TestNormalizeMap_Nil(t *testing.T) {
 	assert.Nil(t, normalizeMap(nil))
 }
 
-// --- normalizeValue 各类型 ---
+// --- normalizeValue by type ---
 
 func TestNormalizeValue_NumericTypes(t *testing.T) {
 	cases := []struct {
@@ -42,12 +42,12 @@ func TestNormalizeValue_NumericTypes(t *testing.T) {
 }
 
 func TestNormalizeValue_Scalar(t *testing.T) {
-	// bool / string 原样返回
+	// bool / string are returned as is
 	assert.Equal(t, true, normalizeValue(true))
 	assert.Equal(t, "str", normalizeValue("str"))
-	// nil 原样返回
+	// nil is returned as is
 	assert.Nil(t, normalizeValue(nil))
-	// 默认分支：无法识别的类型 → fmt.Sprintf("%v")
+	// default branch: unrecognised type -> fmt.Sprintf("%v")
 	assert.Equal(t, "{y}", normalizeValue(struct{ x string }{"y"}))
 }
 
@@ -83,7 +83,7 @@ func TestNormalizeSlice_Nil(t *testing.T) {
 	assert.Nil(t, normalizeSlice(nil))
 }
 
-// --- unmarshalMap：大小写不敏感反序列化 ---
+// --- unmarshalMap: case-insensitive unmarshalling ---
 
 func TestUnmarshalMap_LowercasesKeys(t *testing.T) {
 	var cfg struct {
@@ -96,8 +96,8 @@ func TestUnmarshalMap_LowercasesKeys(t *testing.T) {
 	assert.Equal(t, 1, cfg.Port)
 }
 
-// TestUnmarshalMap_CaseInsensitiveFieldName 验证字段名大小写不敏感匹配
-// 不依赖预先改写输入 map 的键。
+// TestUnmarshalMap_CaseInsensitiveFieldName verifies that case-insensitive field name
+// matching does not rely on rewriting the keys of the input map up front.
 func TestUnmarshalMap_CaseInsensitiveFieldName(t *testing.T) {
 	var cfg struct {
 		LogMode string `json:"LogMode"`
@@ -114,8 +114,9 @@ func TestUnmarshalMap_CaseInsensitiveFieldName(t *testing.T) {
 	assert.Equal(t, "db", cfg.Nested.HostName)
 }
 
-// TestUnmarshalMap_MapFieldKeysPreserved 验证 map 字段的键保持原样。
-// 历史缺陷：unmarshalMap 递归小写化整棵配置树，把 map 字段的数据键一并改写。
+// TestUnmarshalMap_MapFieldKeysPreserved verifies that the keys of map fields are kept as
+// is. Historical defect: unmarshalMap recursively lowercased the whole config tree, which
+// rewrote the data keys of map fields as well.
 func TestUnmarshalMap_MapFieldKeysPreserved(t *testing.T) {
 	var cfg struct {
 		Labels map[string]string `json:"labels"`
@@ -131,8 +132,9 @@ func TestUnmarshalMap_MapFieldKeysPreserved(t *testing.T) {
 	assert.Equal(t, map[string]int{"RetryCount": 3}, cfg.Counts)
 }
 
-// TestUnmarshalMap_MapFieldKeysNotMerged 验证仅大小写不同的键不会被合并。
-// 历史缺陷：小写化后 AppName 与 appname 落入同一键，结果取决于 map 遍历顺序。
+// TestUnmarshalMap_MapFieldKeysNotMerged verifies that keys differing only in case are not
+// merged. Historical defect: after lowercasing, AppName and appname landed in the same key
+// and the outcome depended on map iteration order.
 func TestUnmarshalMap_MapFieldKeysNotMerged(t *testing.T) {
 	var cfg struct {
 		Labels map[string]string `json:"labels"`
@@ -147,7 +149,8 @@ func TestUnmarshalMap_MapFieldKeysNotMerged(t *testing.T) {
 	assert.Equal(t, "lower", cfg.Labels["appname"])
 }
 
-// TestUnmarshalMap_NestedMapInSlicePreservesKeys 验证切片内 map 的键同样保持原样。
+// TestUnmarshalMap_NestedMapInSlicePreservesKeys verifies that the keys of maps inside
+// slices are kept as is too.
 func TestUnmarshalMap_NestedMapInSlicePreservesKeys(t *testing.T) {
 	var cfg struct {
 		Items []map[string]string `json:"items"`

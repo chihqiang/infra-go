@@ -8,27 +8,32 @@ import (
 
 // --- SingleFlight ---
 
-// singleFlightCall 表示一次正在执行的调用。
-// done 为惰性创建的完成通知 channel，多个等待者共享，避免每个等待者各自创建 goroutine。
+// singleFlightCall represents one in-flight call.
+// done is a lazily created completion channel shared by every waiter, so each
+// waiter does not have to start a goroutine of its own.
 type singleFlightCall[T any] struct {
 	wg  sync.WaitGroup
 	val T
 	err error
-	// panicVal 记录 fn 抛出的 panic 值，在 wg.Done() / close(done) 之前写入，
-	// 因此等待者可安全读取。非 nil 时等待者会重新 panic，
-	// 保证所有调用方看到与 leader 一致的结果
-	// （否则等待者会拿到零值 + nil error，被误判为调用成功）。
+	// panicVal records the panic value thrown by fn. It is written before
+	// wg.Done() / close(done), so waiters can read it safely. When it is non-nil
+	// the waiters re-panic, guaranteeing that every caller observes the same
+	// outcome as the leader (otherwise a waiter would get the zero value plus a
+	// nil error and mistake the call for a success).
 	panicVal any
 	done     chan struct{}
 }
 
-// SingleFlight 防止缓存击穿，相同 key 的并发调用只执行一次，结果共享给所有调用者。
+// SingleFlight guards against cache stampedes: concurrent calls for the same key
+// run only once and the result is shared with every caller.
 //
-// 适用场景：
-//   - 缓存击穿防护：大量并发请求同时查询同一个 key，只穿透到底层数据源一次
-//   - 重复请求合并：多个协程请求相同资源，只执行一次实际获取操作
+// Use cases:
+//   - Cache stampede protection: a burst of concurrent requests for one key
+//     passes through to the underlying data source only once.
+//   - Duplicate request coalescing: several goroutines asking for the same
+//     resource trigger one actual fetch.
 //
-// 用法：
+// Usage:
 //
 //	sf := syncx.NewSingleFlight[string]()
 //	val, err := sf.Do("user:123", func() (string, error) {
@@ -39,18 +44,20 @@ type SingleFlight[T any] struct {
 	calls map[string]*singleFlightCall[T]
 }
 
-// NewSingleFlight 创建一个新的 SingleFlight 实例。
+// NewSingleFlight creates a new SingleFlight instance.
 func NewSingleFlight[T any]() *SingleFlight[T] {
 	return &SingleFlight[T]{
 		calls: make(map[string]*singleFlightCall[T]),
 	}
 }
 
-// Do 执行函数 fn，相同 key 的并发调用只执行一次。
-// 如果已有相同 key 的调用正在执行，当前调用会等待其结果。
+// Do runs fn, collapsing concurrent calls for the same key into a single
+// execution. If a call with the same key is already running, the current call
+// waits for its result.
 //
-// 若 leader 的 fn panic，所有等待者会收到同一个 panic 值并同样 panic，
-// 保证调用方不会拿到"零值 + nil error"而误判为成功。
+// If the leader's fn panics, every waiter receives the same panic value and
+// panics as well, so no caller can mistake a "zero value + nil error" for a
+// success.
 func (sf *SingleFlight[T]) Do(key string, fn func() (T, error)) (T, error) {
 	sf.mu.Lock()
 	if call, ok := sf.calls[key]; ok {
@@ -75,14 +82,17 @@ func (sf *SingleFlight[T]) Do(key string, fn func() (T, error)) (T, error) {
 	return call.val, call.err
 }
 
-// DoCtx 执行函数 fn，支持 context 取消。
-// 如果 context 取消，等待中的调用会返回 context 错误，但正在执行的调用不会中断。
-// 注意：context 取消后，内部用于等待结果的 goroutine 会存活到 fn 执行完成，
-// fn 完成后自动退出，不会造成持久性泄漏。
+// DoCtx runs fn with context cancellation support.
+// If the context is cancelled, waiting calls return a context error, but the
+// call that is already executing is not interrupted.
+// Note: after cancellation the internal goroutine that waits for the result
+// lives until fn finishes; it exits on its own once fn returns, so it does not
+// leak permanently.
 //
-// 与 Do 一致：leader 的 fn panic 时，所有等待者会收到同一个 panic 值。
+// As with Do, when the leader's fn panics every waiter receives the same panic
+// value.
 func (sf *SingleFlight[T]) DoCtx(ctx context.Context, key string, fn func(context.Context) (T, error)) (T, error) {
-	// 快速检查 context
+	// Fast path: check the context first
 	if err := ctx.Err(); err != nil {
 		var zero T
 		return zero, err
@@ -90,8 +100,9 @@ func (sf *SingleFlight[T]) DoCtx(ctx context.Context, key string, fn func(contex
 
 	sf.mu.Lock()
 	if call, ok := sf.calls[key]; ok {
-		// 惰性创建共享的 done channel，所有等待者复用同一个 goroutine。
-		// 首次创建发生在持锁状态下，后续等待者直接复用，无需重复启动 goroutine。
+		// Lazily create the shared done channel so that all waiters reuse a single
+		// goroutine. It is created while the lock is held, and later waiters simply
+		// reuse it instead of starting another goroutine.
 		if call.done == nil {
 			call.done = make(chan struct{})
 			go func() {
@@ -101,7 +112,7 @@ func (sf *SingleFlight[T]) DoCtx(ctx context.Context, key string, fn func(contex
 		}
 		sf.mu.Unlock()
 
-		// 等待结果或 context 取消
+		// Wait for the result or for the context to be cancelled
 		select {
 		case <-call.done:
 			call.repanic()
@@ -127,10 +138,12 @@ func (sf *SingleFlight[T]) DoCtx(ctx context.Context, key string, fn func(contex
 	return call.val, call.err
 }
 
-// run 执行 fn 并把结果（含 panic 值）记录到 call 上，最后唤醒等待者。
+// run executes fn, records the result (including any panic value) on call, and
+// finally wakes the waiters.
 //
-// panic 值会在 wg.Done() 之前写入 call.panicVal：等待者通过 wg.Wait() /
-// <-done 建立 happens-before，因此能安全读到该值。
+// The panic value is written to call.panicVal before wg.Done(): waiters
+// establish a happens-before edge through wg.Wait() / <-done, so reading it is
+// safe.
 func (sf *SingleFlight[T]) run(call *singleFlightCall[T], fn func() (T, error)) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -141,16 +154,17 @@ func (sf *SingleFlight[T]) run(call *singleFlightCall[T], fn func() (T, error)) 
 	call.val, call.err = fn()
 }
 
-// repanic 在 leader 的 fn panic 时重新抛出同一个 panic 值。
-// 读取 call.panicVal 的 goroutine 必须已通过 wg.Wait() / <-done 同步。
+// repanic rethrows the leader's panic value when its fn panicked.
+// The goroutine reading call.panicVal must already be synchronised through
+// wg.Wait() / <-done.
 func (c *singleFlightCall[T]) repanic() {
 	if c.panicVal != nil {
 		panic(c.panicVal)
 	}
 }
 
-// Forget 移除指定 key 的调用记录，使下一次 Do 调用会重新执行 fn。
-// 不会影响正在执行的调用。
+// Forget drops the call record for key, so the next Do call runs fn again.
+// Calls that are already in flight are unaffected.
 func (sf *SingleFlight[T]) Forget(key string) {
 	sf.mu.Lock()
 	delete(sf.calls, key)

@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// --- OrDone 测试 ---
+// --- OrDone tests ---
 
 func TestOrDone(t *testing.T) {
 	src := make(chan int, 5)
@@ -35,7 +35,7 @@ func TestOrDone_Cancelled(t *testing.T) {
 	go func() {
 		src <- 1
 		time.Sleep(10 * time.Millisecond)
-		close(done) // 取消
+		close(done) // cancel
 	}()
 
 	var result []int
@@ -43,7 +43,7 @@ func TestOrDone_Cancelled(t *testing.T) {
 		result = append(result, v)
 	}
 
-	// 只收到第一个值就因 done 关闭而退出
+	// Only the first value is received; the loop exits because done was closed
 	assert.Equal(t, []int{1}, result)
 }
 
@@ -83,7 +83,7 @@ func TestOrDoneCtx_Cancelled(t *testing.T) {
 	assert.Equal(t, []int{1}, result)
 }
 
-// --- Merge 测试 ---
+// --- Merge tests ---
 
 func TestMerge(t *testing.T) {
 	ch1 := make(chan int, 3)
@@ -114,7 +114,7 @@ func TestMerge(t *testing.T) {
 }
 
 func TestMerge_NoChannels(t *testing.T) {
-	// 无输入 channel 时立即关闭
+	// With no input channels the result is closed immediately
 	out := Merge[int](context.Background())
 	_, ok := <-out
 	assert.False(t, ok)
@@ -122,7 +122,7 @@ func TestMerge_NoChannels(t *testing.T) {
 
 func TestMerge_ContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	ch := make(chan int) // 永不关闭的源
+	ch := make(chan int) // a source that is never closed
 
 	go func() {
 		ch <- 1
@@ -134,7 +134,8 @@ func TestMerge_ContextCancel(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, 1, val)
 
-	// ctx 取消后，merge 应尽快关闭，即使源 channel 仍开着
+	// After the context is cancelled, Merge must close promptly while the source
+	// channel is still open
 	cancel()
 	select {
 	case _, ok := <-out:
@@ -163,7 +164,7 @@ func TestMerge_ManyChannels(t *testing.T) {
 	assert.Equal(t, total, count)
 }
 
-// --- FanOut 测试 ---
+// --- FanOut tests ---
 
 func TestFanOut(t *testing.T) {
 	src := make(chan int, 6)
@@ -192,7 +193,7 @@ func TestFanOut(t *testing.T) {
 	}
 	wg.Wait()
 
-	// 每个 output channel 都应该收到全部 6 个值
+	// Every output channel should receive all 6 values
 	assert.Len(t, allValues, 18) // 3 outputs × 6 values
 }
 
@@ -217,7 +218,7 @@ func TestFanOut_ContextCancel(t *testing.T) {
 
 	outs := FanOut(ctx, src, 2)
 
-	// 发一个值，确认广播正常
+	// Send one value to confirm broadcasting works
 	src <- 42
 	for _, out := range outs {
 		select {
@@ -228,7 +229,7 @@ func TestFanOut_ContextCancel(t *testing.T) {
 		}
 	}
 
-	// ctx 取消后应解除阻塞并关闭所有输出
+	// After the context is cancelled, everything must unblock and all outputs close
 	cancel()
 	for _, out := range outs {
 		select {

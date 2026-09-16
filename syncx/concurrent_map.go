@@ -4,14 +4,15 @@ import (
 	"sync"
 )
 
-// ConcurrentMap 泛型并发安全 Map。
-// 使用分段锁（基于 hash 分桶），比全局单一锁有更好的并发性能。
+// ConcurrentMap is a generic concurrency-safe map.
+// It uses sharded locks (buckets derived from the key hash), which scales better
+// under concurrency than a single global lock.
 //
-// 适用场景：
-//   - 高并发读写缓存
-//   - 协程间共享状态
+// Use cases:
+//   - caches with heavy concurrent reads and writes
+//   - state shared between goroutines
 //
-// 用法：
+// Usage:
 //
 //	m := syncx.NewConcurrentMap[string, int]()
 //	m.Set("a", 1)
@@ -22,7 +23,8 @@ type ConcurrentMap[K comparable, V any] struct {
 	size   int
 }
 
-// mapShard 分段锁，每个 shard 负责一部分 key。
+// mapShard is a single shard guarded by its own lock; each shard owns a subset
+// of the keys.
 type mapShard[K comparable, V any] struct {
 	mu    sync.RWMutex
 	items map[K]V
@@ -30,13 +32,13 @@ type mapShard[K comparable, V any] struct {
 
 const defaultShardCount = 32
 
-// NewConcurrentMap 创建一个默认 32 个分段的 ConcurrentMap。
+// NewConcurrentMap creates a ConcurrentMap with the default 32 shards.
 func NewConcurrentMap[K comparable, V any]() *ConcurrentMap[K, V] {
 	return NewConcurrentMapWithSize[K, V](defaultShardCount)
 }
 
-// NewConcurrentMapWithSize 创建指定分段数量的 ConcurrentMap。
-// shardCount 建议为 2 的幂次，最少为 1。
+// NewConcurrentMapWithSize creates a ConcurrentMap with shardCount shards.
+// shardCount should be a power of two and is clamped to a minimum of 1.
 func NewConcurrentMapWithSize[K comparable, V any](shardCount int) *ConcurrentMap[K, V] {
 	if shardCount < 1 {
 		shardCount = 1
@@ -53,14 +55,14 @@ func NewConcurrentMapWithSize[K comparable, V any](shardCount int) *ConcurrentMa
 	return m
 }
 
-// getShard 根据 key 的 hash 获取对应的分段。
+// getShard returns the shard that owns key, derived from the key's hash.
 func (m *ConcurrentMap[K, V]) getShard(key K) *mapShard[K, V] {
-	// 使用 Go 内置 hash（通过 any 类型转换避免泛型 hash 问题）
+	// Use the built-in hash (going through any avoids generic hashing issues)
 	h := hashKey(key)
 	return m.shards[h%uint64(m.size)]
 }
 
-// Set 设置键值对。
+// Set stores a key/value pair.
 func (m *ConcurrentMap[K, V]) Set(key K, value V) {
 	shard := m.getShard(key)
 	shard.mu.Lock()
@@ -68,7 +70,7 @@ func (m *ConcurrentMap[K, V]) Set(key K, value V) {
 	shard.mu.Unlock()
 }
 
-// Get 获取键对应的值，返回值和是否存在标志。
+// Get returns the value for key plus a flag reporting whether it exists.
 func (m *ConcurrentMap[K, V]) Get(key K) (V, bool) {
 	shard := m.getShard(key)
 	shard.mu.RLock()
@@ -77,7 +79,7 @@ func (m *ConcurrentMap[K, V]) Get(key K) (V, bool) {
 	return val, ok
 }
 
-// GetOrSet 获取值，如果不存在则设置默认值后返回。
+// GetOrSet returns the value for key, storing defaultValue first when absent.
 func (m *ConcurrentMap[K, V]) GetOrSet(key K, defaultValue V) (V, bool) {
 	shard := m.getShard(key)
 	shard.mu.Lock()
@@ -90,7 +92,7 @@ func (m *ConcurrentMap[K, V]) GetOrSet(key K, defaultValue V) (V, bool) {
 	return defaultValue, false
 }
 
-// GetAndDelete 获取并删除值，返回值和是否存在标志。
+// GetAndDelete returns the value for key and removes it, plus an existence flag.
 func (m *ConcurrentMap[K, V]) GetAndDelete(key K) (V, bool) {
 	shard := m.getShard(key)
 	shard.mu.Lock()
@@ -103,7 +105,7 @@ func (m *ConcurrentMap[K, V]) GetAndDelete(key K) (V, bool) {
 	return val, ok
 }
 
-// Delete 删除键，如果键不存在则什么也不做。
+// Delete removes key; it is a no-op when the key does not exist.
 func (m *ConcurrentMap[K, V]) Delete(key K) {
 	shard := m.getShard(key)
 	shard.mu.Lock()
@@ -111,7 +113,7 @@ func (m *ConcurrentMap[K, V]) Delete(key K) {
 	shard.mu.Unlock()
 }
 
-// Has 检查键是否存在。
+// Has reports whether key exists.
 func (m *ConcurrentMap[K, V]) Has(key K) bool {
 	shard := m.getShard(key)
 	shard.mu.RLock()
@@ -120,7 +122,7 @@ func (m *ConcurrentMap[K, V]) Has(key K) bool {
 	return ok
 }
 
-// Len 返回 map 中键值对的数量。
+// Len returns the number of key/value pairs in the map.
 func (m *ConcurrentMap[K, V]) Len() int {
 	var count int
 	for _, shard := range m.shards {
@@ -131,9 +133,10 @@ func (m *ConcurrentMap[K, V]) Len() int {
 	return count
 }
 
-// Range 遍历所有键值对。
-// 如果 fn 返回 false，则停止遍历。
-// 遍历期间会持有各分段的读锁，因此遍历期间不应执行写操作。
+// Range iterates over every key/value pair.
+// Iteration stops as soon as fn returns false.
+// Each shard's read lock is held while that shard is traversed, so no writes
+// should be performed during the traversal.
 func (m *ConcurrentMap[K, V]) Range(fn func(key K, value V) bool) {
 	for _, shard := range m.shards {
 		shard.mu.RLock()
@@ -147,7 +150,7 @@ func (m *ConcurrentMap[K, V]) Range(fn func(key K, value V) bool) {
 	}
 }
 
-// Clear 清空所有键值对。
+// Clear removes every key/value pair.
 func (m *ConcurrentMap[K, V]) Clear() {
 	for _, shard := range m.shards {
 		shard.mu.Lock()
@@ -156,7 +159,7 @@ func (m *ConcurrentMap[K, V]) Clear() {
 	}
 }
 
-// Keys 返回所有键的切片。
+// Keys returns a slice holding every key.
 func (m *ConcurrentMap[K, V]) Keys() []K {
 	var keys []K
 	m.Range(func(key K, _ V) bool {
@@ -166,7 +169,7 @@ func (m *ConcurrentMap[K, V]) Keys() []K {
 	return keys
 }
 
-// Values 返回所有值的切片。
+// Values returns a slice holding every value.
 func (m *ConcurrentMap[K, V]) Values() []V {
 	var values []V
 	m.Range(func(_ K, value V) bool {

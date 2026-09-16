@@ -18,14 +18,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- 辅助函数 ---
+// --- Helper functions ---
 
-// newTestServer 创建测试用 Server（不启动 HTTP 服务，仅注册路由）。
+// newTestServer creates a Server for tests (it does not start an HTTP service, it only
+// registers routes).
 func newTestServer(opts ...RunOption) *Server {
 	return NewServer(ServerConfig{Host: "0.0.0.0", Port: 0}, opts...)
 }
 
-// doRequest 向 Server 的 Handler 发送请求，返回响应。
+// doRequest sends a request to the Server's Handler and returns the response.
 func doRequest(t *testing.T, s *Server, method, path string, body io.Reader) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, body)
@@ -34,7 +35,7 @@ func doRequest(t *testing.T, s *Server, method, path string, body io.Reader) *ht
 	return rec
 }
 
-// doRequestWithHeaders 发送带自定义 Header 的请求。
+// doRequestWithHeaders sends a request with custom headers.
 func doRequestWithHeaders(t *testing.T, s *Server, method, path string, body io.Reader, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, body)
@@ -46,7 +47,7 @@ func doRequestWithHeaders(t *testing.T, s *Server, method, path string, body io.
 	return rec
 }
 
-// --- 基础路由测试 ---
+// --- Basic routing tests ---
 
 func TestAddRoute(t *testing.T) {
 	s := newTestServer()
@@ -85,7 +86,7 @@ func TestMethodNotAllowed(t *testing.T) {
 		Handler: func(w http.ResponseWriter, r *http.Request) { OkJSON(w, "users") },
 	})
 
-	// POST 到 GET 路由应返回 405
+	// POST to a GET route should return 405
 	rec := doRequest(t, s, http.MethodPost, "/users", nil)
 	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 }
@@ -102,7 +103,7 @@ func TestNotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
-// --- WithPrefix 测试 ---
+// --- WithPrefix tests ---
 
 func TestWithPrefix(t *testing.T) {
 	s := newTestServer()
@@ -111,7 +112,7 @@ func TestWithPrefix(t *testing.T) {
 		{Method: "POST", Path: "/users", Handler: func(w http.ResponseWriter, r *http.Request) { OkJSON(w, "created") }},
 	}, WithPrefix("/api/v1"))
 
-	// 带前缀的路由应可访问
+	// Prefixed routes should be reachable
 	rec1 := doRequest(t, s, http.MethodGet, "/api/v1/users", nil)
 	assert.Equal(t, http.StatusOK, rec1.Code)
 	assert.Contains(t, rec1.Body.String(), "users")
@@ -119,7 +120,7 @@ func TestWithPrefix(t *testing.T) {
 	rec2 := doRequest(t, s, http.MethodPost, "/api/v1/users", nil)
 	assert.Equal(t, http.StatusOK, rec2.Code)
 
-	// 不带前缀的路由应 404
+	// Routes without the prefix should 404
 	rec3 := doRequest(t, s, http.MethodGet, "/users", nil)
 	assert.Equal(t, http.StatusNotFound, rec3.Code)
 }
@@ -148,9 +149,9 @@ func TestWithPrefix_NestedParams(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "42")
 }
 
-// --- 中间件测试 ---
+// --- Middleware tests ---
 
-// recordingMiddleware 记录中间件执行顺序。
+// recordingMiddleware records middleware execution order.
 func recordingMiddleware(name string, order *[]string) Middleware {
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -193,7 +194,7 @@ func TestMiddleware_MultipleWithMiddleware(t *testing.T) {
 	rec := doRequest(t, s, http.MethodGet, "/test", nil)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	// 执行顺序：mw1 → mw2 → handler
+	// Execution order: mw1 → mw2 → handler
 	assert.Equal(t, []string{"mw1-before", "mw2-before", "handler", "mw2-after", "mw1-after"}, order)
 }
 
@@ -211,7 +212,7 @@ func TestMiddleware_GlobalUse(t *testing.T) {
 	rec := doRequest(t, s, http.MethodGet, "/test", nil)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	// 全局中间件 → 组中间件 → handler
+	// Global middleware → group middleware → handler
 	assert.Equal(t, []string{"global-before", "group-before", "handler", "group-after", "global-after"}, order)
 }
 
@@ -235,7 +236,7 @@ func TestMiddleware_GlobalUseMultiple(t *testing.T) {
 	rec := doRequest(t, s, http.MethodGet, "/test", nil)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	// 全局中间件先执行 → 组中间件 → handler
+	// Global middleware runs first → group middleware → handler
 	assert.Equal(t, []string{
 		"g1-before", "g2-before",
 		"grp1-before", "grp2-before",
@@ -255,7 +256,7 @@ func TestMiddleware_ShortCircuit(t *testing.T) {
 		}},
 	}, WithMiddleware(func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			// 不调用 next，直接返回
+			// Do not call next; return directly
 			WriteHTTPError(w, http.StatusForbidden, "blocked")
 		}
 	}))
@@ -265,14 +266,16 @@ func TestMiddleware_ShortCircuit(t *testing.T) {
 	assert.False(t, handlerCalled, "handler should not be called when middleware short-circuits")
 }
 
-// TestMiddleware_UseAfterAddRoute 验证 Use 添加的全局中间件对"已注册"的路由也生效。
-// 这是修复核心 bug 的测试：之前 AddRoutes 在注册时把全局中间件烧录到 handler，
-// 导致后续 Use 添加的中间件无法作用于已注册路由。
+// TestMiddleware_UseAfterAddRoute verifies that global middleware added via Use also
+// affects routes that are "already registered".
+// This is the test for the core bug fix: AddRoutes used to bake global middleware into
+// the handler at registration time, so middleware added later via Use could not affect
+// already-registered routes.
 func TestMiddleware_UseAfterAddRoute(t *testing.T) {
 	var order []string
 	s := newTestServer()
 
-	// 先注册路由
+	// Register the route first
 	s.AddRoute(Route{
 		Method: "GET", Path: "/test", Handler: func(w http.ResponseWriter, r *http.Request) {
 			order = append(order, "handler")
@@ -280,22 +283,23 @@ func TestMiddleware_UseAfterAddRoute(t *testing.T) {
 		},
 	})
 
-	// 再添加全局中间件（文档承诺对已注册路由生效）
+	// Then add global middleware (the docs promise it applies to registered routes)
 	s.Use(recordingMiddleware("global", &order))
 
 	rec := doRequest(t, s, http.MethodGet, "/test", nil)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	// 全局中间件应该作用于已注册的路由
+	// The global middleware should apply to the already-registered route
 	assert.Equal(t, []string{"global-before", "handler", "global-after"}, order)
 }
 
-// TestMiddleware_UseAfterAddRouteMultiple 验证多个全局中间件在路由注册后添加也能按顺序生效。
+// TestMiddleware_UseAfterAddRouteMultiple verifies that several global middleware added
+// after route registration also take effect in order.
 func TestMiddleware_UseAfterAddRouteMultiple(t *testing.T) {
 	var order []string
 	s := newTestServer()
 
-	// 先注册路由
+	// Register the route first
 	s.AddRoute(Route{
 		Method: "GET", Path: "/test", Handler: func(w http.ResponseWriter, r *http.Request) {
 			order = append(order, "handler")
@@ -303,7 +307,7 @@ func TestMiddleware_UseAfterAddRouteMultiple(t *testing.T) {
 		},
 	})
 
-	// 再添加多个全局中间件
+	// Then add several global middleware
 	s.Use(
 		recordingMiddleware("g1", &order),
 		recordingMiddleware("g2", &order),
@@ -316,16 +320,17 @@ func TestMiddleware_UseAfterAddRouteMultiple(t *testing.T) {
 	assert.Equal(t, []string{"g1-before", "g2-before", "handler", "g2-after", "g1-after"}, order)
 }
 
-// TestMiddleware_UseBeforeAndAfterAddRoute 验证 Use 在路由注册前后都调用时，
-// 全局中间件和组中间件都能正确作用于路由，且执行顺序正确。
+// TestMiddleware_UseBeforeAndAfterAddRoute verifies that when Use is called both before
+// and after route registration, the global and group middleware both apply correctly to
+// the routes with the right execution order.
 func TestMiddleware_UseBeforeAndAfterAddRoute(t *testing.T) {
 	var order []string
 	s := newTestServer()
 
-	// 先添加一个全局中间件
+	// First add one global middleware
 	s.Use(recordingMiddleware("g1", &order))
 
-	// 注册路由（带组中间件）
+	// Register the route (with group middleware)
 	s.AddRoutes([]Route{
 		{Method: "GET", Path: "/test", Handler: func(w http.ResponseWriter, r *http.Request) {
 			order = append(order, "handler")
@@ -333,7 +338,7 @@ func TestMiddleware_UseBeforeAndAfterAddRoute(t *testing.T) {
 		}},
 	}, WithMiddleware(recordingMiddleware("grp", &order)))
 
-	// 再添加一个全局中间件
+	// Then add another global middleware
 	s.Use(recordingMiddleware("g2", &order))
 
 	rec := doRequest(t, s, http.MethodGet, "/test", nil)
@@ -349,23 +354,25 @@ func TestMiddleware_UseBeforeAndAfterAddRoute(t *testing.T) {
 	}, order)
 }
 
-// TestMiddleware_GlobalOnNotFound 验证全局中间件也会作用于 404 请求。
-// 因为全局中间件包装了整个 mux，404 handler 也会经过全局中间件。
+// TestMiddleware_GlobalOnNotFound verifies that global middleware also applies to 404
+// requests.
+// Because global middleware wraps the whole mux, the 404 handler passes through it too.
 func TestMiddleware_GlobalOnNotFound(t *testing.T) {
 	var order []string
 	s := newTestServer()
 
 	s.Use(recordingMiddleware("global", &order))
-	// 不注册任何路由，请求会 404
+	// No routes registered, so the request 404s
 
 	rec := doRequest(t, s, http.MethodGet, "/nonexistent", nil)
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 
-	// 全局中间件 before/after 都应执行
+	// Both the before and after halves of the global middleware should run
 	assert.Equal(t, []string{"global-before", "global-after"}, order)
 }
 
-// TestMiddleware_GlobalShortCircuit 验证全局中间件短路时不会到达路由 handler。
+// TestMiddleware_GlobalShortCircuit verifies that when global middleware short-circuits,
+// the route handler is never reached.
 func TestMiddleware_GlobalShortCircuit(t *testing.T) {
 	handlerCalled := false
 	s := newTestServer()
@@ -377,7 +384,7 @@ func TestMiddleware_GlobalShortCircuit(t *testing.T) {
 		},
 	})
 
-	// 全局中间件短路：不调用 next
+	// Global middleware short-circuits: next is never called
 	s.Use(func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			WriteHTTPError(w, http.StatusUnauthorized, "unauthorized")
@@ -389,7 +396,7 @@ func TestMiddleware_GlobalShortCircuit(t *testing.T) {
 	assert.False(t, handlerCalled, "handler should not be called when global middleware short-circuits")
 }
 
-// --- ApplyMiddleware 独立函数测试 ---
+// --- ApplyMiddleware standalone function tests ---
 
 func TestApplyMiddleware(t *testing.T) {
 	var order []string
@@ -429,7 +436,7 @@ func TestApplyMiddlewares(t *testing.T) {
 	assert.Equal(t, []string{"mw1-before", "mw2-before", "handler", "mw2-after", "mw1-after"}, order)
 }
 
-// --- Group 测试 ---
+// --- Group tests ---
 
 func TestGroup(t *testing.T) {
 	s := newTestServer()
@@ -501,13 +508,13 @@ func TestGroup_AddRoutes(t *testing.T) {
 	assert.Contains(t, rec2.Body.String(), "99")
 }
 
-// TestGroup_AddRouteWithOptions 验证 Group.AddRoute 现在也接受 RouteOption，
-// 与 Server.AddRoute 的 API 保持一致。
+// TestGroup_AddRouteWithOptions verifies Group.AddRoute now accepts RouteOption too,
+// keeping its API consistent with Server.AddRoute.
 func TestGroup_AddRouteWithOptions(t *testing.T) {
 	s := newTestServer()
 
 	api := s.Group("/api/v1")
-	// Group.AddRoute 附加额外的中间件（RouteOption）
+	// Group.AddRoute carries additional middleware (RouteOption)
 	api.AddRoute(Route{
 		Method: "GET", Path: "/test", Handler: func(w http.ResponseWriter, r *http.Request) {
 			OkJSON(w, "ok")
@@ -525,7 +532,7 @@ func TestGroup_AddRouteWithOptions(t *testing.T) {
 	assert.Equal(t, "applied", rec.Header().Get("X-MW"))
 }
 
-// TestGroup_AddRoutesWithOptions 验证 Group.AddRoutes 也接受 RouteOption。
+// TestGroup_AddRoutesWithOptions verifies Group.AddRoutes accepts RouteOption as well.
 func TestGroup_AddRoutesWithOptions(t *testing.T) {
 	var order []string
 	s := newTestServer()
@@ -545,7 +552,7 @@ func TestGroup_AddRoutesWithOptions(t *testing.T) {
 	assert.Equal(t, []string{"extra-before", "handler-a", "extra-after"}, order)
 }
 
-// --- 路径参数测试 ---
+// --- Path parameter tests ---
 
 func TestWildcardPath(t *testing.T) {
 	s := newTestServer()
@@ -563,7 +570,7 @@ func TestWildcardPath(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "dir/sub/file.txt")
 }
 
-// --- Routes / PrintRoutes 测试 ---
+// --- Routes / PrintRoutes tests ---
 
 func TestRoutes(t *testing.T) {
 	s := newTestServer()
@@ -579,7 +586,7 @@ func TestRoutes(t *testing.T) {
 	assert.Equal(t, "POST", routes[1].Method)
 	assert.Equal(t, "/api/users", routes[1].Path)
 
-	// 验证返回的是副本
+	// Verify a copy is returned
 	routes[0].Method = "DELETE"
 	original := s.Routes()
 	assert.Equal(t, "GET", original[0].Method)
@@ -592,17 +599,17 @@ func TestPrintRoutes(t *testing.T) {
 		{Method: "POST", Path: "/users", Handler: func(w http.ResponseWriter, r *http.Request) {}},
 	}, WithPrefix("/api"))
 
-	// 不 panic 即可
+	// It only needs to not panic
 	s.PrintRoutes()
 }
 
 func TestPrintRoutes_Empty(t *testing.T) {
 	s := newTestServer()
-	// 不 panic 即可
+	// It only needs to not panic
 	s.PrintRoutes()
 }
 
-// --- 辅助函数测试 ---
+// --- Helper function tests ---
 
 func TestBuildPattern(t *testing.T) {
 	tests := []struct {
@@ -615,11 +622,11 @@ func TestBuildPattern(t *testing.T) {
 		{"POST", "/users/create", "POST /users/create"},
 		{"", "/health", "/health"},
 		{"*", "/health", "/health"},
-		// 未带前导斜杠的路径应自动补全
+		// A path without a leading slash should be completed automatically
 		{"GET", "users", "GET /users"},
 		{"POST", "users/create", "POST /users/create"},
 		{"", "health", "/health"},
-		// 空路径视为根路径
+		// An empty path is treated as the root path
 		{"GET", "", "GET /"},
 	}
 	for _, tt := range tests {
@@ -630,7 +637,8 @@ func TestBuildPattern(t *testing.T) {
 }
 
 func TestAddRoute_WithoutLeadingSlash(t *testing.T) {
-	// 路由 Path 未带前导斜杠时，应自动补全而非 panic
+	// When a route Path lacks a leading slash it should be completed automatically
+	// rather than panicking
 	s := newTestServer()
 	s.AddRoute(Route{Method: "GET", Path: "users", Handler: func(w http.ResponseWriter, r *http.Request) {
 		OkJSON(w, "ok")
@@ -665,7 +673,7 @@ func TestJoinPath(t *testing.T) {
 	}
 }
 
-// --- Server 配置测试 ---
+// --- Server configuration tests ---
 
 func TestNewServer_DefaultHost(t *testing.T) {
 	s := NewServer(ServerConfig{Port: 8080})
@@ -703,8 +711,8 @@ func TestNewServer_WithOptions(t *testing.T) {
 	assert.Equal(t, 5*time.Second, s.conf.ShutdownTimeout)
 }
 
-// TestNewServer_ZeroTimeoutViaRunOption 验证通过 RunOption 可以把 timeout 显式设为 0（不限制），
-// 不会被 fillDefault 的默认值覆盖。
+// TestNewServer_ZeroTimeoutViaRunOption verifies a timeout can be explicitly set to 0
+// (no limit) via RunOption and is not overridden by fillDefault's default value.
 func TestNewServer_ZeroTimeoutViaRunOption(t *testing.T) {
 	s := NewServer(ServerConfig{Port: 8080},
 		WithReadTimeout(0),
@@ -712,22 +720,23 @@ func TestNewServer_ZeroTimeoutViaRunOption(t *testing.T) {
 		WithIdleTimeout(0),
 		WithShutdownTimeout(0),
 	)
-	assert.Equal(t, time.Duration(0), s.conf.ReadTimeout, "WithReadTimeout(0) 应生效，不被默认值覆盖")
+	assert.Equal(t, time.Duration(0), s.conf.ReadTimeout, "WithReadTimeout(0) must win over the default")
 	assert.Equal(t, time.Duration(0), s.conf.WriteTimeout)
 	assert.Equal(t, time.Duration(0), s.conf.IdleTimeout)
 	assert.Equal(t, time.Duration(0), s.conf.ShutdownTimeout)
 }
 
-// TestNewServer_ZeroTimeoutViaConfig 验证通过 ServerConfig 设 0 会被当作"未设置"而使用默认值。
+// TestNewServer_ZeroTimeoutViaConfig verifies that setting 0 via ServerConfig is treated
+// as "unset" and the default value applies.
 func TestNewServer_ZeroTimeoutViaConfig(t *testing.T) {
-	s := NewServer(ServerConfig{Port: 8080}) // 所有 timeout 为零值
-	assert.Equal(t, 10*time.Second, s.conf.ReadTimeout, "ServerConfig 零值应使用默认值")
+	s := NewServer(ServerConfig{Port: 8080}) // all timeouts are zero values
+	assert.Equal(t, 10*time.Second, s.conf.ReadTimeout, "zero value in ServerConfig should use the default")
 	assert.Equal(t, 10*time.Second, s.conf.WriteTimeout)
 	assert.Equal(t, 120*time.Second, s.conf.IdleTimeout)
 	assert.Equal(t, 10*time.Second, s.conf.ShutdownTimeout)
 }
 
-// --- 集成测试 ---
+// --- Integration tests ---
 
 func TestServer_Integration(t *testing.T) {
 	var mu sync.Mutex
@@ -735,19 +744,19 @@ func TestServer_Integration(t *testing.T) {
 
 	s := newTestServer()
 
-	// 全局日志中间件
+	// Global logging middleware
 	s.Use(func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			next(w, r)
 		}
 	})
 
-	// 公开路由
+	// Public route
 	s.AddRoute(Route{
 		Method: "GET", Path: "/health", Handler: func(w http.ResponseWriter, r *http.Request) { OkJSON(w, "ok") },
 	})
 
-	// API v1 路由组（带前缀和中间件）
+	// API v1 route group (with prefix and middleware)
 	s.AddRoutes([]Route{
 		{Method: "GET", Path: "/users", Handler: func(w http.ResponseWriter, r *http.Request) {
 			mu.Lock()
@@ -763,7 +772,7 @@ func TestServer_Integration(t *testing.T) {
 		}},
 	}, WithPrefix("/api/v1"))
 
-	// 使用 Group 创建子路由组
+	// Create a child route group with Group
 	admin := s.Group("/admin")
 	admin.Use(func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -780,44 +789,44 @@ func TestServer_Integration(t *testing.T) {
 		}},
 	)
 
-	// 测试公开路由
+	// Test the public route
 	rec := doRequest(t, s, http.MethodGet, "/health", nil)
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "ok")
 
-	// 测试 API v1 路由
+	// Test the API v1 routes
 	rec = doRequest(t, s, http.MethodGet, "/api/v1/users", nil)
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "list")
 
-	// 测试路径参数
+	// Test path parameters
 	rec = doRequest(t, s, http.MethodGet, "/api/v1/users/42", nil)
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "42")
 
-	// 测试 POST
+	// Test POST
 	rec = doRequest(t, s, http.MethodPost, "/api/v1/users", strings.NewReader(`{"name":"test"}`))
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "created")
 
-	// 测试 admin 路由（无 header 应被拦截）
+	// Test the admin route (no header, so it should be blocked)
 	rec = doRequest(t, s, http.MethodDelete, "/admin/users/1", nil)
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 
-	// 测试 admin 路由（有 header 应通过）
+	// Test the admin route (with header, so it should pass)
 	rec = doRequestWithHeaders(t, s, http.MethodDelete, "/admin/users/1", nil, map[string]string{"X-Admin": "true"})
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "deleted")
 
-	// 打印路由
+	// Print the routes
 	s.PrintRoutes()
 
-	// 验证路由数量
+	// Verify the route count
 	routes := s.Routes()
 	assert.Len(t, routes, 5)
 }
 
-// --- Start/Shutdown 测试 ---
+// --- Start/Shutdown tests ---
 
 func TestServer_StartAndShutdown(t *testing.T) {
 	s := NewServer(ServerConfig{Host: "127.0.0.1", Port: 0, ShutdownTimeout: 2 * time.Second})
@@ -825,7 +834,7 @@ func TestServer_StartAndShutdown(t *testing.T) {
 		Method: "GET", Path: "/ping", Handler: func(w http.ResponseWriter, r *http.Request) { OkJSON(w, "pong") },
 	})
 
-	// 找一个可用端口
+	// Find a free port
 	ln, err := newTestListener()
 	require.NoError(t, err)
 	port := ln.Addr().(*testAddr).port
@@ -833,13 +842,13 @@ func TestServer_StartAndShutdown(t *testing.T) {
 
 	s.conf.Port = port
 
-	// 启动服务器
+	// Start the server
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- s.Start()
 	}()
 
-	// 等待服务器就绪
+	// Wait for the server to be ready
 	var lastErr error
 	for i := 0; i < 50; i++ {
 		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/ping", port))
@@ -854,11 +863,11 @@ func TestServer_StartAndShutdown(t *testing.T) {
 	}
 	require.NoError(t, lastErr, "server should be ready")
 
-	// 关闭服务器
+	// Shut down the server
 	err = s.Shutdown()
 	require.NoError(t, err)
 
-	// 验证服务器已关闭
+	// Verify the server is closed
 	select {
 	case err := <-errCh:
 		assert.NoError(t, err)
@@ -890,7 +899,7 @@ func TestServer_Stop(t *testing.T) {
 		errCh <- s.Start()
 	}()
 
-	// 等待服务器就绪
+	// Wait for the server to be ready
 	var lastErr error
 	for i := 0; i < 50; i++ {
 		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/ping", port))
@@ -905,7 +914,7 @@ func TestServer_Stop(t *testing.T) {
 	}
 	require.NoError(t, lastErr, "server should be ready")
 
-	// Stop 返回 error，委托 Shutdown
+	// Stop returns an error and delegates to Shutdown
 	assert.NoError(t, s.Stop())
 
 	select {
@@ -926,7 +935,7 @@ func TestServer_ContextPropagation(t *testing.T) {
 	s.AddRoute(Route{
 		Method: "GET", Path: "/ctx", Handler: func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
-			_ = ctx // context 应可用于取消、超时等
+			_ = ctx // the context should be usable for cancellation, timeouts, etc.
 			OkJSON(w, "ok")
 		}},
 	)
@@ -935,9 +944,9 @@ func TestServer_ContextPropagation(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
-// --- net.Listener 辅助 ---
+// --- net.Listener helpers ---
 
-// testAddr 用于获取测试端口。
+// testAddr is used to obtain a test port.
 type testAddr struct {
 	network string
 	port    int
@@ -946,7 +955,7 @@ type testAddr struct {
 func (a *testAddr) Network() string { return a.network }
 func (a *testAddr) String() string  { return fmt.Sprintf("127.0.0.1:%d", a.port) }
 
-// testListener 用于获取可用端口。
+// testListener is used to obtain an available port.
 type testListener struct {
 	addr *testAddr
 }
@@ -956,7 +965,7 @@ func (l *testListener) Close() error              { return nil }
 func (l *testListener) Addr() net.Addr            { return l.addr }
 
 func newTestListener() (*testListener, error) {
-	// 使用 net.Listen 获取一个可用端口，然后关闭
+	// Use net.Listen to grab an available port, then close it
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -966,7 +975,7 @@ func newTestListener() (*testListener, error) {
 	return &testListener{addr: &testAddr{network: "tcp", port: addr.Port}}, nil
 }
 
-// --- 自定义错误响应测试 ---
+// --- Custom error response tests ---
 
 func TestSetNotFoundHandler(t *testing.T) {
 	s := newTestServer()
@@ -1010,14 +1019,15 @@ func TestSetNotFoundHandler_MethodNotAllowed(t *testing.T) {
 		Method: "GET", Path: "/users", Handler: func(w http.ResponseWriter, r *http.Request) { OkJSON(w, "users") },
 	})
 
-	// 405 不应被 404 处理器接管
+	// A 405 should not be taken over by the 404 handler
 	rec := doRequest(t, s, http.MethodPost, "/users", nil)
 	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 }
 
-// TestSetNotFoundHandler_Business404NotHijacked 验证业务路由主动返回的 404
-// 不会被全局 404 处理器劫持（历史缺陷：拦截 ResponseWriter 的 404 写入，
-// 导致业务 404 被替换、业务响应体被吞掉）。
+// TestSetNotFoundHandler_Business404NotHijacked verifies a 404 deliberately returned by
+// a business route is not hijacked by the global 404 handler (historical defect:
+// intercepting the 404 written to the ResponseWriter replaced business 404s and
+// swallowed the business response body).
 func TestSetNotFoundHandler_Business404NotHijacked(t *testing.T) {
 	s := newTestServer()
 	s.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
@@ -1026,7 +1036,7 @@ func TestSetNotFoundHandler_Business404NotHijacked(t *testing.T) {
 	s.AddRoute(Route{
 		Method: "GET", Path: "/users/{id}",
 		Handler: func(w http.ResponseWriter, r *http.Request) {
-			// 业务语义上的"资源不存在"，必须原样返回给客户端
+			// A business-level "resource not found" must reach the client unchanged
 			WriteHTTPError(w, http.StatusNotFound, "user not found")
 		},
 	})
@@ -1040,7 +1050,8 @@ func TestSetNotFoundHandler_Business404NotHijacked(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "custom not found")
 }
 
-// TestSetNotFoundHandler_BusinessOtherStatusesNotHijacked 验证其它状态码同样不受影响。
+// TestSetNotFoundHandler_BusinessOtherStatusesNotHijacked verifies other status codes are
+// equally unaffected.
 func TestSetNotFoundHandler_BusinessOtherStatusesNotHijacked(t *testing.T) {
 	s := newTestServer()
 	s.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
@@ -1059,8 +1070,8 @@ func TestSetNotFoundHandler_BusinessOtherStatusesNotHijacked(t *testing.T) {
 	assert.Equal(t, "teapot body", rec.Body.String())
 }
 
-// capsWriter 实现 Flusher / Hijacker / Pusher / Unwrap，
-// 用于验证可选接口不会被 ResponseWriter 包装层吞掉。
+// capsWriter implements Flusher / Hijacker / Pusher / Unwrap,
+// used to verify optional interfaces are not swallowed by the ResponseWriter wrapper.
 type capsWriter struct {
 	*httptest.ResponseRecorder
 }
@@ -1075,9 +1086,10 @@ func (w *capsWriter) Push(string, *http.PushOptions) error { return nil }
 
 func (w *capsWriter) Unwrap() http.ResponseWriter { return w.ResponseRecorder }
 
-// TestSetNotFoundHandler_PreservesWriterCapabilities 验证设置自定义 404 之后，
-// 正常路由的 handler 仍能看到 Flush / Hijack / Push / Unwrap 能力
-// （历史缺陷：包装 writer 未实现这些接口，导致 SSE / WebSocket / HTTP2 静默失效）。
+// TestSetNotFoundHandler_PreservesWriterCapabilities verifies that after setting a custom
+// 404, handlers of normal routes can still see Flush / Hijack / Push / Unwrap
+// (historical defect: the wrapping writer did not implement these interfaces, silently
+// breaking SSE / WebSocket / HTTP2).
 func TestSetNotFoundHandler_PreservesWriterCapabilities(t *testing.T) {
 	s := newTestServer()
 	s.SetNotFoundHandler(func(w http.ResponseWriter, r *http.Request) {
@@ -1117,8 +1129,8 @@ func TestSetNotFoundHandler_PreservesWriterCapabilities(t *testing.T) {
 	assert.Equal(t, "chunk", rec.Body.String())
 }
 
-// TestSetNotFoundHandler_CustomHandlerReceivesCapableWriter 验证自定义 404 处理器
-// 自身也能拿到完整的 writer 能力。
+// TestSetNotFoundHandler_CustomHandlerReceivesCapableWriter verifies the custom 404
+// handler itself also receives the full writer capabilities.
 func TestSetNotFoundHandler_CustomHandlerReceivesCapableWriter(t *testing.T) {
 	var hasFlusher, hasHijacker, hasPusher, hasUnwrap bool
 	s := newTestServer()
@@ -1141,8 +1153,8 @@ func TestSetNotFoundHandler_CustomHandlerReceivesCapableWriter(t *testing.T) {
 	assert.True(t, hasUnwrap)
 }
 
-// TestSetNotFoundHandler_CustomHandlerSeesOriginalRequest 验证自定义 404
-// 处理器收到的仍是最原始的请求（含 method / path / query）。
+// TestSetNotFoundHandler_CustomHandlerSeesOriginalRequest verifies the custom 404
+// handler still receives the original request (including method / path / query).
 func TestSetNotFoundHandler_CustomHandlerSeesOriginalRequest(t *testing.T) {
 	var gotMethod, gotPath, gotQuery string
 	s := newTestServer()

@@ -11,71 +11,73 @@ import (
 	"golang.org/x/crypto/sha3"
 )
 
-// --- HMAC 哈希函数 ---
+// --- HMAC hash functions ---
 
-// HMACSHA1 使用密钥计算数据的 HMAC-SHA1，返回十六进制字符串。
+// HMACSHA1 computes the HMAC-SHA1 of data with a key and returns a hex string.
 func HMACSHA1(key, data []byte) string {
 	return hmacHex(sha1.New, key, data)
 }
 
-// HMACSHA1String 使用密钥计算字符串的 HMAC-SHA1。
+// HMACSHA1String computes the HMAC-SHA1 of a string with a key.
 func HMACSHA1String(key, s string) string {
 	return HMACSHA1([]byte(key), []byte(s))
 }
 
-// HMACSHA256 使用密钥计算数据的 HMAC-SHA256，返回十六进制字符串。
+// HMACSHA256 computes the HMAC-SHA256 of data with a key and returns a hex string.
 func HMACSHA256(key, data []byte) string {
 	return hmacHex(sha256.New, key, data)
 }
 
-// HMACSHA256String 使用密钥计算字符串的 HMAC-SHA256。
+// HMACSHA256String computes the HMAC-SHA256 of a string with a key.
 func HMACSHA256String(key, s string) string {
 	return HMACSHA256([]byte(key), []byte(s))
 }
 
-// HMACSHA512 使用密钥计算数据的 HMAC-SHA512，返回十六进制字符串。
+// HMACSHA512 computes the HMAC-SHA512 of data with a key and returns a hex string.
 func HMACSHA512(key, data []byte) string {
 	return hmacHex(sha512.New, key, data)
 }
 
-// HMACSHA512String 使用密钥计算字符串的 HMAC-SHA512。
+// HMACSHA512String computes the HMAC-SHA512 of a string with a key.
 func HMACSHA512String(key, s string) string {
 	return HMACSHA512([]byte(key), []byte(s))
 }
 
-// HMACSHA3_256 使用密钥计算数据的 HMAC-SHA3-256，返回十六进制字符串。
+// HMACSHA3_256 computes the HMAC-SHA3-256 of data with a key and returns a hex string.
 func HMACSHA3_256(key, data []byte) string {
 	return hmacHex(func() hash.Hash { return sha3.New256() }, key, data)
 }
 
-// HMACSHA3_512 使用密钥计算数据的 HMAC-SHA3-512，返回十六进制字符串。
+// HMACSHA3_512 computes the HMAC-SHA3-512 of data with a key and returns a hex string.
 func HMACSHA3_512(key, data []byte) string {
 	return hmacHex(func() hash.Hash { return sha3.New512() }, key, data)
 }
 
-// --- 通用 HMAC ---
+// --- generic HMAC ---
 
-// HMAC 使用指定的哈希函数和密钥计算数据的 HMAC，返回字节数组。
-// hashFunc 为哈希函数构造器，如 sha256.New。
+// HMAC computes the HMAC of data with the given hash function and key and returns a byte
+// slice. hashFunc is a hash constructor, e.g. sha256.New.
 func HMAC(hashFunc func() hash.Hash, key, data []byte) []byte {
 	h := hmac.New(hashFunc, key)
 	h.Write(data)
 	return h.Sum(nil)
 }
 
-// HMACHex 使用指定的哈希函数和密钥计算数据的 HMAC，返回十六进制字符串。
+// HMACHex computes the HMAC of data with the given hash function and key and returns a
+// hex string.
 func HMACHex(hashFunc func() hash.Hash, key, data []byte) string {
 	return hex.EncodeToString(HMAC(hashFunc, key, data))
 }
 
-// --- 验证 ---
+// --- verification ---
 
-// Equal 比较两个哈希值是否相等（使用恒定时间比较，防止时序攻击）。
+// Equal reports whether two hash values are equal (constant-time comparison, preventing
+// timing attacks).
 func Equal(a, b []byte) bool {
 	return hmac.Equal(a, b)
 }
 
-// EqualHex 比较两个十六进制哈希字符串是否相等（使用恒定时间比较）。
+// EqualHex reports whether two hex hash strings are equal (constant-time comparison).
 func EqualHex(a, b string) bool {
 	aBytes, err := hex.DecodeString(a)
 	if err != nil {
@@ -88,9 +90,10 @@ func EqualHex(a, b string) bool {
 	return hmac.Equal(aBytes, bBytes)
 }
 
-// --- 内部辅助 ---
+// --- internal helpers ---
 
-// hmacHex 使用指定的哈希函数和密钥计算数据的 HMAC，返回十六进制字符串。
+// hmacHex computes the HMAC of data with the given hash function and key and returns a
+// hex string.
 func hmacHex(hashFunc func() hash.Hash, key, data []byte) string {
 	return hex.EncodeToString(HMAC(hashFunc, key, data))
 }

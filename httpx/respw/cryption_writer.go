@@ -5,47 +5,56 @@ import (
 	"net/http"
 )
 
-// CryptionWriter 缓冲 handler 写入的响应，便于整体加密后输出。
-// 供 httpx.WithCryption 中间件使用：handler 的响应先写入内存缓冲，
-// handler 结束后由中间件统一 AES-GCM 加密后输出。
-// maxBufBytes 限制缓冲上限；一旦超出（Overflowed 为 true），
-// 会立即切换为"明文直写底层"模式：先原样写出已缓冲的内容，
-// 之后所有写入直接透传，避免响应被截断（数据损坏）。
+// CryptionWriter buffers the response written by a handler so it can be
+// encrypted as a whole before being sent out.
+// It is used by the httpx.WithCryption middleware: the handler response is
+// buffered in memory first, and the middleware encrypts it with AES-GCM and
+// writes it out once the handler finishes.
+// maxBufBytes caps the buffer size; once it is exceeded (Overflowed is true),
+// the writer switches to "plaintext direct write" mode: the buffered content is
+// written out as-is first, then all later writes are passed straight through,
+// so the response is never truncated (which would corrupt the data).
 type CryptionWriter struct {
 	http.ResponseWriter
 	buf         bytes.Buffer
-	code        int  // 记录状态码；缓冲模式下不透传，加密完成后统一写
-	overflowed  bool // 缓冲是否超限（超限后进入明文透传模式）
-	wroteHeader bool // 是否已把状态码写入底层（透传模式下仅写一次）
-	maxBufBytes int  // 最大缓冲字节数
+	code        int  // records the status code; deferred in buffered mode, written after encryption
+	overflowed  bool // whether the buffer limit was exceeded (plaintext passthrough after that)
+	wroteHeader bool // whether the status code was sent to the underlying writer (once in passthrough mode)
+	maxBufBytes int  // maximum number of buffered bytes
 }
 
-// NewCryptionWriter 创建一个响应加密缓冲包装器。
-// maxBufBytes 为缓冲上限，<=0 表示不限制。
+// NewCryptionWriter creates a buffering wrapper used to encrypt responses.
+// maxBufBytes is the buffer limit; <=0 means no limit.
 func NewCryptionWriter(w http.ResponseWriter, maxBufBytes int) *CryptionWriter {
 	return &CryptionWriter{ResponseWriter: w, maxBufBytes: maxBufBytes}
 }
 
-// Overflowed 返回缓冲是否已超限。
-// 超限后写入已切换为明文直写底层，中间件不应再重复输出缓冲内容。
+// Overflowed reports whether the buffer limit has been exceeded.
+// After that, writes go straight to the underlying writer as plaintext, so the
+// middleware must not emit the buffered content again.
 func (w *CryptionWriter) Overflowed() bool { return w.overflowed }
 
-// StatusCode 返回 handler 记录的状态码（未显式 WriteHeader 时为 0）。
+// StatusCode returns the status code recorded by the handler
+// (0 when WriteHeader was never called explicitly).
 func (w *CryptionWriter) StatusCode() int { return w.code }
 
-// Buffered 返回已缓冲的响应体内容。
+// Buffered returns the buffered response body.
 func (w *CryptionWriter) Buffered() []byte { return w.buf.Bytes() }
 
-// Header 返回底层 ResponseWriter 的响应头。
+// Header returns the response headers of the underlying ResponseWriter.
 func (w *CryptionWriter) Header() http.Header {
 	return w.ResponseWriter.Header()
 }
 
-// Write 将响应体缓冲到内存，待 handler 结束后统一加密输出。
+// Write buffers the response body in memory; it is encrypted and written out as
+// a whole once the handler finishes.
 //
-// 超过 maxBufBytes 时切换为明文透传模式：先把已缓冲内容原样写入底层，
-// 再直写本次及后续写入，保证客户端拿到完整响应。
-// （历史缺陷：超限后仅保留并输出截断的缓冲前缀，响应体静默丢失后半部分。）
+// Once maxBufBytes is exceeded the writer switches to plaintext passthrough
+// mode: the buffered content is written to the underlying writer as-is first,
+// then this write and all later ones go straight through, so the client always
+// receives the complete response.
+// (Historical defect: after overflow only the truncated buffer prefix was kept
+// and emitted, silently dropping the rest of the response body.)
 func (w *CryptionWriter) Write(p []byte) (int, error) {
 	if w.overflowed {
 		return w.ResponseWriter.Write(p)
@@ -65,8 +74,9 @@ func (w *CryptionWriter) Write(p []byte) (int, error) {
 	return w.buf.Write(p)
 }
 
-// WriteHeader 记录状态码，缓冲模式下延迟到加密/透传完成后统一写入底层；
-// 已进入明文透传模式时同步写入底层。
+// WriteHeader records the status code; in buffered mode it is deferred and
+// written to the underlying writer once encryption/passthrough is done, while in
+// plaintext passthrough mode it is forwarded to the underlying writer at once.
 func (w *CryptionWriter) WriteHeader(code int) {
 	w.code = code
 	if w.overflowed {
@@ -74,8 +84,10 @@ func (w *CryptionWriter) WriteHeader(code int) {
 	}
 }
 
-// writeHeaderToUnderlying 把记录的状态码写入底层 ResponseWriter（仅首次）。
-// code 为 0（handler 未显式 WriteHeader）时不写，交由 net/http 隐式写 200。
+// writeHeaderToUnderlying writes the recorded status code to the underlying
+// ResponseWriter (first call only).
+// When code is 0 (the handler never called WriteHeader explicitly) nothing is
+// written and net/http implicitly sends 200.
 func (w *CryptionWriter) writeHeaderToUnderlying() {
 	if w.wroteHeader {
 		return
@@ -86,9 +98,11 @@ func (w *CryptionWriter) writeHeaderToUnderlying() {
 	}
 }
 
-// Flush 在明文透传模式下透传底层 Flush（大响应流式输出所需）；
-// 缓冲模式下为空操作 —— 加密需拿到完整响应体才能统一输出，
-// 提前透传会在数据未就绪时向客户端发出空响应，造成"半发送"状态。
+// Flush forwards to the underlying Flush in plaintext passthrough mode (needed
+// to stream large responses); in buffered mode it is a no-op, because encryption
+// needs the complete response body before writing anything out, and flushing
+// early would send an empty response while the data is not ready yet, leaving the
+// response "half sent".
 func (w *CryptionWriter) Flush() {
 	if !w.overflowed {
 		return

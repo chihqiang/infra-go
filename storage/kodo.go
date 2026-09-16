@@ -13,7 +13,7 @@ import (
 	qstorage "github.com/qiniu/go-sdk/v7/storage"
 )
 
-// kodoStorage 七牛云 KODO 存储实现。
+// kodoStorage is the Qiniu Cloud KODO storage implementation.
 type kodoStorage struct {
 	mac           *qbox.Mac
 	bucket        string
@@ -21,7 +21,7 @@ type kodoStorage struct {
 	url           string
 }
 
-// NewKODO 根据配置创建七牛云 KODO 存储实例。
+// NewKODO creates a Qiniu Cloud KODO storage instance from the configuration.
 func NewKODO(cfg *KODOConfig) (Storage, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("storage: KODO config is nil")
@@ -56,16 +56,16 @@ func NewKODO(cfg *KODOConfig) (Storage, error) {
 	}, nil
 }
 
-// kodoRegions 七牛云存储区域映射。
+// kodoRegions maps Qiniu Cloud storage region names to zones.
 var kodoRegions = map[string]*qstorage.Zone{
-	"z0":  &qstorage.ZoneHuadong,  // 华东
-	"z1":  &qstorage.ZoneHuabei,   // 华北
-	"z2":  &qstorage.ZoneHuanan,   // 华南
-	"na0": &qstorage.ZoneBeimei,   // 北美
-	"as0": &qstorage.ZoneXinjiapo, // 东南亚
+	"z0":  &qstorage.ZoneHuadong,  // East China
+	"z1":  &qstorage.ZoneHuabei,   // North China
+	"z2":  &qstorage.ZoneHuanan,   // South China
+	"na0": &qstorage.ZoneBeimei,   // North America
+	"as0": &qstorage.ZoneXinjiapo, // Southeast Asia
 }
 
-// uploadToken 生成上传凭证。
+// uploadToken generates an upload credential.
 func (s *kodoStorage) uploadToken() string {
 	putPolicy := qstorage.PutPolicy{
 		Scope: s.bucket,
@@ -73,7 +73,7 @@ func (s *kodoStorage) uploadToken() string {
 	return putPolicy.UploadToken(s.mac)
 }
 
-// Write 将内容写入 KODO 指定路径。
+// Write writes content to the given KODO path.
 func (s *kodoStorage) Write(ctx context.Context, path string, content []byte) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("storage: write KODO object %q: %w", path, err)
@@ -94,8 +94,9 @@ func (s *kodoStorage) Write(ctx context.Context, path string, content []byte) er
 	return nil
 }
 
-// Read 下载 KODO 指定路径对象的完整内容。
-// 需要配置公开访问域名 URL（与 URL() 一致）；私有空间的下载需另行走签名 URL，当前不支持。
+// Read downloads the full content of the object at the given KODO path.
+// It requires a public access domain in URL (the same one used by URL());
+// downloading from a private bucket needs a signed URL and is not supported yet.
 func (s *kodoStorage) Read(ctx context.Context, path string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("storage: read KODO object %q: %w", path, err)
@@ -113,8 +114,9 @@ func (s *kodoStorage) Read(ctx context.Context, path string) ([]byte, error) {
 		return nil, fmt.Errorf("storage: failed to read KODO object %q: %w", path, err)
 	}
 	defer resp.Body.Close()
-	// 只接受 2xx：CDN / 反代可能返回 206 等其它成功状态码，
-	// 若只认 200 会把成功的读取误判为失败。
+	// Only 2xx is accepted: a CDN or reverse proxy may return other success
+	// status codes such as 206, and accepting 200 only would misreport a
+	// successful read as a failure.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("storage: failed to read KODO object %q, status code: %d", path, resp.StatusCode)
 	}
@@ -125,8 +127,9 @@ func (s *kodoStorage) Read(ctx context.Context, path string) ([]byte, error) {
 	return data, nil
 }
 
-// Exists 判断 KODO 指定路径的对象是否存在。
-// 通过 Stat 获取对象元信息：HTTP 612（no such file）视为不存在。
+// Exists reports whether the object at the given KODO path exists.
+// It fetches the object metadata via Stat: HTTP 612 (no such file) means the
+// object does not exist.
 func (s *kodoStorage) Exists(ctx context.Context, path string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, fmt.Errorf("storage: check KODO object %q: %w", path, err)
@@ -143,7 +146,8 @@ func (s *kodoStorage) Exists(ctx context.Context, path string) (bool, error) {
 	return false, fmt.Errorf("storage: failed to check KODO object %q: %w", path, err)
 }
 
-// Delete 删除 KODO 指定路径的对象，返回删除的对象数量。
+// Delete removes the object at the given KODO path and returns the number of
+// removed objects.
 func (s *kodoStorage) Delete(ctx context.Context, path string) (int64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, fmt.Errorf("storage: delete KODO object %q: %w", path, err)
@@ -162,9 +166,9 @@ func (s *kodoStorage) Delete(ctx context.Context, path string) (int64, error) {
 	return 1, nil
 }
 
-// URL 根据路径生成完整的 KODO 访问 URL。
-// 使用七牛云 SDK 的 MakePublicURL 生成标准的公开访问 URL。
-// 若配置中未设置 URL 则返回错误。
+// URL builds the full KODO access URL from the given path.
+// It uses MakePublicURL from the Qiniu Cloud SDK to build the standard public
+// access URL. It returns an error when URL is not set in the configuration.
 func (s *kodoStorage) URL(_ context.Context, path string) (string, error) {
 	if s.url == "" {
 		return "", fmt.Errorf("storage: KODO URL is empty, please set URL field in config")

@@ -7,7 +7,7 @@ import (
 	"github.com/hibiken/asynq"
 )
 
-// MarshalPayload 将任意值序列化为 JSON，用作任务 payload。
+// MarshalPayload marshals any value into JSON for use as a task payload.
 func MarshalPayload(v any) ([]byte, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -16,7 +16,7 @@ func MarshalPayload(v any) ([]byte, error) {
 	return data, nil
 }
 
-// UnmarshalPayload 将任务 payload 反序列化到目标值。
+// UnmarshalPayload unmarshals the task payload into the target value.
 func UnmarshalPayload(task *asynq.Task, v any) error {
 	if task == nil {
 		return fmt.Errorf("taskq: task is nil")

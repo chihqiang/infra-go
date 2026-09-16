@@ -1,19 +1,21 @@
 package conf
 
 type (
-	// Option 定义配置加载选项的函数类型。
+	// Option is the function type defining configuration loading options.
 	Option func(opt *options)
 
-	// options 配置加载选项。
+	// options holds the configuration loading options.
 	options struct {
-		// env 是否展开配置文件中的环境变量引用（如 ${VAR}）。
+		// env reports whether to expand environment variable references
+		// (e.g. ${VAR}) in the configuration file.
 		env bool
 	}
 )
 
-// UseEnv 设置在解析配置文件内容时展开环境变量引用。
-// 配置文件中可以使用 ${VAR} 或 $VAR 来引用环境变量；
-// 也支持 ${VAR:-default} 语法：当 VAR 未设置或为空时回退到 default。
+// UseEnv enables expansion of environment variable references while parsing the
+// configuration file content. The config file may use ${VAR} or $VAR to reference
+// environment variables; the ${VAR:-default} syntax is supported as well, falling back
+// to default when VAR is unset or empty.
 func UseEnv() Option {
 	return func(opt *options) {
 		opt.env = true

@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// 对应 max_bytes.go：请求体大小限制中间件。
+// Covers max_bytes.go: the request body size limiting middleware.
 
 func TestMaxBytes_AllowsWithinLimit(t *testing.T) {
 	silenceLogger(t)
@@ -40,7 +40,7 @@ func TestMaxBytes_DisabledWhenNonPositive(t *testing.T) {
 	silenceLogger(t)
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 
-	// n <= 0：不限制，超大 body 也放行
+	// n <= 0: unlimited, even an oversized body is allowed through
 	rec := perform(NewMaxBytes(0).Middleware(), ok, oversizedRequest("0123456789"))
 	assert.Equal(t, http.StatusOK, rec.Code)
 }

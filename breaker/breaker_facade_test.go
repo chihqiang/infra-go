@@ -13,11 +13,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 本文件聚焦公开门面（circuitBreaker/NewBreaker）、包级便捷函数（breakers.go）
-// 与 nopBreaker 全 API 的覆盖：这些路径原先大量 0%。
-// 复用 breaker_test.go 中的白盒 helper：getTestGoogleBreaker/markFailed/verify。
+// This file focuses on coverage of the public facade (circuitBreaker/NewBreaker), the
+// package-level convenience functions (breakers.go) and the whole nopBreaker API:
+// those paths used to be largely at 0%.
+// It reuses the white-box helpers from breaker_test.go: getTestGoogleBreaker/markFailed/verify.
 
-// trippedGoogleBreaker 构造一个已处于打开状态（拒绝请求）的内部 googleBreaker。
+// trippedGoogleBreaker builds an internal googleBreaker that is already open
+// (rejecting requests).
 func trippedGoogleBreaker(t *testing.T) *googleBreaker {
 	t.Helper()
 	b := getTestGoogleBreaker()
@@ -27,7 +29,8 @@ func trippedGoogleBreaker(t *testing.T) *googleBreaker {
 	return b
 }
 
-// facadeWithThrottle 构造公开门面，但将底层算法替换为 inner，便于精确控制状态。
+// facadeWithThrottle builds the public facade but swaps the underlying algorithm for
+// inner, so the state can be controlled precisely.
 func facadeWithThrottle(t *testing.T, inner internalThrottle) *circuitBreaker {
 	t.Helper()
 	cb := NewBreaker(WithName("facade")).(*circuitBreaker)
@@ -35,53 +38,57 @@ func facadeWithThrottle(t *testing.T, inner internalThrottle) *circuitBreaker {
 	return cb
 }
 
-// TestFacade_AllowAndPromise 覆盖公开 Allow() 成功路径、Promise 的 Accept/Reject
-// 以及 errorWindow 记录（promiseWithReason.Reject → errorWindow.add）。
+// TestFacade_AllowAndPromise covers the public Allow() success path, the Promise
+// Accept/Reject methods and the errorWindow record
+// (promiseWithReason.Reject → errorWindow.add).
 func TestFacade_AllowAndPromise(t *testing.T) {
 	b := NewBreaker(WithName("facade-promise"))
 
-	// Accept：不记录失败原因
+	// Accept: no failure reason is recorded
 	promise, err := b.Allow()
 	require.NoError(t, err)
 	promise.Accept()
 
-	// Reject(reason)：记录最近失败原因
+	// Reject(reason): records the most recent failure reason
 	promise, err = b.Allow()
 	require.NoError(t, err)
 	promise.Reject("downstream timeout")
 
-	// errorWindow 应已记录该原因（白盒断言）
+	// errorWindow should have recorded that reason (white-box assertion)
 	cb := b.(*circuitBreaker)
 	ew := cb.throttle.(*loggedThrottle).errWin
 	assert.Contains(t, ew.String(), "downstream timeout")
 }
 
-// TestFacade_CtxNormalVariants 覆盖各公开 Ctx 方法的正常（default）分支：
-// 现有测试只覆盖了 ctx 取消分支，这里补正常放行路径。
+// TestFacade_CtxNormalVariants covers the normal (default) branch of each public Ctx
+// method: the existing tests only covered the ctx-cancelled branch, so the normal
+// pass-through path is added here.
 func TestFacade_CtxNormalVariants(t *testing.T) {
 	b := NewBreaker(WithName("facade-ctx-normal"))
 	ctx := context.Background()
 
-	// AllowCtx 正常
+	// AllowCtx, normal case
 	promise, err := b.AllowCtx(ctx)
 	require.NoError(t, err)
 	promise.Accept()
 
-	// DoCtx 正常
+	// DoCtx, normal case
 	require.NoError(t, b.DoCtx(ctx, func() error { return nil }))
 
-	// DoWithAcceptableCtx 正常：业务错误被 acceptable 接受，不计失败
+	// DoWithAcceptableCtx, normal case: the business error is accepted by acceptable
+	// and not counted as a failure
 	boom := errors.New("business error")
 	err = b.DoWithAcceptableCtx(ctx, func() error { return boom }, func(err error) bool {
 		return errors.Is(err, boom)
 	})
 	assert.ErrorIs(t, err, boom)
-	// 大量被接受错误后熔断仍关闭
+	// The breaker stays closed after plenty of accepted errors
 	assert.NoError(t, b.DoCtx(ctx, func() error { return nil }))
 }
 
-// TestFacade_OpenState 覆盖公开 Allow/Do 在熔断打开时返回
-// ErrServiceUnavailable，并触发 loggedThrottle.logError 完整分支（输出 errorWindow.String）。
+// TestFacade_OpenState covers the public Allow/Do returning ErrServiceUnavailable
+// when the breaker is open, and drives the full loggedThrottle.logError branch
+// (which prints errorWindow.String).
 func TestFacade_OpenState(t *testing.T) {
 	b := facadeWithThrottle(t, trippedGoogleBreaker(t))
 
@@ -95,10 +102,12 @@ func TestFacade_OpenState(t *testing.T) {
 	assert.ErrorIs(t, err, ErrServiceUnavailable)
 }
 
-// TestFacade_RejectedPromiseIsNil 回归测试：熔断打开时 Allow 必须返回 nil Promise。
-// 历史缺陷：始终返回内部 promise 为 nil 的 promiseWithReason（非 nil 外壳），
-// 调用方（例如统一 defer p.Accept()）忽略 err 直接使用时会 nil 解引用 panic，
-// 也不符合 Breaker.Allow 的契约。
+// TestFacade_RejectedPromiseIsNil is a regression test: Allow must return a nil
+// Promise when the breaker is open.
+// Historical defect: it always returned a promiseWithReason whose inner promise was
+// nil (a non-nil shell), so callers that ignore err and use the value directly
+// (e.g. a deferred p.Accept()) panicked with a nil dereference, and it also broke
+// the Breaker.Allow contract.
 func TestFacade_RejectedPromiseIsNil(t *testing.T) {
 	b := facadeWithThrottle(t, trippedGoogleBreaker(t))
 
@@ -106,7 +115,7 @@ func TestFacade_RejectedPromiseIsNil(t *testing.T) {
 	require.ErrorIs(t, err, ErrServiceUnavailable)
 	assert.Nil(t, promise, "rejected Allow must return a nil Promise")
 
-	// 允许时仍返回可用 Promise
+	// When allowed it still returns a usable Promise
 	b2 := NewBreaker(WithName("facade-promise-ok"))
 	promise, err = b2.Allow()
 	require.NoError(t, err)
@@ -114,9 +123,10 @@ func TestFacade_RejectedPromiseIsNil(t *testing.T) {
 	require.NotPanics(t, func() { promise.Accept() })
 }
 
-// TestErrorWindow_ConcurrentStringAndAdd 回归测试：errorWindow 的并发读写。
-// 历史缺陷：String() 在加锁之前读取 ew.count 来 make 切片，
-// 与锁内更新 count 的 add 构成数据竞争（-race 可检出）。
+// TestErrorWindow_ConcurrentStringAndAdd is a regression test for concurrent
+// reads and writes of errorWindow.
+// Historical defect: String() read ew.count before taking the lock to make the
+// slice, racing with add, which updates count under the lock (detectable with -race).
 func TestErrorWindow_ConcurrentStringAndAdd(t *testing.T) {
 	b := facadeWithThrottle(t, trippedGoogleBreaker(t))
 	ew := b.throttle.(*loggedThrottle).errWin
@@ -125,7 +135,7 @@ func TestErrorWindow_ConcurrentStringAndAdd(t *testing.T) {
 	const iterations = 200
 
 	var wg sync.WaitGroup
-	// 并发写入：模拟多个请求同时上报失败原因
+	// Concurrent writers: simulate many requests reporting failure reasons at once
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func(n int) {
@@ -135,7 +145,7 @@ func TestErrorWindow_ConcurrentStringAndAdd(t *testing.T) {
 			}
 		}(i)
 	}
-	// 并发读取：熔断打开时 logError 会调用 String()
+	// Concurrent readers: logError calls String() when the breaker is open
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
@@ -147,12 +157,13 @@ func TestErrorWindow_ConcurrentStringAndAdd(t *testing.T) {
 	}
 	wg.Wait()
 
-	// 环形缓冲最多保留 numHistoryReasons 条
+	// The ring buffer keeps at most numHistoryReasons entries
 	assert.LessOrEqual(t, len(strings.Split(ew.String(), "\n")), numHistoryReasons)
 }
 
-// TestFacade_ConcurrentOpenAndAllow 在熔断打开状态下并发调用 Allow，
-// 覆盖 logError + errorWindow.String 的并发路径（配合 -race 检测）。
+// TestFacade_ConcurrentOpenAndAllow calls Allow concurrently while the breaker is
+// open, covering the concurrent path of logError + errorWindow.String (checked with
+// -race).
 func TestFacade_ConcurrentOpenAndAllow(t *testing.T) {
 	b := facadeWithThrottle(t, trippedGoogleBreaker(t))
 
@@ -167,7 +178,8 @@ func TestFacade_ConcurrentOpenAndAllow(t *testing.T) {
 	wg.Wait()
 }
 
-// TestFacade_FallbackVariantsWhenOpen 覆盖各 Fallback 变体在熔断打开时执行降级。
+// TestFacade_FallbackVariantsWhenOpen covers each Fallback variant running the
+// degradation logic while the breaker is open.
 func TestFacade_FallbackVariantsWhenOpen(t *testing.T) {
 	fbErr := errors.New("fallback-result")
 
@@ -217,8 +229,9 @@ func TestFacade_FallbackVariantsWhenOpen(t *testing.T) {
 	})
 }
 
-// TestFacade_FallbackIgnoredWhenClosed 覆盖熔断关闭时 fallback 不介入，
-// 请求错误原样返回（仅 acceptable 决定是否计入失败）。
+// TestFacade_FallbackIgnoredWhenClosed covers that fallback does not step in while
+// the breaker is closed and the request error is returned as is (only acceptable
+// decides whether it counts as a failure).
 func TestFacade_FallbackIgnoredWhenClosed(t *testing.T) {
 	b := facadeWithThrottle(t, getTestGoogleBreaker())
 	boom := errors.New("boom")
@@ -231,8 +244,8 @@ func TestFacade_FallbackIgnoredWhenClosed(t *testing.T) {
 	assert.ErrorIs(t, err, boom)
 }
 
-// TestFacade_CtxCancelled 覆盖三个公开 Ctx 变体的 context 取消分支
-// （DoWithAcceptableCtx/DoWithFallbackCtx/DoWithFallbackAcceptableCtx）。
+// TestFacade_CtxCancelled covers the context-cancelled branch of the three public
+// Ctx variants (DoWithAcceptableCtx/DoWithFallbackCtx/DoWithFallbackAcceptableCtx).
 func TestFacade_CtxCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -249,19 +262,20 @@ func TestFacade_CtxCancelled(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestNopBreakerFullAPI 覆盖 nopBreaker 除 Do/Allow 外的全部方法
-// 以及 nopPromise 的 Accept/Reject（原先均 0%）。
+// TestNopBreakerFullAPI covers every nopBreaker method apart from Do/Allow, plus the
+// nopPromise Accept/Reject methods (all previously at 0%).
 func TestNopBreakerFullAPI(t *testing.T) {
 	b := NopBreaker()
 	ctx := context.Background()
 
-	// AllowCtx 返回 nopPromise
+	// AllowCtx returns nopPromise
 	promise, err := b.AllowCtx(ctx)
 	require.NoError(t, err)
 	promise.Accept()
 	promise.Reject("ignored")
 
-	// 各 Do 变体：直接执行 req，忽略 acceptable/fallback，panic 也不熔断
+	// Each Do variant: req runs directly, acceptable/fallback are ignored, and a panic
+	// does not trip anything
 	called := 0
 	req := func() error { called++; return nil }
 	assert.NoError(t, b.DoCtx(ctx, req))
@@ -273,16 +287,18 @@ func TestNopBreakerFullAPI(t *testing.T) {
 		func(error) bool { return false }))
 	assert.NoError(t, b.DoWithFallbackAcceptableCtx(ctx, req,
 		func(error) error { return errors.New("fb") }, func(error) bool { return false }))
-	assert.Equal(t, 7, called, "每个变体都应执行一次 req")
+	assert.Equal(t, 7, called, "every variant should run req once")
 
-	// nop 不做降级：req 失败时原样返回，fallback 不生效
+	// nop does not degrade: a failing req is returned as is and fallback has no effect
 	boom := errors.New("boom")
 	err = b.DoWithFallback(func() error { return boom }, func(error) error { return nil })
 	assert.ErrorIs(t, err, boom)
 }
 
-// TestGlobalBreakerHelpers 覆盖 breakers.go 的包级便捷函数（Do 已在既有测试覆盖，
-// 这里补其余 7 个变体）。通过 NoBreakerFor 注册 nop，行为确定且不依赖时间窗口。
+// TestGlobalBreakerHelpers covers the package-level convenience functions in
+// breakers.go (Do is already covered by existing tests; the remaining 7 variants are
+// added here). NoBreakerFor registers a nop, so the behaviour is deterministic and
+// does not depend on the time window.
 func TestGlobalBreakerHelpers(t *testing.T) {
 	name := fmt.Sprintf("global-helpers-%d", time.Now().UnixNano())
 	NoBreakerFor(name)
@@ -294,7 +310,8 @@ func TestGlobalBreakerHelpers(t *testing.T) {
 	assert.NoError(t, DoCtx(ctx, name, func() error { called++; return nil }))
 	assert.Equal(t, 1, called)
 
-	// DoWithAcceptable / DoWithAcceptableCtx：返回 req 实际错误（可接受也照常返回）
+	// DoWithAcceptable / DoWithAcceptableCtx: return the actual error from req (accepted
+	// errors are still returned)
 	for _, fn := range []func() error{
 		func() error {
 			return DoWithAcceptable(name, func() error { return boom }, func(error) bool { return true })
@@ -306,7 +323,7 @@ func TestGlobalBreakerHelpers(t *testing.T) {
 		assert.ErrorIs(t, fn(), boom)
 	}
 
-	// DoWithFallback 系列：nop 忽略 fallback，错误原样返回
+	// DoWithFallback family: nop ignores fallback and the error is returned as is
 	fbRun := false
 	assert.ErrorIs(t, DoWithFallback(name, func() error { return boom },
 		func(error) error { fbRun = true; return nil }), boom)
@@ -316,5 +333,5 @@ func TestGlobalBreakerHelpers(t *testing.T) {
 		func(error) error { fbRun = true; return nil }, func(error) bool { return false }), boom)
 	assert.ErrorIs(t, DoWithFallbackAcceptableCtx(ctx, name, func() error { return boom },
 		func(error) error { fbRun = true; return nil }, func(error) bool { return false }), boom)
-	assert.False(t, fbRun, "nop 不执行 fallback")
+	assert.False(t, fbRun, "nop must not run fallback")
 }

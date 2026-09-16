@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 对应 request_id.go：request_id context 工具与 RequestID 中间件。
+// Covers request_id.go: the request_id context helpers and the RequestID middleware.
 
 func TestRequestIDContext_RoundTrip(t *testing.T) {
 	ctx := ContextWithRequestID(context.Background(), "req-123")
@@ -31,7 +31,7 @@ func TestRequestID_FromHeader(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "client-provided-id", rec.Header().Get(HeaderRequestID))
-	assert.Equal(t, "client-provided-id", got) // 注入的 id 与回写头一致
+	assert.Equal(t, "client-provided-id", got) // the injected id matches the header written back
 }
 
 func TestRequestID_Generate(t *testing.T) {
@@ -45,7 +45,7 @@ func TestRequestID_Generate(t *testing.T) {
 	rec := perform(NewRequestID().Middleware(), next, req)
 
 	header := rec.Header().Get(HeaderRequestID)
-	require.NotEmpty(t, header) // 未带请求头时自动生成
+	require.NotEmpty(t, header) // generated automatically when no header is provided
 	assert.NotEmpty(t, got)
 	assert.Equal(t, header, got)
 	assert.Equal(t, "X-Request-Id", HeaderRequestID)

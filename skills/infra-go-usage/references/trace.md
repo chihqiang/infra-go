@@ -1,29 +1,39 @@
-# trace — 链路追踪
+# trace — distributed tracing
 
-基于 [OpenTelemetry](https://opentelemetry.io) 的链路追踪包，提供简洁 API 用于在服务间传递与记录链路上下文。
+A distributed tracing package built on [OpenTelemetry](https://opentelemetry.io), with a concise
+API for propagating and recording trace context between services.
 
-> **HTTP 服务端追踪中间件**已迁至 `httpx/middleware` 子包（`middleware.NewTracing`），并由 httpx 主包 `httpx.WithTracing` 便捷注册（见 [httpx](./httpx.md)）。`trace` 包专注：TracerProvider 装配、span 管理、gRPC/HTTP 头传播与属性封装。
+> The **HTTP server tracing middleware** has moved to the `httpx/middleware` subpackage
+> (`middleware.NewTracing`) and is registered conveniently via `httpx.WithTracing` in the main
+> httpx package (see [httpx](./httpx.md)). The `trace` package focuses on: TracerProvider assembly,
+> span management, gRPC/HTTP header propagation, and attribute wrappers.
 
-## 特性
+## Features
 
-- **多导出器支持**：OTLP gRPC、OTLP HTTP、Zipkin、文件输出
-- **gRPC / HTTP 传播**：链路上下文在 gRPC metadata 与 HTTP header 间自动注入/提取
-- **配置驱动**：Config 用 `default` 结构体标签定义默认值，遵循 conf 标准
-- **日志集成**：注册 context 提取器，`logger.XxxCtx` 自动携带 `trace_id`/`span_id`
-- **资源管理**：支持添加自定义资源属性（服务名、环境等）
-- **全局单例**：`StartAgent` 用锁 + `currentAgent` 管理生命周期，重复调用会忽略新配置并告警；
-  `StopAgent` 后可重新 `StartAgent`（旧实现用 `sync.Once`，导致停止后无法重启）
-- **采样控制**：可配置采样率（`0`~`1.0`）；注意 `Config.Sampler = 0` 会被当作未设置并回落为 `1.0`，
-  需要「不主动采样、仅跟随上游」请用 `trace.StartAgent(cfg, trace.WithSampler(0))`，它与 `Disabled` **不等价**
-- **易用封装**：封装 `attribute`/`trace` 类型，日常调用无需直接使用 OpenTelemetry API（仅在显式声明返回类型时才需导入 `go.opentelemetry.io/otel/trace`）
+- **Multiple exporters**: OTLP gRPC, OTLP HTTP, Zipkin, file output
+- **gRPC / HTTP propagation**: trace context is injected/extracted automatically between gRPC
+  metadata and HTTP headers
+- **Config-driven**: Config defines defaults with `default` struct tags, following the conf standard
+- **Logger integration**: registers a context extractor so `logger.XxxCtx` automatically carries
+  `trace_id`/`span_id`
+- **Resource management**: supports adding custom resource attributes (service name, environment, etc.)
+- **Global singleton**: `StartAgent` manages the lifecycle with a lock plus `currentAgent`;
+  repeated calls ignore the new config and log a warning. After `StopAgent` you can call
+  `StartAgent` again (the old implementation used `sync.Once`, which made restarting impossible)
+- **Sampling control**: configurable sample rate (`0`–`1.0`); note that `Config.Sampler = 0` counts
+  as unset and falls back to `1.0`. For "do not sample proactively, only follow the upstream" use
+  `trace.StartAgent(cfg, trace.WithSampler(0))`, which is **not** equivalent to `Disabled`
+- **Convenient wrappers**: wraps the `attribute`/`trace` types, so everyday calls need no direct
+  OpenTelemetry API (only explicit return-type declarations require importing
+  `go.opentelemetry.io/otel/trace`)
 
-## 安装
+## Installation
 
 ```bash
 go get github.com/chihqiang/infra-go/trace
 ```
 
-## 快速开始
+## Quick start
 
 ```go
 import "github.com/chihqiang/infra-go/trace"
@@ -41,14 +51,15 @@ func main() {
     defer span.End()
 
     traceID := trace.TraceIDFromContext(ctx)
-    // logger.XxxCtx 会自动带 trace_id / span_id（空导入 trace 即注册提取器）
+    // logger.XxxCtx carries trace_id / span_id automatically (importing trace wires up the extractor)
     logger.InfoCtx(ctx, "handle", logger.String("handler", "main"))
 }
 ```
 
-> HTTP 服务端自动埋点：`httpx.WithTracing()`（在 `WithLogger` 前注册，使访问日志带上 `trace_id`）。
+> Automatic instrumentation on the HTTP server: `httpx.WithTracing()` (register it before
+> `WithLogger` so access logs carry `trace_id`).
 
-## 配置
+## Configuration
 
 ```go
 trace.StartAgent(trace.Config{
@@ -64,104 +75,109 @@ trace.StartAgent(trace.Config{
 })
 ```
 
-| 字段 | 类型 | 默认值 | 说明 |
+| Field | Type | Default | Description |
 |------|------|--------|------|
-| `Name` | `string` | `infra-go` | 服务名称，标识链路来源 |
-| `Endpoint` | `string` | `""` | 导出器地址（file 类型为文件路径） |
-| `Sampler` | `float64` | `1.0` | 采样率（`0`~`1.0`）；直接写 `0` 会被忽略并回落 `1.0`，需要 `0` 请用 `WithSampler(0)` |
-| `Batcher` | `Batcher` | `otlpgrpc` | 导出器类型 |
-| `OtlpHeaders` | `map[string]string` | `nil` | OTLP 传输自定义请求头 |
-| `OtlpHttpPath` | `string` | `""` | OTLP HTTP 路径 |
-| `OtlpHttpSecure` | `bool` | `false` | OTLP HTTP 是否使用 HTTPS |
-| `OtlpGrpcSecure` | `bool` | `false` | OTLP gRPC 是否使用 TLS（连接 TLS collector） |
-| `Disabled` | `bool` | `false` | 是否禁用链路追踪（不创建 TracerProvider） |
+| `Name` | `string` | `infra-go` | Service name, identifying the trace source |
+| `Endpoint` | `string` | `""` | Exporter address (a file path for the file type) |
+| `Sampler` | `float64` | `1.0` | Sample rate (`0`–`1.0`); a literal `0` is ignored and falls back to `1.0`, use `WithSampler(0)` if you need `0` |
+| `Batcher` | `Batcher` | `otlpgrpc` | Exporter type |
+| `OtlpHeaders` | `map[string]string` | `nil` | Custom request headers for OTLP transport |
+| `OtlpHttpPath` | `string` | `""` | OTLP HTTP path |
+| `OtlpHttpSecure` | `bool` | `false` | Whether OTLP HTTP uses HTTPS |
+| `OtlpGrpcSecure` | `bool` | `false` | Whether OTLP gRPC uses TLS (connecting to a TLS collector) |
+| `Disabled` | `bool` | `false` | Whether to disable tracing (no TracerProvider is created) |
 
-### 采样率为 0：`WithSampler(0)` vs `Disabled`
+### Sample rate 0: `WithSampler(0)` vs `Disabled`
 
-`fillDefault` 采用「字段 == 0 视为未设置」的规则，因此 `Config{Sampler: 0}` 会被填充为 `1.0`。
-需要 `0` 时用 Option 形式（在默认值填充之后应用）：
+`fillDefault` follows the "field == 0 means unset" rule, so `Config{Sampler: 0}` is filled in as
+`1.0`. Use the Option form when you need `0` (it is applied after the defaults are filled in):
 
 ```go
-// 根 span 不采样，但上游已采样的链路仍会继续上报（降本常用）
+// the root span is not sampled, but traces already sampled upstream keep being reported
+// (a common cost saver)
 trace.StartAgent(cfg, trace.WithSampler(0))
 ```
 
-两者语义不同，不要互相替代：
+The two have different semantics, so do not substitute one for the other:
 
-| 配置 | TracerProvider | 根 span | 上游已采样的链路 |
+| Config | TracerProvider | Root span | Traces already sampled upstream |
 |------|----------------|---------|------------------|
-| `WithSampler(0)` | 正常创建 | 不采样 | 继续上报（`ParentBased`） |
-| `Disabled: true` | 不创建 | — | 不上报 |
+| `WithSampler(0)` | Created normally | Not sampled | Keep being reported (`ParentBased`) |
+| `Disabled: true` | Not created | — | Not reported |
 
-| 导出器类型 | 说明 | Endpoint 示例 |
+| Exporter type | Description | Endpoint example |
 |------|------|---------------|
-| `otlpgrpc` | OTLP gRPC 导出（默认） | `localhost:4317` |
-| `otlphttp` | OTLP HTTP 导出 | `localhost:4318` |
-| `zipkin` | Zipkin 导出 | `http://localhost:9411/api/v2/spans` |
-| `file` | 输出到文件 | `/var/log/trace.log` |
+| `otlpgrpc` | OTLP gRPC export (default) | `localhost:4317` |
+| `otlphttp` | OTLP HTTP export | `localhost:4318` |
+| `zipkin` | Zipkin export | `http://localhost:9411/api/v2/spans` |
+| `file` | Output to a file | `/var/log/trace.log` |
 
 ## API
 
-### Agent 与 Span
+### Agent and span
 
 ```go
-trace.StartAgent(cfg)  // 启动（全局单例）
-trace.StopAgent()      // 关闭（程序退出前调用）
+trace.StartAgent(cfg)  // start (global singleton)
+trace.StopAgent()      // stop (call before the program exits)
 
-ctx, span := trace.StartSpan(ctx, "op") // 创建并启动 span
+ctx, span := trace.StartSpan(ctx, "op") // create and start a span
 defer span.End()
 
-tracer  := trace.TracerFromContext(ctx) // 从 context 获取 tracer
-traceID := trace.TraceIDFromContext(ctx) // trace id（日志关联用）
+tracer  := trace.TracerFromContext(ctx) // get the tracer from the context
+traceID := trace.TraceIDFromContext(ctx) // trace id (for correlating logs)
 spanID  := trace.SpanIDFromContext(ctx)
 ```
 
-### gRPC 传播
+### gRPC propagation
 
 ```go
-// 客户端：注入链路上下文到 gRPC metadata
+// client: inject the trace context into gRPC metadata
 md := metadata.Pairs()
 trace.Inject(ctx, &md)
 ctx = metadata.NewOutgoingContext(ctx, md)
 
-// 服务端：从 gRPC metadata 提取链路上下文
+// server: extract the trace context from gRPC metadata
 md, _ := metadata.FromIncomingContext(ctx)
 ctx, spanContext := trace.Extract(ctx, &md)
 ```
 
-### HTTP 传播（客户端发起 / 服务端提取）
+### HTTP propagation (client inject / server extract)
 
 ```go
-// 客户端：注入链路上下文到 HTTP header
+// client: inject the trace context into HTTP headers
 req, _ := http.NewRequest("GET", "http://example.com", nil)
-trace.InjectHeader(ctx, req.Header) // 写入 Traceparent
+trace.InjectHeader(ctx, req.Header) // writes Traceparent
 client.Do(req)
 
-// 服务端：从 HTTP header 提取（供非 httpx 的框架手动接入）
+// server: extract from HTTP headers (manual integration for non-httpx frameworks)
 ctx, spanContext := trace.ExtractHeader(r.Context(), r.Header)
 ```
 
-### HTTP 服务端中间件（已迁移）
+### HTTP server middleware (moved)
 
-HTTP 服务端追踪中间件现位于 `httpx/middleware` 子包，经 `httpx.WithTracing(ignorePaths...)` 注册即可，自动完成：提取上游 span 上下文（W3C traceparent）→ 创建服务端 span（携带 method/path/status 等语义属性）→ 注入 context 供下游关联 `trace_id`：
+The HTTP server tracing middleware now lives in the `httpx/middleware` subpackage; register it
+with `httpx.WithTracing(ignorePaths...)` and it automatically: extracts the upstream span context
+(W3C traceparent) → creates a server span (carrying semantic attributes such as method/path/status)
+→ injects the context so downstream code can correlate `trace_id`:
 
 ```go
 // httpx
-server.Use(httpx.WithTracing())                            // 追踪全部
-server.Use(httpx.WithTracing("/health*", "/metrics/*"))   // 跳过探活
+server.Use(httpx.WithTracing())                            // trace everything
+server.Use(httpx.WithTracing("/health*", "/metrics/*"))   // skip probes
 
-// 标准 net/http / 其它框架
+// standard net/http / other frameworks
 import "github.com/chihqiang/infra-go/httpx/middleware"
 handler := middleware.NewTracing("/health*", "/metrics/*").Middleware()(mux)
 http.ListenAndServe(":8080", handler)
 ```
 
-### 属性
+### Attributes
 
-封装 `attribute` 包，无需直接导入 `go.opentelemetry.io/otel/attribute`：
+Wraps the `attribute` package, so `go.opentelemetry.io/otel/attribute` never needs to be imported
+directly:
 
 ```go
-trace.AttrString("key", "value")       // 字符串
+trace.AttrString("key", "value")       // string
 trace.AttrInt("count", 42)             // int
 trace.AttrInt64("id", 9999999999)      // int64
 trace.AttrBool("enabled", true)        // bool
@@ -170,7 +186,7 @@ trace.AttrStringSlice("tags", []string{"a", "b"})
 trace.AttrIntSlice("nums", []int{1, 2, 3})
 ```
 
-创建 span 时携带属性：
+Attach attributes when creating a span:
 
 ```go
 ctx, span := trace.StartSpan(ctx, "operation",
@@ -183,17 +199,17 @@ ctx, span := trace.StartSpan(ctx, "operation",
 defer span.End()
 ```
 
-### 资源属性
+### Resource attributes
 
 ```go
-// 添加自定义资源属性（在 StartAgent 之前调用）
+// add custom resource attributes (call before StartAgent)
 trace.AddResources(
     trace.AttrString("env", "production"),
     trace.AttrString("region", "us-east-1"),
 )
 ```
 
-## 完整示例
+## Full example
 
 ```go
 package main
@@ -211,7 +227,8 @@ import (
 func main() {
     logInstance := logger.New(logger.Config{Level: logger.InfoLevel, AppName: "demo"})
     logger.SetGlobal(logInstance)
-    // ILogger 接口不含 Close（Close 仅在 *Logger 具体类型上）；退出前用包级 Sync 刷缓冲
+    // the ILogger interface has no Close (Close exists only on the *Logger concrete type);
+    // flush buffers with the package-level Sync before exiting
     defer logger.Sync()
 
     trace.AddResources(trace.AttrString("env", "development"))
@@ -241,7 +258,7 @@ func callHTTP(ctx context.Context) {
     defer span.End()
 
     req, _ := http.NewRequest("GET", "http://localhost:9090/api", nil)
-    trace.InjectHeader(ctx, req.Header) // 写入 Traceparent
+    trace.InjectHeader(ctx, req.Header) // writes Traceparent
     fmt.Println("trace-id header:", req.Header.Get("Traceparent"))
 }
 ```

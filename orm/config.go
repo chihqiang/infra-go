@@ -6,103 +6,110 @@ import (
 	"github.com/chihqiang/infra-go/mapping"
 )
 
-// Driver 数据库驱动类型。
+// Driver is the database driver type.
 type Driver string
 
 const (
-	// DriverMySQL MySQL 驱动。
+	// DriverMySQL is the MySQL driver.
 	DriverMySQL Driver = "mysql"
-	// DriverPostgres PostgreSQL 驱动。
+	// DriverPostgres is the PostgreSQL driver.
 	DriverPostgres Driver = "postgres"
-	// DriverSQLite SQLite 驱动。
+	// DriverSQLite is the SQLite driver.
 	DriverSQLite Driver = "sqlite"
 )
 
-// LogLevel GORM 日志级别类型。
+// LogLevel is the GORM log level type.
 type LogLevel int
 
 const (
-	// LogSilent 静默模式，不输出任何日志。
+	// LogSilent is silent mode, which outputs no logs at all.
 	LogSilent LogLevel = 1
-	// LogError 仅输出错误日志。
+	// LogError only outputs error logs.
 	LogError LogLevel = 2
-	// LogWarn 输出警告及以上级别日志。
+	// LogWarn outputs warnings and above.
 	LogWarn LogLevel = 3
-	// LogInfo 输出所有日志（包括 SQL）。
+	// LogInfo outputs all logs (including SQL).
 	LogInfo LogLevel = 4
 )
 
-// Config 数据库配置。
-// 默认值通过结构体标签 default 定义，遵循 conf 标准。
-// 零值字段在 New 时会自动填充默认值。
+// Config is the database configuration.
+// Default values are declared with the struct tag default, following the conf standard.
+// Zero-valued fields are filled in with their defaults by New.
 type Config struct {
-	// Driver 数据库驱动类型，支持 "mysql"、"postgres"、"sqlite"，必填。
+	// Driver is the database driver type; "mysql", "postgres" and "sqlite" are
+	// supported. It is required.
 	Driver Driver `json:"driver"`
 
-	// DSN 数据源名称，完整连接字符串。
-	// 如果设置了 DSN，将优先使用 DSN 连接，忽略 Host/Port/Username/Password/Database 字段。
-	// 例如 MySQL: "user:password@tcp(127.0.0.1:3306)/dbname?charset=utf8mb4&parseTime=true"
-	// 例如 Postgres: "host=127.0.0.1 user=postgres password=secret dbname=mydb port=5432 sslmode=disable"
-	// 例如 SQLite: "file::memory:?cache=shared"
+	// DSN is the data source name, a complete connection string.
+	// When DSN is set it takes precedence and the Host/Port/Username/Password/Database
+	// fields are ignored.
+	// For example MySQL: "user:password@tcp(127.0.0.1:3306)/dbname?charset=utf8mb4&parseTime=true"
+	// For example Postgres: "host=127.0.0.1 user=postgres password=secret dbname=mydb port=5432 sslmode=disable"
+	// For example SQLite: "file::memory:?cache=shared"
 	DSN string `json:",optional"`
 
-	// Host 数据库主机地址，默认 "127.0.0.1"。
+	// Host is the database host address; defaults to "127.0.0.1".
 	Host string `json:",default=127.0.0.1"`
-	// Port 数据库端口。
-	// MySQL 默认 3306，Postgres 默认 5432，SQLite 默认 0。
+	// Port is the database port.
+	// MySQL defaults to 3306, Postgres to 5432 and SQLite to 0.
 	Port int `json:",optional"`
-	// Username 数据库用户名，默认 "root"。
+	// Username is the database user name; defaults to "root".
 	Username string `json:",default=root"`
-	// Password 数据库密码，默认空。
+	// Password is the database password; defaults to empty.
 	Password string `json:",optional"`
-	// Database 数据库名称（SQLite 为文件路径），默认 ""。
+	// Database is the database name (for SQLite it is the file path); defaults to "".
 	Database string `json:",optional"`
 
-	// SSLMode PostgreSQL SSL 模式，默认 "disable"。
-	// 可选值：disable、allow、prefer、require、verify-ca、verify-full。
-	// 生产环境建议设为 "require" 及以上以启用加密连接。
+	// SSLMode is the PostgreSQL SSL mode; defaults to "disable".
+	// Possible values: disable, allow, prefer, require, verify-ca, verify-full.
+	// For production it is recommended to set "require" or stricter to enable encrypted
+	// connections.
 	SSLMode string `json:",default=disable"`
 
-	// TimeZone 数据库会话时区，默认 "Asia/Shanghai"。
-	// 影响连接到 PostgreSQL 时的时间戳解释。
-	// 常见值：UTC、Asia/Shanghai、America/New_York 等。
+	// TimeZone is the database session time zone; defaults to "Asia/Shanghai".
+	// It affects how timestamps are interpreted when connecting to PostgreSQL.
+	// Common values: UTC, Asia/Shanghai, America/New_York, etc.
 	TimeZone string `json:",default=Asia/Shanghai"`
 
-	// MaxIdleConns 最大空闲连接数，默认 10。
+	// MaxIdleConns is the maximum number of idle connections; defaults to 10.
 	MaxIdleConns int `json:",default=10"`
-	// MaxOpenConns 最大打开连接数，默认 100。
+	// MaxOpenConns is the maximum number of open connections; defaults to 100.
 	MaxOpenConns int `json:",default=100"`
-	// ConnMaxLifetime 连接最大存活时间，默认 30 分钟。
+	// ConnMaxLifetime is the maximum lifetime of a connection; defaults to 30 minutes.
 	ConnMaxLifetime time.Duration `json:",default=30m"`
-	// ConnMaxIdleTime 连接最大空闲时间，默认 10 分钟。
+	// ConnMaxIdleTime is the maximum idle time of a connection; defaults to 10 minutes.
 	ConnMaxIdleTime time.Duration `json:",default=10m"`
 
-	// LogLevel GORM 日志级别，默认 LogWarn。
+	// LogLevel is the GORM log level; defaults to LogWarn.
 	LogLevel LogLevel `json:",default=3"`
-	// SlowThreshold 慢查询阈值，超过此时间的 SQL 会被记录为慢查询，默认 200 毫秒。
+	// SlowThreshold is the slow query threshold: SQL taking longer than this is recorded
+	// as a slow query. It defaults to 200 milliseconds.
 	SlowThreshold time.Duration `json:",default=200ms"`
-	// Colorful 是否启用彩色日志输出，默认 false。
+	// Colorful reports whether colourful log output is enabled; defaults to false.
 	Colorful bool `json:",optional"`
-	// SkipDefaultTransaction 是否跳过默认事务，默认 true。
-	// 开启后普通写入操作不会自动包装在事务中，可提升约 30% 性能。
+	// SkipDefaultTransaction reports whether the default transaction is skipped; defaults
+	// to true.
+	// When enabled, ordinary write operations are not automatically wrapped in a
+	// transaction, which can improve performance by roughly 30%.
 	SkipDefaultTransaction bool `json:",default=true"`
-	// TablePrefix 表名前缀，默认空。
+	// TablePrefix is the table name prefix; defaults to empty.
 	TablePrefix string `json:",optional"`
-	// SingularTable 是否使用单数表名，默认 false。
+	// SingularTable reports whether singular table names are used; defaults to false.
 	SingularTable bool `json:",optional"`
 }
 
-// fillDefault 填充默认值，然后用用户配置中的非零字段覆盖。
-// 使用 mapping.FillAndOverride 统一处理。
-// DSN、Password、Database 字段为空字符串时也视为有效值（始终覆盖），
-// 这通过标签 optional 且无 default 实现（shouldOverride 中 string optional 无 default 始终覆盖）。
+// fillDefault fills in the default values and then overrides them with the non-zero fields
+// of the user configuration, using mapping.FillAndOverride for both steps.
+// An empty DSN, Password or Database is also treated as a valid value (it always
+// overrides); this is achieved by the optional tag with no default (in shouldOverride a
+// string that is optional and has no default always overrides).
 func fillDefault(cfg Config) Config {
 	var c Config
 	mapping.MustFillAndOverride(&c, cfg)
 	return c
 }
 
-// defaultPort 返回指定驱动的默认端口。
+// defaultPort returns the default port of the given driver.
 func defaultPort(driver Driver) int {
 	switch driver {
 	case DriverMySQL:

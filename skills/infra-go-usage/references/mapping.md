@@ -1,29 +1,29 @@
 # mapping
 
-结构体标签解析与 `map[string]any` 反序列化工具包。
+A struct tag parsing and `map[string]any` deserialization toolkit.
 
-支持通过结构体标签定义默认值、环境变量、可选字段、枚举验证、范围验证等扩展功能，是 `conf` 及其他包填充默认配置的底层基础。
+It supports defining defaults, environment variables, optional fields, enum validation and range validation through struct tags, and is the underlying foundation that `conf` and other packages use to fill in default configuration.
 
-## 特性
+## Features
 
-- **默认值**：`default=xxx` 标签，未提供值时自动填充
-- **环境变量**：`env=VAR_NAME` 标签，优先从环境变量读取
-- **可选字段**：`optional` 标签，未提供值时跳过而不报错
-- **枚举验证**：`options=[a,b,c]` 标签，限制字段值范围
-- **范围验证**：`range=[0:65535]` 标签，数值范围校验
-- **字符串模式**：`string` 标签，强制从字符串解析值
-- **大小写不敏感**：`WithCanonicalKeyFunc` 选项，支持配置 key 大小写不敏感匹配
-- **仅填充默认值**：`WithDefault()` 选项，用于零值结构体填充默认配置
-- **填充并覆盖**：`FillAndOverride` / `MustFillAndOverride`，先填充默认值再用用户配置的非零字段覆盖，消除各模块重复的 `fillDefault` 代码
-- **类型丰富**：支持基本类型、`time.Duration`、切片、map、指针、嵌套结构体、匿名嵌入结构体
+- **Defaults**: the `default=xxx` tag fills the value in when none is provided
+- **Environment variables**: the `env=VAR_NAME` tag reads from the environment first
+- **Optional fields**: the `optional` tag skips the field instead of erroring when no value is provided
+- **Enum validation**: the `options=[a,b,c]` tag restricts the allowed field values
+- **Range validation**: the `range=[0:65535]` tag validates numeric ranges
+- **String mode**: the `string` tag forces the value to be parsed from a string
+- **Case-insensitive**: the `WithCanonicalKeyFunc` option enables case-insensitive matching of config keys
+- **Defaults only**: the `WithDefault()` option fills default config into a zero-value struct
+- **Fill and override**: `FillAndOverride` / `MustFillAndOverride` fill defaults first and then override them with the user config's non-zero fields, removing the duplicated `fillDefault` code in each module
+- **Rich type support**: primitives, `time.Duration`, slices, maps, pointers, nested structs, anonymous embedded structs
 
-## 安装
+## Installation
 
 ```bash
 go get github.com/chihqiang/infra-go/mapping
 ```
 
-## 快速开始
+## Quick start
 
 ```go
 package main
@@ -60,42 +60,43 @@ func main() {
 }
 ```
 
-## 结构体标签
+## Struct tags
 
-所有标签选项使用逗号分隔，写在 `json` 标签值中（第一个段为字段名，后续段为选项）。
+All tag options are comma-separated inside the `json` tag value (the first segment is the field name, the following segments are options).
 
-### 标签格式
+### Tag format
 
 ```text
-`json:"<字段名>,<选项1>,<选项2>,..."`
+`json:"<field name>,<option1>,<option2>,..."`
 ```
 
-如果不需要指定字段名（使用结构体字段名），可以用逗号开头：
+If you don't need to specify a field name (using the struct field name instead), you can start with a comma:
 
 ```text
 `json:",default=localhost"`
 ```
 
-### 支持的标签选项
+### Supported tag options
 
-| 选项 | 格式 | 说明 |
+| Option | Format | Description |
 | ------ | ------ | ------ |
-| `default` | `default=<值>` | 默认值，未提供时自动填充 |
-| `env` | `env=<变量名>` | 环境变量名，优先从环境变量读取 |
-| `optional` | `optional` / `optional=dep` / `optional=!dep` | 字段可选；带依赖时条件可选 |
-| `options` | `options=[a,b,c]` 或 `options=a\|b\|c` | 枚举验证，值必须在列表中 |
-| `range` | `range=[min:max]` | 数值范围验证 |
-| `string` | `string` | 强制从字符串模式解析值 |
+| `default` | `default=<value>` | Default value, filled in when none is provided |
+| `env` | `env=<var name>` | Environment variable name; read from the environment first |
+| `optional` | `optional` / `optional=dep` / `optional=!dep` | Field is optional; with a dependency it is conditionally optional |
+| `options` | `options=[a,b,c]` or `options=a\|b\|c` | Enum validation; the value must be in the list |
+| `range` | `range=[min:max]` | Numeric range validation |
+| `string` | `string` | Force the value to be parsed in string mode |
 
-> **未知选项会报错**。标签中的拼写错误（如 `optinal`）或前缀误写
-> （如 `defaultFoo=bar`）会直接返回 `unknown option` 错误，而不是被静默忽略。
-> 这使得“标签写错导致字段行为不符预期”能在加载期被发现，
-> 而不是等到运行期以 `field not set` 的形式暴露。
+> **Unknown options are an error**. A typo in a tag (such as `optinal`) or a mis-written prefix
+> (such as `defaultFoo=bar`) returns an `unknown option` error instead of being silently ignored.
+> That way "a misspelled tag makes the field behave unexpectedly" is caught at load time rather
+> than surfacing later at runtime as `field not set`.
 >
-> 历史上 `inherit` 会被解析但从未生效，现已明确报错（本设计中没有“父级”概念）：
-> 如果确实需要继承语义，请显式写出值或给字段加 `default`。
+> Historically `inherit` was parsed but never took effect; it now errors explicitly (this design has
+> no notion of a "parent"): if you genuinely need inheritance semantics, write the value out
+> explicitly or give the field a `default`.
 
-### 默认值（default）
+### Defaults (default)
 
 ```go
 type Config struct {
@@ -104,7 +105,7 @@ type Config struct {
 }
 ```
 
-支持切片默认值（JSON 数组或方括号分隔）：
+Slice defaults are supported (JSON array or bracketed list):
 
 ```go
 type Config struct {
@@ -112,73 +113,73 @@ type Config struct {
 }
 ```
 
-### 环境变量（env）
+### Environment variables (env)
 
-环境变量优先级高于默认值和配置文件中的值：
+Environment variables take precedence over defaults and over values in the config file:
 
 ```go
 type Config struct {
     Name string `json:"name,env=APP_NAME"`
 }
-// 如果环境变量 APP_NAME 已设置，使用其值
+// if the APP_NAME environment variable is set, its value is used
 ```
 
-### 可选字段（optional）
+### Optional fields (optional)
 
-未标记 `optional` 且未提供值的字段会报错。标记后未提供值时跳过：
+A field without `optional` that receives no value is an error. Once marked, a missing value is skipped:
 
 ```go
 type Config struct {
-    Name string `json:"name"`           // 必填
-    Port int    `json:",optional"`      // 可选，未提供时为零值
+    Name string `json:"name"`           // required
+    Port int    `json:",optional"`      // optional; zero value when not provided
 }
 ```
 
-#### 条件可选（optional=dep）
+#### Conditional optionality (optional=dep)
 
-可以声明“仅在某个依赖被设置时才可选”，依赖名为**配置键**
-（即依赖字段的 json/yaml 标签键）：
+You can declare that a field is optional only when some dependency is set; the dependency name is a **config key** (that is, the json/yaml tag key of the dependency field):
 
 ```go
 type Config struct {
-    // 依赖存在时可选：给了 use_proxy 就可以不写 proxy_url
+    // optional when the dependency exists: with use_proxy given, proxy_url may be omitted
     UseProxy bool   `json:"use_proxy,optional"`
     ProxyURL string `json:"proxy_url,optional=use_proxy"`
 
-    // 依赖不存在时可选：没给 mode 就不需要提供 custom_mode
+    // optional when the dependency does not exist: without mode, custom_mode need not be provided
     Mode       string `json:"mode,optional"`
     CustomMode string `json:"custom_mode,optional=!mode"`
 }
 ```
 
-语义与覆盖规则：
+Semantics and override rules:
 
-| 标签 | 可选条件 | 条件不满足时 |
+| Tag | Optional when | When the condition is not met |
 |------|---------|-------------|
-| `optional=dep` | `dep` **已设置** | 未提供值则报错（视为必填） |
-| `optional=!dep` | `dep` **未设置** | 未提供值则报错（视为必填） |
+| `optional=dep` | `dep` **is set** | a missing value is an error (treated as required) |
+| `optional=!dep` | `dep` **is not set** | a missing value is an error (treated as required) |
 
-- 依赖名必须能匹配同一结构体（含匿名嵌入字段）中的某个字段键，
-  否则返回 `does not match any field key` 错误 —— 避免依赖名写错导致
-  条件可选静默失效。
-- 依赖查找与字段取值走同一路径：配置 `WithCanonicalKeyFunc(strings.ToLower)`
-  时同样大小写不敏感。
-- 字段同时有 `default` 时**忽略依赖检查**：默认值总能填上值，依赖与之无关。
-- 字段自己提供了值时不做依赖判定。
+- The dependency name must match a field key in the same struct (including anonymous embedded fields),
+  otherwise a `does not match any field key` error is returned — this prevents a misspelled dependency name
+  from silently disabling conditional optionality.
+- Dependency lookup and field values follow the same path: with `WithCanonicalKeyFunc(strings.ToLower)`
+  configured, it is case-insensitive as well.
+- When a field also has a `default`, **the dependency check is skipped**: a default always provides a value,
+  so the dependency is irrelevant.
+- When the field provides a value itself, no dependency is evaluated.
 
-### 枚举验证（options）
+### Enum validation (options)
 
 ```go
 type Config struct {
     Mode string `json:"mode,options=[dev,prod,test]"`
-    // 或使用管道分隔：json:"mode,options=dev|prod|test"
+    // or pipe-separated: json:"mode,options=dev|prod|test"
 }
-// 值不在列表中时会报错
+// an error is returned when the value is not in the list
 ```
 
-### 范围验证（range）
+### Range validation (range)
 
-支持闭区间 `[min:max]` 和开区间 `(min:max)`，以及混合：
+Closed ranges `[min:max]`, open ranges `(min:max)` and mixtures are supported:
 
 ```go
 type Config struct {
@@ -190,35 +191,35 @@ type Config struct {
 }
 ```
 
-格式说明：
+Format notes:
 
-- `[` 表示包含左边界，`(` 表示不包含
-- `]` 表示包含右边界，`)` 表示不包含
-- `[:max]` 表示只有上界，`[min:]` 表示只有下界
+- `[` includes the left edge, `(` excludes it
+- `]` includes the right edge, `)` excludes it
+- `[:max]` means only an upper bound, `[min:]` only a lower bound
 
-约束在所有写入路径上一致生效，不会因值的来源或表示形式被绕过：
+Constraints apply consistently on every write path and cannot be bypassed by the source or representation of a value:
 
-| 值的来源 / 形式 | 是否校验 |
+| Value source / form | Validated |
 |----------------|:---:|
-| 配置中的原生数值（`port: 9090`） | ✅ |
-| 类型不匹配、需字符串转换的值（`port: "9090"`、`json.Number`） | ✅ |
-| 环境变量覆盖（`env=PORT`） | ✅ |
-| 标签中声明的 `default` | ✅ |
-| `time.Duration` 字段（比较单位为**纳秒**，与底层 `int64` 一致） | ✅ |
-| `FillDefault` 填充的默认值 | ✅ |
+| Native numbers in the config (`port: 9090`) | ✅ |
+| Values needing string conversion on a type mismatch (`port: "9090"`, `json.Number`) | ✅ |
+| Environment variable overrides (`env=PORT`) | ✅ |
+| A `default` declared in the tag | ✅ |
+| `time.Duration` fields (compared in **nanoseconds**, matching the underlying `int64`) | ✅ |
+| Defaults filled by `FillDefault` | ✅ |
 
 ```go
 type Config struct {
-    // 越界默认值属于标签声明错误，会在加载期直接报错
+    // an out-of-range default is a tag declaration error and fails immediately at load time
     Port    int           `json:",default=8080,range=[1:65535]"`
-    // duration 的 range 以纳秒为单位：1ns ≤ timeout ≤ 10s
+    // a duration range is in nanoseconds: 1ns ≤ timeout ≤ 10s
     Timeout time.Duration `json:",default=5s,range=[1:10000000000]"`
 }
 ```
 
-### 组合使用
+### Combining options
 
-多个选项可以组合使用：
+Several options can be combined:
 
 ```go
 type Config struct {
@@ -227,9 +228,9 @@ type Config struct {
 }
 ```
 
-## 支持的数据类型
+## Supported data types
 
-| 类型 | 示例 |
+| Type | Example |
 | ------ | ------ |
 | `string` | `` Host string `json:"host"` `` |
 | `int/int8/.../int64` | `` Port int `json:"port"` `` |
@@ -237,17 +238,17 @@ type Config struct {
 | `float32/float64` | `` Score float64 `json:"score"` `` |
 | `bool` | `` Debug bool `json:"debug"` `` |
 | `time.Duration` | `` Timeout time.Duration `json:"timeout"` `` |
-| `[]string` / `[]int` 等 | `` Hosts []string `json:"hosts"` `` |
+| `[]string` / `[]int` etc. | `` Hosts []string `json:"hosts"` `` |
 | `map[string]string` | `` Labels map[string]string `json:"labels"` `` |
-| 指针类型 | `` Host *string `json:"host"` `` |
-| 嵌套结构体 | 自动递归处理 |
-| 匿名嵌入结构体 | 自动展开处理 |
+| Pointer types | `` Host *string `json:"host"` `` |
+| Nested structs | handled recursively |
+| Anonymous embedded structs | flattened automatically |
 
 ## API
 
 ### UnmarshalJsonMap
 
-使用默认的 `json` 标签将 map 反序列化到结构体：
+Deserializes a map into a struct using the default `json` tag:
 
 ```go
 func UnmarshalJsonMap(m map[string]any, v any, opts ...UnmarshalOption) error
@@ -260,7 +261,7 @@ err := mapping.UnmarshalJsonMap(m, &cfg)
 
 ### UnmarshalKey
 
-`UnmarshalJsonMap` 的简化版，不带额外选项：
+A simplified version of `UnmarshalJsonMap` without extra options:
 
 ```go
 func UnmarshalKey(m map[string]any, v any) error
@@ -268,9 +269,9 @@ func UnmarshalKey(m map[string]any, v any) error
 
 ### NewDefaultUnmarshaler
 
-创建仅填充默认值的反序列化器（等价于 `NewUnmarshaler("json", WithDefault())`），
-是 conf、logger、orm、redisx、jwt、httpx、taskq、trace 等模块中 fillDefault
-模式的统一入口：
+Creates an unmarshaler that only fills defaults (equivalent to `NewUnmarshaler("json", WithDefault())`).
+It is the single entry point for the fillDefault pattern used by the conf, logger, orm, redisx, jwt,
+httpx, taskq and trace modules:
 
 ```go
 func NewDefaultUnmarshaler() *Unmarshaler
@@ -283,7 +284,7 @@ err := u.Unmarshal(map[string]any{}, &cfg)
 
 ### NewUnmarshaler
 
-创建自定义配置的反序列化器：
+Creates an unmarshaler with a custom configuration:
 
 ```go
 func NewUnmarshaler(key string, opts ...UnmarshalOption) *Unmarshaler
@@ -294,22 +295,22 @@ u := mapping.NewUnmarshaler("json", mapping.WithDefault())
 err := u.Unmarshal(map[string]any{}, &cfg)
 ```
 
-### 配置选项
+### Configuration options
 
 ```go
-// 仅填充默认值和环境变量（结构体必须为零值）
+// fill only defaults and environment variables (the struct must be zero-valued)
 mapping.WithDefault()
 
-// 从字符串模式解析所有值
+// parse all values in string mode
 mapping.WithStringValues()
 
-// 键名规范化（如大小写不敏感匹配）
+// key normalization (e.g. case-insensitive matching)
 mapping.WithCanonicalKeyFunc(strings.ToLower)
 ```
 
-### 仅填充默认值
+### Filling defaults only
 
-`WithDefault()` 模式用于零值结构体填充默认配置，不读取任何 map 数据：
+The `WithDefault()` mode fills default config into a zero-value struct and reads no map data at all:
 
 ```go
 type LoggerConfig struct {
@@ -325,45 +326,47 @@ err := u.Unmarshal(map[string]any{}, &cfg)
 
 ### FillAndOverride / MustFillAndOverride
 
-先用标签默认值填充 `defaults`，再用 `overrides` 中的非零字段覆盖。
-这是各模块 `fillDefault` 的统一替代方案，消除重复的逐字段覆盖代码。
+First fills `defaults` with the tag defaults, then overrides them with the non-zero fields of `overrides`.
+This is the unified replacement for each module's `fillDefault` and removes the duplicated per-field override code.
 
 ```go
 func FillAndOverride(defaults any, overrides any) error
-func MustFillAndOverride(defaults any, overrides any) // 出错 panic
+func MustFillAndOverride(defaults any, overrides any) // panics on error
 ```
 
-**覆盖规则**：
+**Override rules**:
 
-| 类型 | 覆盖条件 | 说明 |
+| Type | Override condition | Description |
 | ------ | ------ | ------ |
-| 指针类型 | 非 nil 即覆盖 | 支持 `*int=0`、`*string=""` 等显式零值 |
-| 布尔类型 | `true` 覆盖 | `false` 视为未设置；需用 `*bool` 显式设 false |
-| string | 非空覆盖 | 空字符串视为未设置；`optional` 且无 `default` 的 string 始终覆盖 |
-| slice/map | 非 nil 且非空覆盖 | 空切片/map 视为未设置 |
-| 嵌套结构体 | 递归覆盖子字段 | 保留默认值，只覆盖非零子字段 |
-| 其他类型 | 非零值覆盖 | — |
+| Pointer types | overridden whenever non-nil | supports explicit zero values such as `*int=0`, `*string=""` |
+| Boolean | overridden when `true` | `false` counts as unset; use `*bool` to set false explicitly |
+| string | overridden when non-empty | an empty string counts as unset; an `optional` string without `default` is always overridden |
+| slice/map | overridden when non-nil and non-empty | an empty slice/map counts as unset |
+| Nested structs | recursively overrides sub-fields | defaults are kept and only non-zero sub-fields are overridden |
+| Other types | overridden when non-zero | — |
 
-> **`optional` 标签的特殊语义**：标为 `optional` 且无 `default` 的 string 类型字段（如 `Password`、`DSN`、`KeyPrefix`）会被视为"始终使用用户值"，即空字符串也会覆盖。这与各模块原有的手写 `fillDefault` 行为一致。
+> **Special semantics of the `optional` tag**: a string field marked `optional` without a `default`
+> (such as `Password`, `DSN`, `KeyPrefix`) is treated as "always use the user's value", i.e. an empty
+> string overrides as well. This matches the hand-written `fillDefault` behavior of the modules.
 
 ```go
 type Config struct {
     Host     string        `json:",default=127.0.0.1"`
     Port     int           `json:",default=8080"`
-    Password string        `json:",optional"`  // 空字符串也是有效值
+    Password string        `json:",optional"`  // an empty string is a valid value too
     Timeout  time.Duration `json:",default=5s"`
 }
 
 var c Config
 mapping.MustFillAndOverride(&c, Config{
-    Host:     "0.0.0.0",   // 覆盖默认值
-    Port:     9090,         // 覆盖默认值
-    Password: "",            // 覆盖（optional 无 default，空字符串也生效）
-    // Timeout 未设置，保留默认值 5s
+    Host:     "0.0.0.0",   // overrides the default
+    Port:     9090,         // overrides the default
+    Password: "",            // overrides (optional without default: empty string still counts)
+    // Timeout not set, so the default 5s is kept
 })
 ```
 
-### 大小写不敏感匹配
+### Case-insensitive matching
 
 ```go
 type Config struct {
@@ -371,19 +374,19 @@ type Config struct {
     Port int    `json:"port"`
 }
 
-// 配置文件中的 "HOST"、"Host"、"host" 都能匹配
+// "HOST", "Host" and "host" in the config file all match
 m := map[string]any{"HOST": "localhost", "PORT": json.Number("8080")}
 err := mapping.UnmarshalJsonMap(m, &cfg, mapping.WithCanonicalKeyFunc(strings.ToLower))
 ```
 
-## 在项目中的角色
+## Role in the project
 
-`mapping` 是一个底层工具包，被以下包共用：
+`mapping` is a low-level toolkit shared by the following packages:
 
-- **conf**：配置文件解析（JSON/YAML → map → 结构体）
-- **logger**：填充日志默认配置（`MustFillAndOverride`）
-- **orm**：填充数据库默认配置（`MustFillAndOverride`）
-- **redisx**：填充 Redis 默认配置（`MustFillAndOverride`）
-- **httpx**：填充 HTTP 服务器默认配置（`MustFillAndOverride`）
-- **jwt**：填充 JWT 默认配置（`MustFillAndOverride`）
-- **trace**：填充链路追踪默认配置
+- **conf**: config file parsing (JSON/YAML → map → struct)
+- **logger**: fills the logging defaults (`MustFillAndOverride`)
+- **orm**: fills the database defaults (`MustFillAndOverride`)
+- **redisx**: fills the Redis defaults (`MustFillAndOverride`)
+- **httpx**: fills the HTTP server defaults (`MustFillAndOverride`)
+- **jwt**: fills the JWT defaults (`MustFillAndOverride`)
+- **trace**: fills the tracing defaults

@@ -1,42 +1,47 @@
 # service
 
-服务组管理包，支持并发启动、并发停止多个服务，Panic 恢复和优雅关闭。
+A service group manager that starts and stops several services concurrently, with panic
+recovery and graceful shutdown.
 
-## 特性
+## Features
 
-- **并发启动**：所有 Service 并发调用 `Start`，阻塞直到全部退出
-- **并发停止**：所有 Service 并发调用 `Stop`，`sync.Once` 保证只执行一次
-- **Panic 恢复**：`Start` 和 `Stop` 中的 panic 都会被恢复，通过 `logger` 记录错误日志，不中断其他服务；`Start` 中 panic 自动触发 `Stop` 解除其他服务阻塞
-- **适配函数**：`WithStart` / `WithStarter` 包装普通函数；`AsService` 适配 `Start() error` + `Stop() error` 对象（如 `httpx.Server`）
-- **日志集成**：使用 `infra-go/logger` 全局日志记录错误
+- **Concurrent start**: all Services call `Start` concurrently; blocks until all of them exit
+- **Concurrent stop**: all Services call `Stop` concurrently, with `sync.Once` guaranteeing it
+  runs only once
+- **Panic recovery**: panics in both `Start` and `Stop` are recovered and logged through
+  `logger` without interrupting other services; a panic in `Start` automatically triggers `Stop`
+  to unblock the other services
+- **Adapters**: `WithStart` / `WithStarter` wrap plain functions; `AsService` adapts objects
+  with `Start() error` + `Stop() error` (such as `httpx.Server`)
+- **Logger integration**: errors are recorded with the global `infra-go/logger`
 
-## 安装
+## Installation
 
 ```bash
 go get github.com/chihqiang/infra-go/service
 ```
 
-## 核心接口
+## Core interfaces
 
 ```go
-// Starter 启动服务
+// Starter starts a service
 type Starter interface {
     Start()
 }
 
-// Stopper 停止服务
+// Stopper stops a service
 type Stopper interface {
     Stop()
 }
 
-// Service 同时具备 Start 和 Stop 能力
+// Service can both Start and Stop
 type Service interface {
     Starter
     Stopper
 }
 ```
 
-## 快速开始
+## Quick start
 
 ```go
 package main
@@ -51,7 +56,7 @@ import (
 func main() {
     sg := service.NewServiceGroup()
 
-    // HTTP 服务
+    // HTTP service
     server := httpx.NewServer(httpx.ServerConfig{
         Host: "0.0.0.0",
         Port: 8080,
@@ -63,37 +68,40 @@ func main() {
         },
     })
 
-    // 用 service.AsService 将 *httpx.Server 适配为 Service 直接管理
-    // （AsService 适配 Start() error + Stop() error 的对象；Start 阻塞直到收到信号优雅关闭）
+    // Adapt *httpx.Server into a Service with service.AsService for direct management
+    // (AsService adapts objects with Start() error + Stop() error; Start blocks until the signal
+    // arrives and triggers a graceful shutdown)
     sg.Add(service.AsService(server))
 
-    // 启动所有服务（阻塞）
+    // start all services (blocking)
     sg.Start()
 }
 ```
 
-## 多服务管理
+## Managing multiple services
 
 ```go
 sg := service.NewServiceGroup()
 
-// 添加多个服务：
-// - 形如 *httpx.Server（Start() error + Stop() error）的对象用 service.AsService 直接适配
-// - 无停止能力/需自行处理退出信号的普通函数用 service.WithStart
-sg.Add(service.AsService(server))                  // HTTP 服务（httpx.Server）
-sg.Add(service.WithStart(func() { _ = consumer.Run() })) // Redis 消费者（asynq）
-sg.Add(service.WithStart(func() { cronTick() }))  // 定时任务
+// Adding several services:
+// - objects shaped like *httpx.Server (Start() error + Stop() error) go straight through
+//   service.AsService
+// - plain functions with no stop capability, or that handle the exit signal themselves, use
+//   service.WithStart
+sg.Add(service.AsService(server))                  // HTTP service (httpx.Server)
+sg.Add(service.WithStart(func() { _ = consumer.Run() })) // Redis consumer (asynq)
+sg.Add(service.WithStart(func() { cronTick() }))  // cron job
 
-// 并发启动，阻塞直到全部退出
+// start concurrently, blocking until all of them exit
 sg.Start()
 
-// 手动停止（通常在信号处理中调用）
+// stop manually (usually called from a signal handler)
 sg.Stop()
 ```
 
-## 自定义 Service
+## Custom Service
 
-实现 `Service` 接口：
+Implement the `Service` interface:
 
 ```go
 type MyService struct {
@@ -101,33 +109,33 @@ type MyService struct {
 }
 
 func (s *MyService) Start() {
-    <-s.stopCh // 阻塞直到 Stop
+    <-s.stopCh // blocks until Stop
 }
 
 func (s *MyService) Stop() {
-    close(s.stopCh) // 解除 Start 阻塞
+    close(s.stopCh) // unblocks Start
 }
 
-// 使用
+// usage
 sg.Add(&MyService{stopCh: make(chan struct{})})
 ```
 
-## 适配函数
+## Adapter functions
 
 ### WithStart
 
-将普通 `func()` 包装为 Service（`Stop` 为空操作）：
+Wraps a plain `func()` into a Service (`Stop` is a no-op):
 
 ```go
 sg.Add(service.WithStart(func() {
-    // 启动逻辑（非阻塞时 Start 立即返回）
+    // start-up logic (Start returns immediately when it is non-blocking)
     runWorker()
 }))
 ```
 
 ### WithStarter
 
-将 `Starter` 接口包装为 Service（`Stop` 为空操作）：
+Wraps a `Starter` interface into a Service (`Stop` is a no-op):
 
 ```go
 type MyStarter struct{}
@@ -138,84 +146,88 @@ sg.Add(service.WithStarter(&MyStarter{}))
 
 ### AsService
 
-将实现了 `Start() error` 与 `Stop() error` 的对象适配为 Service，可直接 `sg.Add`。
-典型对象如 `httpx.Server`（其 `Start` / `Stop` 均返回 error，签名与 `Service.Starter`/`Stopper` 不同，无法直接作为 Service）：
+Adapts objects that implement `Start() error` and `Stop() error` into a Service, ready for
+`sg.Add`. A typical object is `httpx.Server` (both its `Start` and `Stop` return an error, so the
+signatures differ from `Service.Starter`/`Stopper` and it cannot be used as a Service directly):
 
 ```go
 server := httpx.NewServer(httpx.ServerConfig{Host: "0.0.0.0", Port: 8080})
-// ...注册路由...
+// ...register routes...
 
-sg.Add(service.AsService(server)) // 纳入 ServiceGroup 统一管理
+sg.Add(service.AsService(server)) // managed together by the ServiceGroup
 ```
 
-`Start` / `Stop` 返回的 error 均记录为日志（`Service` 接口无返回值，无法向上传递）；`Start` 中 panic 仍由 ServiceGroup 恢复并触发 `Stop`。
+The errors returned by `Start` / `Stop` are both logged (the `Service` interface has no return
+value, so they cannot be propagated); a panic in `Start` is still recovered by the ServiceGroup,
+which triggers `Stop`.
 
-## Panic 处理
+## Panic handling
 
-Panic 不会导致程序崩溃，全部通过 `logger` 全局日志记录。
+Panics never crash the program; they are all recorded through the global `logger`.
 
-### Start 中 Panic
+### Panic in Start
 
-如果某个 Service 在 `Start` 中 panic：
+If a Service panics inside `Start`:
 
-1. Panic 被恢复
-2. 通过 `logger.Errorf` 记录错误日志
-3. 自动触发 `Stop()` 停止所有其他服务（解除阻塞）
-4. `Start()` 正常返回，不重新 panic
+1. The panic is recovered
+2. The error is logged via `logger.Errorf`
+3. `Stop()` is triggered automatically to stop all other services (unblocking them)
+4. `Start()` returns normally and does not re-panic
 
 ```go
 sg := service.NewServiceGroup()
-sg.Add(normalService)     // 正常服务
-sg.Add(panicService)      // Start 中 panic
+sg.Add(normalService)     // a normal service
+sg.Add(panicService)      // panics inside Start
 
-sg.Start() // 正常返回，不 panic
-// 日志输出格式（源码实际格式）:
-// {"level":"ERROR",...,"msg":"service: panic during start, index: <idx>, type: <服务类型>, reason: <panic 值>"}
+sg.Start() // returns normally, no panic
+// log output format (the actual format used by the source):
+// {"level":"ERROR",...,"msg":"service: panic during start, index: <idx>, type: <service type>, reason: <panic value>"}
 
-// normalService 已被 Stop
+// normalService has been stopped
 ```
 
-### Stop 中 Panic
+### Panic in Stop
 
-如果某个 Service 在 `Stop` 中 panic：
+If a Service panics inside `Stop`:
 
-1. Panic 被恢复
-2. 通过 `logger.Errorf` 记录错误日志
-3. 不影响其他服务的停止
+1. The panic is recovered
+2. The error is logged via `logger.Errorf`
+3. Stopping of the other services is unaffected
 
 ```go
-sg.Stop() // 正常返回，panic 被记录
-// 日志输出格式（源码实际格式）:
-// {"level":"ERROR",...,"msg":"service: panic during stop, index: <idx>, type: <服务类型>, reason: <panic 值>"}
+sg.Stop() // returns normally; the panic was logged
+// log output format (the actual format used by the source):
+// {"level":"ERROR",...,"msg":"service: panic during stop, index: <idx>, type: <service type>, reason: <panic value>"}
 ```
 
 ## API
 
 ### ServiceGroup
 
-| 方法 | 说明 |
+| Method | Description |
 | ------ | ------ |
-| `NewServiceGroup()` | 创建服务组 |
-| `Add(service)` | 添加服务（追加到尾部；启动按添加顺序，停止按逆序） |
-| `Start()` | 并发启动所有服务，阻塞直到全部退出 |
-| `Stop()` | 并发停止所有服务，保证只执行一次 |
+| `NewServiceGroup()` | Create a service group |
+| `Add(service)` | Add a service (appended to the end; start follows the addition order, stop runs in reverse) |
+| `Start()` | Start all services concurrently; blocks until all of them exit |
+| `Stop()` | Stop all services concurrently, guaranteed to run only once |
 
-### 适配函数 API
+### Adapter function API
 
-| 函数 | 说明 |
+| Function | Description |
 | ------ | ------ |
-| `WithStart(fn)` | 将 `func()` 包装为 Service（Stop 空操作） |
-| `WithStarter(s)` | 将 `Starter` 包装为 Service（Stop 空操作） |
-| `AsService(s)` | 将 `Start() error` + `Stop() error` 对象（如 `httpx.Server`）适配为 Service |
+| `WithStart(fn)` | Wrap a `func()` into a Service (Stop is a no-op) |
+| `WithStarter(s)` | Wrap a `Starter` into a Service (Stop is a no-op) |
+| `AsService(s)` | Adapt an object with `Start() error` + `Stop() error` (such as `httpx.Server`) into a Service |
 
-## 停止顺序
+## Stop order
 
-`Add` 将服务追加到尾部，启动按添加顺序执行；`Stop` 逆序遍历（后添加的先停止）：
+`Add` appends services to the end and startup follows the addition order; `Stop` walks the list
+in reverse (the ones added last stop first):
 
 ```text
 Add(A)  → services: [A]
 Add(B)  → services: [A, B]
 Add(C)  → services: [A, B, C]
 
-Stop 顺序: C → B → A（逆序，但并发执行，不保证精确顺序）
+Stop order: C → B → A (reverse, but executed concurrently, so the exact order is not guaranteed)
 ```

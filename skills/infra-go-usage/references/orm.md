@@ -1,25 +1,25 @@
 # orm
 
-基于 [GORM](https://gorm.io) 的数据库 ORM 包，支持 MySQL、PostgreSQL、SQLite 三种数据库，提供统一的配置结构体和连接管理。
+A database ORM package built on [GORM](https://gorm.io); supports MySQL, PostgreSQL and SQLite with a unified config struct and connection management.
 
-## 特性
+## Features
 
-- **多数据库支持**：MySQL、PostgreSQL、SQLite，统一 API
-- **配置驱动**：Config 通过 `default` 结构体标签定义默认值，遵循 conf 标准
-- **DSN / 分字段两种连接方式**：可直接传 DSN，也可用 Host/Port/Username/Password 分字段配置
-- **连接池管理**：可配置最大空闲连接、最大打开连接、连接存活时间
-- **日志桥接**：自动将 GORM 日志桥接到 `logger` 包，无需额外配置
-- **表名策略**：支持表名前缀、单数表名
-- **便捷函数**：`MustNew` 系列 panic on error，`Ping` / `Close` 辅助函数
-- **慢查询阈值**：可配置慢查询阈值，超时 SQL 自动标记
+- **Multiple databases**: MySQL, PostgreSQL, SQLite behind one API
+- **Configuration-driven**: Config defines defaults with `default` struct tags, following the conf standard
+- **DSN or split fields**: pass a DSN directly, or configure Host/Port/Username/Password as separate fields
+- **Connection pool management**: configurable max idle connections, max open connections and connection lifetime
+- **Log bridging**: automatically bridges GORM logs to the `logger` package, with no extra configuration
+- **Table name strategy**: supports table prefixes and singular table names
+- **Convenience functions**: the `MustNew` family panics on error, plus the `Ping` / `Close` helpers
+- **Slow query threshold**: configurable slow-query threshold, with slow SQL flagged automatically
 
-## 安装
+## Installation
 
 ```bash
 go get github.com/chihqiang/infra-go/orm
 ```
 
-## 快速开始
+## Quick start
 
 ```go
 package main
@@ -35,15 +35,15 @@ type User struct {
 }
 
 func main() {
-    // SQLite 内存数据库（适合开发和测试）
+    // SQLite in-memory database (good for development and testing)
     db := orm.MustNewSQLite(orm.Config{
         Database: ":memory:",
     })
 
-    // 自动迁移
+    // automatic migration
     db.AutoMigrate(&User{})
 
-    // 增删改查
+    // create, read, update, delete
     db.Create(&User{Name: "alice", Email: "alice@example.com"})
 
     var user User
@@ -51,9 +51,9 @@ func main() {
 }
 ```
 
-## 配置
+## Configuration
 
-### Config 结构体
+### The Config struct
 
 ```go
 db, err := orm.New(orm.Config{
@@ -73,52 +73,52 @@ db, err := orm.New(orm.Config{
 })
 ```
 
-### 配置项说明
+### Config reference
 
-| 字段 | 类型 | 默认值 | 说明 |
+| Field | Type | Default | Description |
 | ------ | ------ | -------- | ------ |
-| `Driver` | `Driver` | — | 数据库驱动：`mysql`、`postgres`、`sqlite`，必填 |
-| `DSN` | `string` | `""` | 数据源名称，设置后优先使用，忽略 Host/Port 等字段 |
-| `Host` | `string` | `127.0.0.1` | 数据库主机地址 |
-| `Port` | `int` | 驱动默认端口 | MySQL 3306，Postgres 5432，SQLite 0 |
-| `Username` | `string` | `root` | 数据库用户名 |
-| `Password` | `string` | `""` | 数据库密码 |
-| `Database` | `string` | `""` | 数据库名称（SQLite 为文件路径；留空时 SQLite 使用实例独占的内存库） |
-| `SSLMode` | `string` | `disable` | PostgreSQL SSL 模式：`disable`、`allow`、`prefer`、`require`、`verify-ca`、`verify-full`，生产环境建议 `require` |
-| `TimeZone` | `string` | `Asia/Shanghai` | 数据库会话时区，影响连接到 PostgreSQL 时的时间戳解释。常见值：`UTC`、`Asia/Shanghai`、`America/New_York` 等 |
-| `MaxIdleConns` | `int` | `10` | 最大空闲连接数 |
-| `MaxOpenConns` | `int` | `100` | 最大打开连接数 |
-| `ConnMaxLifetime` | `Duration` | `30m` | 连接最大存活时间 |
-| `ConnMaxIdleTime` | `Duration` | `10m` | 连接最大空闲时间 |
-| `LogLevel` | `LogLevel` | `LogWarn` | GORM 日志级别 |
-| `SlowThreshold` | `Duration` | `200ms` | 慢查询阈值 |
-| `Colorful` | `bool` | `false` | 是否启用彩色日志输出 |
-| `SkipDefaultTransaction` | `bool` | `true` | 跳过默认事务（提升约 30% 写入性能） |
-| `TablePrefix` | `string` | `""` | 表名前缀 |
-| `SingularTable` | `bool` | `false` | 是否使用单数表名 |
+| `Driver` | `Driver` | — | Database driver: `mysql`, `postgres`, `sqlite`; required |
+| `DSN` | `string` | `""` | Data source name; when set it takes precedence and Host/Port etc. are ignored |
+| `Host` | `string` | `127.0.0.1` | Database host address |
+| `Port` | `int` | driver default | MySQL 3306, Postgres 5432, SQLite 0 |
+| `Username` | `string` | `root` | Database username |
+| `Password` | `string` | `""` | Database password |
+| `Database` | `string` | `""` | Database name (for SQLite this is the file path; when empty SQLite uses a memory database exclusive to the instance) |
+| `SSLMode` | `string` | `disable` | PostgreSQL SSL mode: `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`; `require` is recommended in production |
+| `TimeZone` | `string` | `Asia/Shanghai` | Database session time zone; affects how timestamps are interpreted when connecting to PostgreSQL. Common values: `UTC`, `Asia/Shanghai`, `America/New_York`, etc. |
+| `MaxIdleConns` | `int` | `10` | Maximum number of idle connections |
+| `MaxOpenConns` | `int` | `100` | Maximum number of open connections |
+| `ConnMaxLifetime` | `Duration` | `30m` | Maximum lifetime of a connection |
+| `ConnMaxIdleTime` | `Duration` | `10m` | Maximum idle time of a connection |
+| `LogLevel` | `LogLevel` | `LogWarn` | GORM log level |
+| `SlowThreshold` | `Duration` | `200ms` | Slow query threshold |
+| `Colorful` | `bool` | `false` | Whether to enable colored log output |
+| `SkipDefaultTransaction` | `bool` | `true` | Skip the default transaction (improves write performance by roughly 30%) |
+| `TablePrefix` | `string` | `""` | Table name prefix |
+| `SingularTable` | `bool` | `false` | Whether to use singular table names |
 
-### 日志级别
+### Log levels
 
 ```go
-orm.LogSilent // 静默，不输出日志
-orm.LogError  // 仅错误
-orm.LogWarn   // 警告及以上（默认）
-orm.LogInfo   // 全部日志（包括 SQL）
+orm.LogSilent // silent, no log output
+orm.LogError  // errors only
+orm.LogWarn   // warnings and above (default)
+orm.LogInfo   // everything (including SQL)
 ```
 
 ## API
 
-### 通用连接函数
+### Generic connection function
 
 ```go
-// New 根据 Config.Driver 自动选择驱动
+// New picks the driver automatically from Config.Driver
 db, err := orm.New(cfg)
 
-// MustNew 出错时 panic
+// MustNew panics on error
 db := orm.MustNew(cfg)
 ```
 
-### 指定驱动连接函数
+### Driver-specific connection functions
 
 ```go
 // MySQL
@@ -134,22 +134,22 @@ db, err := orm.NewSQLite(cfg)
 db := orm.MustNewSQLite(cfg)
 ```
 
-### 辅助函数
+### Helper functions
 
 ```go
-// 测试连接
+// test the connection
 err := orm.Ping(db)
 
-// 关闭连接
+// close the connection
 err := orm.Close(db)
 ```
 
-## 各数据库示例
+## Database examples
 
 ### MySQL
 
 ```go
-// 方式一：分字段配置
+// option 1: split fields
 db, err := orm.NewMySQL(orm.Config{
     Host:     "127.0.0.1",
     Port:     3306,
@@ -158,7 +158,7 @@ db, err := orm.NewMySQL(orm.Config{
     Database: "myapp",
 })
 
-// 方式二：DSN
+// option 2: DSN
 db, err := orm.NewMySQL(orm.Config{
     DSN: "root:secret@tcp(127.0.0.1:3306)/myapp?charset=utf8mb4&parseTime=true",
 })
@@ -167,51 +167,54 @@ db, err := orm.NewMySQL(orm.Config{
 ### PostgreSQL
 
 ```go
-// 方式一：分字段配置
+// option 1: split fields
 db, err := orm.NewPostgres(orm.Config{
     Host:     "127.0.0.1",
     Port:     5432,
     Username: "postgres",
     Password: "secret",
     Database: "myapp",
-    TimeZone: "UTC",  // 可选，默认 Asia/Shanghai
+    TimeZone: "UTC",  // optional, defaults to Asia/Shanghai
 })
 
-// 方式二：DSN
-// DSN 中已包含 TimeZone 时优先使用 DSN 中的值
-// 分字段配置时 TimeZone 字段自动写入 DSN
+// option 2: DSN
+// when the DSN already contains a TimeZone, the DSN value wins
+// with split fields, the TimeZone field is written into the DSN automatically
 ```
 
 ### SQLite
 
 ```go
-// 内存数据库（适合测试）
+// in-memory database (good for testing)
 db, err := orm.NewSQLite(orm.Config{
     Database: ":memory:",
 })
 
-// 文件数据库
+// file database
 db, err := orm.NewSQLite(orm.Config{
     Database: "/var/data/app.db",
 })
 
-// 不指定 Database 时自动使用内存数据库（每个实例独占一个库）
+// without Database an in-memory database is used automatically (one database per instance)
 db, err := orm.NewSQLite(orm.Config{})
 ```
 
-> **关于内存数据库**：不指定 `Database` 时，每次 `New`/`NewSQLite` 都会生成一个
-> **本实例独占**的内存库（DSN 形如 `file:orm_mem_<pid>_<seq>?mode=memory&cache=shared`）。
+> **About in-memory databases**: when `Database` is not set, every `New`/`NewSQLite` call creates a
+> memory database **exclusive to that instance** (the DSN looks like
+> `file:orm_mem_<pid>_<seq>?mode=memory&cache=shared`).
 >
-> 两个实例互不可见 —— 这一点很重要：SQLite 的 `cache=shared` 是按 DSN 名称在
-> **整个进程内**共享的，若固定使用同名 DSN，一个组件建的表/写入的数据会被另一个
-> 组件看到，且进程退出即丢数据（容易被误认为"数据莫名消失"）。
+> The two instances cannot see each other — and this matters: SQLite's `cache=shared` is keyed by DSN
+> name and shared **across the whole process**, so if you use a fixed DSN name, tables created or data
+> written by one component become visible to another, and everything is lost when the process exits
+> (easily mistaken for "data mysteriously disappearing").
 >
-> 同时保留 `cache=shared` 是必需的：匿名 `:memory:` 会让连接池中**每个连接**
-> 各持有一个独立的内存库，建表后其他连接看不到，这是更常见的坑。
+> Keeping `cache=shared` is nonetheless necessary: an anonymous `:memory:` would give **each connection**
+> in the pool its own separate memory database, so after creating a table other connections can't see it —
+> a far more common pitfall.
 
-## 日志集成
+## Logging integration
 
-ORM 包自动将 GORM 的日志桥接到 `logger` 包。只需在程序入口初始化全局 logger，ORM 的 SQL 日志就会通过 logger 输出：
+The ORM package automatically bridges GORM's logs to the `logger` package. Just initialize the global logger at the program entry point and ORM's SQL logs are emitted through logger:
 
 ```go
 package main
@@ -222,41 +225,42 @@ import (
 )
 
 func main() {
-    // 初始化全局 logger
+    // initialize the global logger
     l := logger.New(logger.Config{
         Level:   logger.InfoLevel,
         AppName: "myapp",
     })
     logger.SetGlobal(l)
-    // ILogger 接口不含 Close（Close 仅在 *Logger 具体类型上）；全局实例退出前用包级 Sync 刷缓冲
+    // The ILogger interface has no Close (Close is only on the concrete *Logger type);
+    // flush the buffer with the package-level Sync before the global instance exits
     defer logger.Sync()
 
-    // ORM 日志自动桥接到 logger
+    // ORM logs are bridged to logger automatically
     db := orm.MustNewSQLite(orm.Config{
         Database: ":memory:",
-        LogLevel: orm.LogInfo, // 输出 SQL 日志
+        LogLevel: orm.LogInfo, // output SQL logs
     })
 
-    // SQL 日志会通过 logger 输出
+    // SQL logs go out through logger
     db.Exec("SELECT 1")
 }
 ```
 
-## 表名策略
+## Table name strategy
 
 ```go
 db, err := orm.New(orm.Config{
     Driver:      orm.DriverSQLite,
     Database:    ":memory:",
-    TablePrefix: "t_",      // 表名前缀
-    SingularTable: true,    // 单数表名
+    TablePrefix: "t_",      // table name prefix
+    SingularTable: true,    // singular table names
 })
 
 db.AutoMigrate(&User{})
-// User 模型的表名为 "t_user"（带前缀 + 单数）
+// the User model's table name is "t_user" (prefixed + singular)
 ```
 
-## 连接池
+## Connection pool
 
 ```go
 db, err := orm.New(orm.Config{
@@ -266,14 +270,14 @@ db, err := orm.New(orm.Config{
     Username:        "root",
     Password:        "secret",
     Database:        "myapp",
-    MaxIdleConns:    20,                  // 最大空闲连接
-    MaxOpenConns:    200,                 // 最大打开连接
-    ConnMaxLifetime: 1 * time.Hour,       // 连接存活时间
-    ConnMaxIdleTime: 30 * time.Minute,    // 空闲超时
+    MaxIdleConns:    20,                  // max idle connections
+    MaxOpenConns:    200,                 // max open connections
+    ConnMaxLifetime: 1 * time.Hour,       // connection lifetime
+    ConnMaxIdleTime: 30 * time.Minute,    // idle timeout
 })
 ```
 
-## 完整示例
+## Complete example
 
 ```go
 package main
@@ -296,16 +300,17 @@ type User struct {
 }
 
 func main() {
-    // 初始化日志
+    // initialize logging
     logInstance := logger.New(logger.Config{
         Level:   logger.InfoLevel,
         AppName: "demo",
     })
     logger.SetGlobal(logInstance)
-    // ILogger 接口不含 Close（Close 仅在 *Logger 具体类型上）；退出前用包级 Sync 刷缓冲
+    // The ILogger interface has no Close (Close is only on the concrete *Logger type);
+    // flush the buffer with the package-level Sync before exiting
     defer logger.Sync()
 
-    // 创建数据库连接
+    // create the database connection
     db := orm.MustNewSQLite(orm.Config{
         Database:  ":memory:",
         LogLevel:  orm.LogInfo,
@@ -313,32 +318,32 @@ func main() {
     })
     defer func() { _ = orm.Close(db) }()
 
-    // 自动迁移
+    // automatic migration
     if err := db.AutoMigrate(&User{}); err != nil {
         logger.Fatal("failed to migrate database", logger.Err(err))
     }
 
-    // 创建
+    // create
     user := User{Name: "alice", Email: "alice@example.com", Age: 30}
     if err := db.Create(&user).Error; err != nil {
         logger.Fatal("failed to create user", logger.Err(err))
     }
     fmt.Printf("Created user: ID=%d\n", user.ID)
 
-    // 查询
+    // query
     var found User
     if err := db.First(&found, user.ID).Error; err != nil {
         logger.Fatal("failed to find user", logger.Err(err))
     }
     fmt.Printf("Found user: Name=%s, Email=%s\n", found.Name, found.Email)
 
-    // 更新
+    // update
     found.Age = 31
     if err := db.Save(&found).Error; err != nil {
         logger.Fatal("failed to update user", logger.Err(err))
     }
 
-    // 删除
+    // delete
     if err := db.Delete(&found).Error; err != nil {
         logger.Fatal("failed to delete user", logger.Err(err))
     }
@@ -347,10 +352,10 @@ func main() {
 }
 ```
 
-## 性能建议
+## Performance recommendations
 
-- **SkipDefaultTransaction**：默认开启，普通写入不包裹事务，提升约 30% 性能
-- **连接池**：生产环境建议 `MaxOpenConns` 不超过数据库 `max_connections` 的 80%
-- **ConnMaxLifetime**：设置小于数据库 `wait_timeout` 的值，避免连接被服务端关闭
-- **LogLevel**：生产环境使用 `LogWarn` 或 `LogError`，开发环境用 `LogInfo` 查看 SQL
-- **SlowThreshold**：生产环境建议 200ms~500ms，根据业务调整
+- **SkipDefaultTransaction**: enabled by default; ordinary writes are not wrapped in a transaction, improving performance by roughly 30%
+- **Connection pool**: in production keep `MaxOpenConns` below 80% of the database's `max_connections`
+- **ConnMaxLifetime**: set it lower than the database's `wait_timeout` so connections aren't closed by the server
+- **LogLevel**: use `LogWarn` or `LogError` in production, `LogInfo` in development to inspect SQL
+- **SlowThreshold**: 200ms~500ms is recommended in production; adjust to your workload

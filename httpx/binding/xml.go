@@ -8,15 +8,15 @@ import (
 	"net/http"
 )
 
-// XMLBinding 基于 XML body 的绑定器。
+// XMLBinding is a binder based on the XML body.
 type XMLBinding struct{}
 
-// Name 返回绑定器名称。
+// Name returns the binder name.
 func (XMLBinding) Name() string {
 	return "xml"
 }
 
-// Bind 将请求 XML body 绑定到 obj，并校验。
+// Bind binds the request XML body into obj and validates it.
 func (XMLBinding) Bind(req *http.Request, obj any) error {
 	if req == nil || req.Body == nil {
 		return errors.New("invalid request")
@@ -24,12 +24,12 @@ func (XMLBinding) Bind(req *http.Request, obj any) error {
 	return decodeXML(req.Body, obj)
 }
 
-// BindBody 从字节数组绑定 XML 到 obj，并校验。
+// BindBody binds XML from a byte slice into obj and validates it.
 func (XMLBinding) BindBody(body []byte, obj any) error {
 	return decodeXML(bytes.NewReader(body), obj)
 }
 
-// decodeXML 从 reader 解码 XML 到 obj，并校验。
+// decodeXML decodes XML from the reader into obj and validates it.
 func decodeXML(r io.Reader, obj any) error {
 	decoder := xml.NewDecoder(r)
 	if err := decoder.Decode(obj); err != nil {

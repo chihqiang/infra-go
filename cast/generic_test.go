@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- 泛型 To 测试 ---
+// --- Generic To tests ---
 
 func TestTo_Generic(t *testing.T) {
 	assert.Equal(t, 123, To[int]("123"))
@@ -32,7 +32,7 @@ func TestTo_GenericStruct(t *testing.T) {
 	assert.Equal(t, 30, u.Age)
 }
 
-// --- 泛型 ToE 测试（带 error，可判断转换失败） ---
+// --- Generic ToE tests (returns an error, so failures are detectable) ---
 
 func TestToE_Success(t *testing.T) {
 	n, err := ToE[int]("123")
@@ -60,13 +60,13 @@ func TestToE_Error(t *testing.T) {
 	_, err = ToE[bool]("not a bool")
 	assert.Error(t, err)
 
-	// 失败返回类型零值
+	// a failed conversion returns the zero value of the type
 	n, err := ToE[int]("abc")
 	assert.Error(t, err)
 	assert.Equal(t, 0, n)
 }
 
-// --- 补充：ToE 窄类型族与各目标类型失败分支 ---
+// --- Additional coverage: ToE narrow type family and per-target failure branches ---
 
 func TestToE_NarrowTypes(t *testing.T) {
 	assert.Equal(t, int8(127), To[int8]("127"))
@@ -80,14 +80,14 @@ func TestToE_NarrowTypes(t *testing.T) {
 }
 
 func TestToE_NarrowTypeErrors(t *testing.T) {
-	// 各目标类型转换失败均应返回零值而非 panic
+	// every target type must return the zero value instead of panicking when conversion fails
 	assert.Equal(t, int8(0), To[int8]("abc"))
 	assert.Equal(t, int64(0), To[int64]("abc"))
 	assert.Equal(t, uint(0), To[uint]("-1"))
 	assert.Equal(t, float64(0), To[float64]("x"))
 	assert.Equal(t, time.Duration(0), To[time.Duration]("bad"))
 	assert.Equal(t, time.Time{}, To[time.Time]("bad"))
-	assert.Equal(t, "", To[string](func() {})) // Marshal 失败
+	assert.Equal(t, "", To[string](func() {})) // Marshal fails
 }
 
 func TestToE_TimeType(t *testing.T) {
@@ -103,17 +103,17 @@ func TestToE_DefaultJSONPath(t *testing.T) {
 		Name string `json:"name"`
 	}
 
-	// default 路径：非基本类型走 JSON marshal/unmarshal
+	// default branch: non-basic types go through JSON marshal/unmarshal
 	u := To[User](map[string]any{"name": "Alice"})
 	assert.Equal(t, "Alice", u.Name)
 
-	// nil 输入 → 零值
+	// nil input → zero value
 	assert.Equal(t, User{}, To[User](nil))
 
-	// JSON unmarshal 类型不匹配报错 → 返回零值（nil map）
+	// JSON unmarshal type mismatch yields an error → zero value (nil map)
 	assert.Nil(t, To[map[string]int](map[string]any{"a": "x"}))
 
-	// json.Marshal 失败 → 返回零值
+	// json.Marshal fails → zero value
 	type Bad struct {
 		F func()
 	}
@@ -125,15 +125,15 @@ func TestToE_JsonNumberInput(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 42, n)
 
-	// json.Number 转换失败
+	// json.Number conversion fails
 	_, err = ToE[int](json.Number("1.5"))
 	assert.Error(t, err)
 }
 
-// --- 窄类型溢出防护（此前会静默回绕）---
+// --- Narrow type overflow protection (previously wrapped around silently) ---
 
-// TestToE_NarrowIntOverflow 回归测试：目标类型位宽不足时必须报错。
-// 历史行为：ToE[int8]("200") 静默回绕为 -56 且 err 为 nil。
+// TestToE_NarrowIntOverflow is a regression test: a target type that is too narrow must error.
+// Previous behaviour: ToE[int8]("200") wrapped around to -56 with a nil error.
 func TestToE_NarrowIntOverflow(t *testing.T) {
 	// int8: [-128, 127]
 	v, err := ToE[int8]("127")
@@ -165,19 +165,20 @@ func TestToE_NarrowIntOverflow(t *testing.T) {
 	_, err = ToE[int32]("2147483647")
 	require.NoError(t, err)
 
-	// 原生整数越界同样报错（此前 ToIntE 后窄化转换静默回绕）
+	// out-of-range native integers error as well (previously the narrowing conversion
+	// after ToIntE wrapped around silently)
 	_, err = ToE[int8](200)
 	assert.Error(t, err)
 	_, err = ToE[int16](40000)
 	assert.Error(t, err)
 
-	// 超范围浮点不会先变成垃圾输入
+	// out-of-range floats never turn into garbage input first
 	_, err = ToE[int8](1e30)
 	assert.Error(t, err)
 }
 
-// TestToE_NarrowUintOverflow 回归测试：无符号窄类型溢出必须报错。
-// 历史行为：ToE[uint8]("300") 静默回绕为 44 且 err 为 nil。
+// TestToE_NarrowUintOverflow is a regression test: unsigned narrow type overflow must error.
+// Previous behaviour: ToE[uint8]("300") wrapped around to 44 with a nil error.
 func TestToE_NarrowUintOverflow(t *testing.T) {
 	v, err := ToE[uint8]("255")
 	require.NoError(t, err)
@@ -188,19 +189,19 @@ func TestToE_NarrowUintOverflow(t *testing.T) {
 	_, err = ToE[uint8]("300")
 	assert.Error(t, err)
 
-	// uint16: 上界 65535
+	// uint16: upper bound 65535
 	_, err = ToE[uint16]("65536")
 	assert.Error(t, err)
 	_, err = ToE[uint16]("65535")
 	require.NoError(t, err)
 
-	// uint32: 上界 4294967295
+	// uint32: upper bound 4294967295
 	_, err = ToE[uint32]("4294967296")
 	assert.Error(t, err)
 	_, err = ToE[uint32]("4294967295")
 	require.NoError(t, err)
 
-	// 负数与原生越界
+	// negative values and out-of-range native integers
 	_, err = ToE[uint8]("-1")
 	assert.Error(t, err)
 	_, err = ToE[uint8](300)

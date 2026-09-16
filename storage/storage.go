@@ -7,79 +7,86 @@ import (
 	"strings"
 )
 
-// Storage 存储服务接口，定义了对象存储的基本操作。
-// 目前支持本地文件系统、阿里云 OSS、腾讯云 COS 和七牛云 KODO 四种实现。
+// Storage is the storage service interface, defining the basic operations of
+// object storage. Four implementations are supported: local filesystem,
+// Alibaba Cloud OSS, Tencent Cloud COS and Qiniu Cloud KODO.
 //
-// 注意：阿里云 OSS SDK 不支持 context 取消，传给 Write/Delete/Read/Exists 的
-// context 在 OSS 实现中仅用于快速失败检测（发起 SDK 调用前检查 ctx 状态），
-// 不会中断已发起的 SDK 调用。
+// Note: the Alibaba Cloud OSS SDK does not support context cancellation. In the
+// OSS implementation the context passed to Write/Delete/Read/Exists is only used
+// for fast-fail detection (the ctx state is checked before issuing the SDK call);
+// it does not interrupt an SDK call that has already been issued.
 type Storage interface {
-	// Write 将内容写入指定路径。
-	// ctx 用于控制请求超时和取消。
-	// path 为对象在存储桶中的路径（key），content 为文件内容。
+	// Write writes content to the given path.
+	// ctx controls request timeout and cancellation.
+	// path is the object path (key) inside the bucket, content is the file content.
 	Write(ctx context.Context, path string, content []byte) error
 
-	// Read 读取指定路径对象的完整内容。
-	// ctx 用于控制请求超时和取消。
-	// path 为对象在存储桶中的路径（key）。
-	// 对象不存在时返回错误（各驱动返回自身 SDK 的错误，可配合 Exists 先做判断）。
+	// Read reads the full content of the object at the given path.
+	// ctx controls request timeout and cancellation.
+	// path is the object path (key) inside the bucket.
+	// It returns an error when the object does not exist (each driver returns the
+	// error of its own SDK; use Exists first to check for existence).
 	Read(ctx context.Context, path string) ([]byte, error)
 
-	// Exists 判断指定路径的对象是否存在。
-	// ctx 用于控制请求超时和取消。
-	// path 为对象在存储桶中的路径（key）。
+	// Exists reports whether the object at the given path exists.
+	// ctx controls request timeout and cancellation.
+	// path is the object path (key) inside the bucket.
 	Exists(ctx context.Context, path string) (bool, error)
 
-	// Delete 删除指定路径的对象，返回删除的对象数量。
-	// ctx 用于控制请求超时和取消。
-	// path 为对象在存储桶中的路径（key）。
+	// Delete removes the object at the given path and returns the number of
+	// removed objects.
+	// ctx controls request timeout and cancellation.
+	// path is the object path (key) inside the bucket.
 	Delete(ctx context.Context, path string) (int64, error)
 
-	// URL 根据路径拼接完整的访问 URL。
-	// ctx 保留用于未来扩展（目前所有实现为本地 URL 拼接，不依赖 context）。
-	// path 为对象在存储桶中的路径（key）。
+	// URL builds the full access URL from the given path.
+	// ctx is reserved for future extension (all current implementations just
+	// concatenate URL parts locally and do not depend on context).
+	// path is the object path (key) inside the bucket.
 	URL(ctx context.Context, path string) (string, error)
 }
 
-// buildURL 将基础域名和路径拼接为完整的 URL。
-// 自动处理 base 尾部和 path 头部的斜杠，并对 path 进行 URL 编码。
+// buildURL joins the base domain and the path into a full URL.
+// It handles a trailing slash on base and a leading slash on path, and
+// URL-encodes path.
 func buildURL(base, path string) (string, error) {
 	if base == "" {
 		return "", fmt.Errorf("storage: base URL is empty, please set URL field in config")
 	}
 	base = strings.TrimRight(base, "/")
 	path = strings.TrimLeft(path, "/")
-	// 对 path 中的特殊字符进行 URL 编码（保留 / 分隔符）
+	// URL-encode special characters in path (the / separator is kept)
 	encoded := (&url.URL{Path: path}).String()
 	return base + "/" + encoded, nil
 }
 
-// Driver 存储驱动类型。
+// Driver is the storage driver type.
 type Driver string
 
 const (
-	// DriverOSS 阿里云 OSS 存储。
+	// DriverOSS is the Alibaba Cloud OSS storage.
 	DriverOSS Driver = "oss"
-	// DriverCOS 腾讯云 COS 存储。
+	// DriverCOS is the Tencent Cloud COS storage.
 	DriverCOS Driver = "cos"
-	// DriverKODO 七牛云 KODO 存储。
+	// DriverKODO is the Qiniu Cloud KODO storage.
 	DriverKODO Driver = "kodo"
-	// DriverLocal 本地文件系统存储。
+	// DriverLocal is the local filesystem storage.
 	DriverLocal Driver = "local"
 )
 
-// Storages 存储实例集合，key 为实例别名（如 "images"、"docs"），
-// value 为已实例化的 Storage 实现。一套凭证或多种驱动可按别名共存。
+// Storages is a collection of storage instances: the key is the instance alias
+// (such as "images" or "docs") and the value is an instantiated Storage
+// implementation. Separate credentials or drivers can coexist under aliases.
 type Storages map[string]Storage
 
-// Get 按别名获取存储实例。
+// Get returns the storage instance registered under the given alias.
 func (s Storages) Get(name string) (Storage, bool) {
 	st, ok := s[name]
 	return st, ok
 }
 
-// Write 将内容写入指定别名的存储实例。
-// name 为存储实例别名，path 为对象在存储中的路径（key）。
+// Write writes content through the storage instance registered under the given alias.
+// name is the storage instance alias, path is the object path (key) in that storage.
 func (s Storages) Write(ctx context.Context, name, path string, content []byte) error {
 	st, ok := s[name]
 	if !ok {
@@ -88,7 +95,8 @@ func (s Storages) Write(ctx context.Context, name, path string, content []byte) 
 	return st.Write(ctx, path, content)
 }
 
-// Read 读取指定别名的存储实例中对象的完整内容。
+// Read reads the full content of an object from the storage instance registered
+// under the given alias.
 func (s Storages) Read(ctx context.Context, name, path string) ([]byte, error) {
 	st, ok := s[name]
 	if !ok {
@@ -97,7 +105,8 @@ func (s Storages) Read(ctx context.Context, name, path string) ([]byte, error) {
 	return st.Read(ctx, path)
 }
 
-// Exists 判断指定别名的存储实例中的对象是否存在。
+// Exists reports whether an object exists in the storage instance registered
+// under the given alias.
 func (s Storages) Exists(ctx context.Context, name, path string) (bool, error) {
 	st, ok := s[name]
 	if !ok {
@@ -106,7 +115,8 @@ func (s Storages) Exists(ctx context.Context, name, path string) (bool, error) {
 	return st.Exists(ctx, path)
 }
 
-// Delete 删除指定别名的存储实例中的对象，返回删除的对象数量。
+// Delete removes an object from the storage instance registered under the given
+// alias and returns the number of removed objects.
 func (s Storages) Delete(ctx context.Context, name, path string) (int64, error) {
 	st, ok := s[name]
 	if !ok {
@@ -115,7 +125,8 @@ func (s Storages) Delete(ctx context.Context, name, path string) (int64, error) 
 	return st.Delete(ctx, path)
 }
 
-// URL 根据路径拼接指定别名的存储实例的完整访问 URL。
+// URL builds the full access URL for the storage instance registered under the
+// given alias.
 func (s Storages) URL(ctx context.Context, name, path string) (string, error) {
 	st, ok := s[name]
 	if !ok {

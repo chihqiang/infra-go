@@ -1,13 +1,16 @@
 # infra-go
 
-Go 项目底层基础设施通用封装库，整合存储、日志、配置、工具等基础能力。
+A general-purpose infrastructure wrapper library for Go projects, bundling storage, logging,
+configuration and utility capabilities.
 
-> **环境要求**：Go 1.25+（`go.mod` 声明 `go 1.25.11`）
+> **Requirements**: Go 1.25+ (`go.mod` declares `go 1.25.11`)
 
-## 快速开始
+## Quick start
 
-最小 HTTP 服务示例（配置 `conf` + 日志 `logger` + HTTP `httpx` + 生命周期编排 `service`），不需要任何外部服务；
-需要数据库 / Redis 时再按需引入 `orm` / `redisx`（依赖范围见下方[「依赖足迹」](#依赖足迹)）：
+A minimal HTTP service example (configuration `conf` + logging `logger` + HTTP `httpx` +
+lifecycle orchestration `service`) that needs no external services; add `orm` / `redisx` only
+when you need a database or Redis (see [Dependency footprint](#dependency-footprint) below for
+the dependency scope):
 
 ```go
 package main
@@ -20,156 +23,181 @@ import (
     "github.com/chihqiang/infra-go/service"
 )
 
-// 配置：json 标签声明默认值与约束，支持 conf 从文件 / 环境变量加载
+// Configuration: json tags declare defaults and constraints; conf can load it from a file or
+// from environment variables
 type Config struct {
     Host string `json:",default=0.0.0.0"`
     Port int    `json:",default=8080,range=[1:65535]"`
 }
 
-// 请求体：binding 标签做参数校验
+// Request body: the binding tag performs parameter validation
 type helloRequest struct {
     Name string `json:"name" binding:"required"`
 }
 
 func main() {
-    // 1. 全局日志（最先初始化）；退出前 Sync 刷缓冲
+    // 1. Global logging (initialised first); Sync flushes the buffer before exit
     logger.SetGlobal(logger.New(logger.Config{
         Level:   logger.InfoLevel,
         AppName: "demo",
     }))
     defer logger.Sync()
 
-    // 2. 配置加载：默认值 / JSON·YAML / 环境变量展开
+    // 2. Configuration loading: defaults / JSON and YAML / environment variable expansion
     var cfg Config
     if err := conf.Load("config.yaml", &cfg, conf.UseEnv()); err != nil {
         logger.Fatal("load config failed", logger.Err(err))
     }
 
-    // 3. HTTP 服务：参数绑定 + 校验 + 统一响应，中间件可插拔
+    // 3. HTTP service: parameter binding + validation + unified response, pluggable middleware
     srv := httpx.NewServer(httpx.ServerConfig{Host: cfg.Host, Port: cfg.Port})
-    srv.Use(httpx.WithRequestID(), httpx.WithRecovery()) // 更多见 httpx 模块（限流/追踪/JWT 等）
+    // More middleware lives in the httpx module: rate limit, tracing, JWT, ...
+    srv.Use(httpx.WithRequestID(), httpx.WithRecovery())
     srv.AddRoute(httpx.Route{
         Method: "POST",
         Path:   "/hello",
         Handler: func(w http.ResponseWriter, r *http.Request) {
             var req helloRequest
             if err := httpx.MustBindJSON(w, r, &req); err != nil {
-                return // 绑定 / 校验失败已自动写 400
+                return // a binding / validation failure has already written 400
             }
             httpx.OkJSON(w, map[string]string{"msg": "hello, " + req.Name})
         },
     })
 
-    // 4. 生命周期编排：service.AsService 将 *httpx.Server 适配为 Service，并发启停
+    // 4. Lifecycle orchestration: service.AsService adapts *httpx.Server into a Service,
+    //    starting and stopping everything concurrently
     sg := service.NewServiceGroup()
     sg.Add(service.AsService(srv))
     sg.Start()
 }
 ```
 
-配合 `config.yaml`（可省略，缺省走结构体默认值）：
+Together with `config.yaml` (optional; the struct defaults are used when it is absent):
 
 ```yaml
 host: 0.0.0.0
 port: 8080
 ```
 
-## 模块
+## Modules
 
-各模块文档统一维护在 [skills/infra-go-usage/references](./skills/infra-go-usage/references)，按模块划分：
+The documentation of each module is maintained centrally in
+[skills/infra-go-usage/references](./skills/infra-go-usage/references), one page per module:
 
-| 模块 | 说明 |
+| Module | Description |
 | ------ | ------ |
-| [conf](./skills/infra-go-usage/references/conf.md) | 配置解析，支持 JSON/YAML，默认值、环境变量、参数验证 |
-| [logger](./skills/infra-go-usage/references/logger.md) | 日志封装，基于 zap + lumberjack 滚动日志 |
-| [orm](./skills/infra-go-usage/references/orm.md) | ORM 封装，基于 gorm，支持 MySQL/PostgreSQL/SQLite（三个 driver 均编译进本包，见「依赖足迹」） |
-| [redisx](./skills/infra-go-usage/references/redisx.md) | Redis 客户端封装，连接池、健康检查、分布式锁 |
-| [cache](./skills/infra-go-usage/references/cache.md) | 统一缓存接口，内存（LRU 淘汰、命中率统计）+ Redis（防击穿/防穿透）两种实现 |
-| [httpx](./skills/infra-go-usage/references/httpx.md) | HTTP 工具，请求参数绑定、统一泛型响应、路由注册、优雅关闭。内置中间件：CORS/Recovery/RequestID/链路追踪/访问日志/熔断/超时/请求体限制/gzip/并发数限制/限流/JWT 认证/加解密/内容安全。核心按子包拆分：`binding`（绑定实现）、`middleware`（通用中间件，标准 `func(http.Handler) http.Handler`，可被 gin/echo 复用）、`x`（通用小工具：路径匹配 + 客户端 IP 解析）、`respw`（ResponseWriter 包装） |
-| [ratelimit](./skills/infra-go-usage/references/ratelimit.md) | 限流器，令牌桶/滑动窗口，内存 + Redis 双后端。HTTP 限流中间件统一为 `httpx.WithRateLimit`（实现见 `httpx/middleware` 子包） |
-| [breaker](./skills/infra-go-usage/references/breaker.md) | 熔断器，Google SRE 算法，快速失败、降级、防雪崩 |
-| [retry](./skills/infra-go-usage/references/retry.md) | 重试机制，指数退避、固定延迟、抖动 |
-| [jwt](./skills/infra-go-usage/references/jwt.md) | JWT 签发与解析，支持 HS256/HS384/HS512（HMAC）；认证中间件 `AuthMiddleware` / `httpx.WithJWT`，验证后注入业务 claims 到 context |
-| [hash](./skills/infra-go-usage/references/hash.md) | 哈希加密，MD5/SHA/Bcrypt/HMAC，AES-GCM 加密，HMAC 签名/校验 |
-| [trace](./skills/infra-go-usage/references/trace.md) | 链路追踪，基于 OpenTelemetry：agent / span 管理 / gRPC·HTTP 头传播 / 属性封装。HTTP 服务端埋点统一为 `httpx.WithTracing`（四类 exporter 均编译进本包，见「依赖足迹」） |
-| [mapping](./skills/infra-go-usage/references/mapping.md) | map → struct 反序列化，struct tag 解析引擎 |
-| [cast](./skills/infra-go-usage/references/cast.md) | 类型安全转换，支持基本类型/时间/切片/泛型 |
-| [syncx](./skills/infra-go-usage/references/syncx.md) | 并发工具，SingleFlight/ConcurrentMap/Semaphore |
-| [service](./skills/infra-go-usage/references/service.md) | 服务组，并发启动/停止多个 Service，sync.Once 保证只停一次 |
-| [taskq](./skills/infra-go-usage/references/taskq.md) | 异步任务队列，基于 asynq，生产者/消费者模式 |
-| [storage](./skills/infra-go-usage/references/storage.md) | 统一对象存储接口，支持本地文件、阿里云 OSS、腾讯云 COS 和七牛云 KODO；提供写入/读取/存在性判断/删除/URL 拼接（三家 SDK 均编译进本包，见「依赖足迹」）。 |
-| [websocket](./skills/infra-go-usage/references/websocket.md) | WebSocket 服务封装，基于 gorilla/websocket，事件驱动、房间广播、心跳检测 |
-| [stringx](./skills/infra-go-usage/references/stringx.md) | 字符串工具包，随机生成、判断、转换、拆分连接等常用函数 |
+| [conf](./skills/infra-go-usage/references/conf.md) | Configuration parsing with JSON/YAML support, defaults, environment variables and parameter validation |
+| [logger](./skills/infra-go-usage/references/logger.md) | Logging wrapper built on zap + lumberjack with rolling log files |
+| [orm](./skills/infra-go-usage/references/orm.md) | ORM wrapper built on gorm, supporting MySQL/PostgreSQL/SQLite (all three drivers are compiled into this package, see "Dependency footprint") |
+| [redisx](./skills/infra-go-usage/references/redisx.md) | Redis client wrapper: connection pool, health check, distributed lock |
+| [cache](./skills/infra-go-usage/references/cache.md) | Unified cache interface with two implementations: in-memory (LRU eviction, hit-rate statistics) and Redis (protection against cache breakdown and penetration) |
+| [httpx](./skills/infra-go-usage/references/httpx.md) | HTTP toolkit: request parameter binding, unified generic responses, route registration and graceful shutdown. Built-in middleware: CORS/Recovery/RequestID/tracing/access log/circuit breaker/timeout/request body limit/gzip/concurrency limit/rate limit/JWT auth/encryption/content safety. The core is split into subpackages: `binding` (binding implementation), `middleware` (generic middleware with the standard `func(http.Handler) http.Handler` shape, reusable from gin/echo), `x` (shared helpers: path matching + client IP parsing), `respw` (ResponseWriter wrapper) |
+| [ratelimit](./skills/infra-go-usage/references/ratelimit.md) | Rate limiters: token bucket/sliding window with in-memory and Redis backends. The HTTP rate limit middleware is unified as `httpx.WithRateLimit` (implemented in the `httpx/middleware` subpackage) |
+| [breaker](./skills/infra-go-usage/references/breaker.md) | Circuit breaker using the Google SRE algorithm: fail fast, degrade and prevent cascading failures |
+| [retry](./skills/infra-go-usage/references/retry.md) | Retry mechanism: exponential backoff, fixed delay and jitter |
+| [jwt](./skills/infra-go-usage/references/jwt.md) | JWT signing and parsing with HS256/HS384/HS512 (HMAC) support; the authentication middleware `AuthMiddleware` / `httpx.WithJWT` injects the business claims into the context after validation |
+| [hash](./skills/infra-go-usage/references/hash.md) | Hashing and encryption: MD5/SHA/Bcrypt/HMAC, AES-GCM encryption, HMAC signing/verification |
+| [trace](./skills/infra-go-usage/references/trace.md) | Tracing built on OpenTelemetry: agent / span management / gRPC and HTTP header propagation / attribute helpers. HTTP server instrumentation is unified as `httpx.WithTracing` (all four exporters are compiled into this package, see "Dependency footprint") |
+| [mapping](./skills/infra-go-usage/references/mapping.md) | map → struct deserialisation with a struct tag parsing engine |
+| [cast](./skills/infra-go-usage/references/cast.md) | Type-safe conversion covering basic types, time, slices and generics |
+| [syncx](./skills/infra-go-usage/references/syncx.md) | Concurrency helpers: SingleFlight/ConcurrentMap/Semaphore |
+| [service](./skills/infra-go-usage/references/service.md) | Service group that starts and stops several Services concurrently, with sync.Once guaranteeing a single stop |
+| [taskq](./skills/infra-go-usage/references/taskq.md) | Asynchronous task queue built on asynq with a producer/consumer pattern |
+| [storage](./skills/infra-go-usage/references/storage.md) | Unified object storage interface supporting local files, Alibaba Cloud OSS, Tencent Cloud COS and Qiniu KODO; provides write/read/exists/delete/URL building (all three SDKs are compiled into this package, see "Dependency footprint"). |
+| [websocket](./skills/infra-go-usage/references/websocket.md) | WebSocket service wrapper built on gorilla/websocket: event driven, room broadcast and heartbeat detection |
+| [stringx](./skills/infra-go-usage/references/stringx.md) | String toolkit with common helpers for random generation, predicates, conversion, splitting and joining |
 
-## 特性
+## Features
 
-- **统一风格**：所有模块使用中文注释、英文错误信息、函数式选项配置
-- **依赖可控**：模块独立 import，未使用的模块**不会**进入你的 `go.mod` / `go.sum`（Go 1.17+ 模块图剪枝）。轻量工具包（`cast` / `stringx` / `syncx` / `retry` / `mapping`）零第三方依赖；但同类实现打包在同一 package 内时无法只选一家，详见下方「依赖足迹」
-- **类型安全**：广泛使用泛型（`Response[T]`、`cast.To[T]`）
-- **可测试**：每个模块都有完整的单元测试，支持 `-race` 检测
-- **依赖治理**：统一维护依赖基线并定期升级（当前 Go 1.25 / gorm 1.31 / OpenTelemetry 1.44 等）
+- **Consistent style**: all modules use English comments, English error messages and
+  functional option configuration
+- **Controlled dependencies**: modules are imported independently, and modules you do not use
+  **never** enter your `go.mod` / `go.sum` (Go 1.17+ module graph pruning). The lightweight
+  toolkits (`cast` / `stringx` / `syncx` / `retry` / `mapping`) have zero third-party
+  dependencies; but when sibling implementations are packed into one package you cannot pick
+  just one of them, see "Dependency footprint" below
+- **Type safety**: generics are used extensively (`Response[T]`, `cast.To[T]`)
+- **Testable**: every module has complete unit tests and supports `-race` detection
+- **Dependency governance**: the dependency baseline is maintained centrally and upgraded
+  regularly (currently Go 1.25 / gorm 1.31 / OpenTelemetry 1.44 and so on)
 
-### 依赖足迹
+### Dependency footprint
 
-模块图剪枝保证**未 import 的模块不会进入消费者构建**：例如只 import `stringx` 时，消费者的
-`go.mod` 仅含 infra-go 自身一条 require、`go.sum` 仅 8 行，产出的二进制不含任何云 SDK / gorm / asynq 符号。
+Module graph pruning guarantees that **modules you do not import never enter the consumer
+build**: when you only import `stringx`, for example, the consumer's
+`go.mod` contains a single require for infra-go itself, `go.sum` has just 8 lines, and the
+resulting binary contains no cloud SDK / gorm / asynq symbols.
 
-但**同一 package 内的同类实现会一起编译进来**，无法只选其中一家。各模块实测引入的第三方模块数：
+However, **sibling implementations inside the same package are compiled in together**, so you
+cannot pick just one of them. The number of third-party modules each module actually pulls in:
 
-| 模块 | 第三方模块数 | 说明 |
-| ---- | ----------- | ---- |
-| `cast` `mapping` `retry` `stringx` `syncx` | 0 | 仅标准库 |
+| Module | Third-party modules | Description |
+| ------ | ------------------- | ----------- |
+| `cast` `mapping` `retry` `stringx` `syncx` | 0 | standard library only |
 | `conf` `hash` | 1 | yaml.v3 / x/crypto |
 | `breaker` `logger` `ratelimit` `service` | 3 | |
 | `cache` `redisx` | 6 | go-redis |
 | `websocket` | 7 | |
 | `jwt` | 11 | |
-| `storage` | 12 | 阿里云 OSS + 腾讯云 COS + 七牛 KODO 三家 SDK **全量** |
+| `storage` | 12 | Alibaba Cloud OSS + Tencent Cloud COS + Qiniu KODO SDKs, **all of them** |
 | `taskq` | 12 | asynq + go-redis + cron |
-| `orm` | 14 | MySQL + PostgreSQL + SQLite 三个 driver **全量**（含 `mattn/go-sqlite3`） |
+| `orm` | 14 | all three MySQL + PostgreSQL + SQLite drivers, **in full** (including `mattn/go-sqlite3`) |
 | `httpx` | 16 | |
-| `trace` | 17 | OTLP gRPC / OTLP HTTP / stdout / Zipkin 四类 exporter **全量** |
+| `trace` | 17 | all four exporters: OTLP gRPC / OTLP HTTP / stdout / Zipkin, **in full** |
 
-快速开始示例（`conf` + `logger` + `httpx` + `service`）实际引入 17 个第三方模块，但**不含**云厂商 SDK、
-gorm driver、asynq 与 OTel exporter。
+The quick-start example (`conf` + `logger` + `httpx` + `service`) actually pulls in 17
+third-party modules, but **excludes** cloud vendor SDKs,
+gorm drivers, asynq and OTel exporters.
 
-> ⚠️ **`storage` / `trace` / `orm` 目前无法只引入单一实现**：
-> 只 import `orm`（且仅用 MySQL）也会编译进 postgres 与 sqlite driver，
-> 消费者 `go.sum` 由 8 行增至 56 行、二进制由 2.5M 增至 7.5M。
+> ⚠️ **`storage` / `trace` / `orm` currently cannot pull in a single implementation only**:
+> importing `orm` alone (and using MySQL only) still compiles in the postgres and sqlite
+> drivers, which grows the consumer's `go.sum` from 8 lines to 56 and the binary from 2.5M to
+> 7.5M.
 >
-> - `CGO_ENABLED=0` 下仍可构建成功（`mattn/go-sqlite3` 提供非 cgo 桩实现），但运行时 sqlite 不可用。
-> - 若在意产物体积，可绕过封装直接引入 `gorm.io/driver/*` 或
->   `go.opentelemetry.io/otel/exporters/*`，或直接使用云厂商官方 SDK。
+> - It still builds with `CGO_ENABLED=0` (`mattn/go-sqlite3` ships a non-cgo stub), but sqlite
+>   is unusable at runtime.
+> - If the artefact size matters, bypass the wrapper and import `gorm.io/driver/*` or
+>   `go.opentelemetry.io/otel/exporters/*` directly, or use the cloud vendor's official SDK.
 
-## Skills 安装
+## Skill installation
 
-仓库内置 VS Code Copilot skill —— [infra-go-usage](./skills/infra-go-usage/SKILL.md)，用于指导在业务项目中选型与组装 infra-go 模块（配置、日志、数据库、Redis、HTTP、JWT 等）。
+The repository ships a VS Code Copilot skill - [infra-go-usage](./skills/infra-go-usage/SKILL.md) -
+which guides you through choosing and assembling infra-go modules (configuration, logging,
+database, Redis, HTTP, JWT, ...) in a business project.
 
-使用 [Agent Skills CLI](https://github.com/vercel-labs/skills)（`npx skills`）一键安装（skill 位于本仓库 `skills/infra-go-usage/`，已推送到远端 `main` 分支）：
+Install it in one step with the [Agent Skills CLI](https://github.com/vercel-labs/skills)
+(`npx skills`); the skill lives in `skills/infra-go-usage/` in this repository and has been
+pushed to the remote `main` branch:
 
 ```bash
-# 安装到当前项目（默认安装到 .claude/skills/ 或 .agents/skills/，自动探测已安装的 agent）
+# Install into the current project (defaults to .claude/skills/ or .agents/skills/,
+# auto-detecting the installed agent)
 npx skills add chihqiang/infra-go --skill infra-go-usage
 
-# 先预览仓库里能发现哪些 skill（不安装）
+# Preview which skills can be discovered in the repository (without installing)
 npx skills add chihqiang/infra-go --list
 
-# 安装到个人目录（跨项目可用），并指定目标 agent
+# Install into the personal directory (usable across projects) and specify the target agent
 npx skills add chihqiang/infra-go --skill infra-go-usage -g -a github-copilot
 ```
 
-### 使用
+### Usage
 
-安装后，在 VS Code 聊天中输入 `/infra-go-usage`（或直接提问，如"用 infra-go 搭一个带登录鉴权和限流的 HTTP 服务"），Copilot 会自动加载该 skill 并按其中的工作流协助你。
+Once installed, type `/infra-go-usage` in the VS Code chat (or just ask a question, such as
+"build an HTTP service with login authentication and rate limiting using infra-go") and Copilot
+loads the skill automatically to help you follow its workflow.
 
-> 说明：本仓库将 skill 放在根目录 `skills/` 便于随库分发；VS Code 识别项目级 skill 的标准位置为 `.github/skills/`、`.agents/skills/` 或 `.claude/skills/`。
+> Note: this repository keeps the skill in the root `skills/` directory so that it travels with
+> the library; VS Code recognises project-level skills in `.github/skills/`, `.agents/skills/`
+> or `.claude/skills/`.
 
-## 质量验证
+## Quality checks
 
 ```bash
-go build ./...                # 编译全部包
-go vet ./...                  # 静态检查
-go test ./... -race -count=1  # 全量单测 + 竞态检测
+go build ./...                # build every package
+go vet ./...                  # static analysis
+go test ./... -race -count=1  # full unit tests + race detection
 ```
 
 ## License

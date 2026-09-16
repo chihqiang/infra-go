@@ -97,21 +97,21 @@ func TestSeed(t *testing.T) {
 }
 
 func TestRandn_NegativeOrZeroLength(t *testing.T) {
-	// 负数长度不应 panic，返回空串
+	// A negative length must not panic; it returns an empty string
 	if s := Randn(-1, RandTypeAll); s != "" {
 		t.Errorf("Randn(-1) = %q, want empty string", s)
 	}
 	if s := Randn(-100, RandTypeDigit); s != "" {
 		t.Errorf("Randn(-100, Digit) = %q, want empty string", s)
 	}
-	// 零长度返回空串（已有用例，这里再确认一次）
+	// A zero length returns an empty string (already covered above; reconfirmed here)
 	if s := Randn(0, RandTypeUpper); s != "" {
 		t.Errorf("Randn(0) = %q, want empty string", s)
 	}
 }
 
 func TestRandId_HexCharset(t *testing.T) {
-	// RandId 应返回小写 hex 字符串（16 字符 = 8 字节）
+	// RandId must return a lower-case hex string (16 chars = 8 bytes)
 	re := regexp.MustCompile(`^[0-9a-f]{16}$`)
 	for i := 0; i < 20; i++ {
 		s := RandId()
@@ -125,7 +125,7 @@ func TestRandId_HexCharset(t *testing.T) {
 }
 
 func TestRandn_LargeLength(t *testing.T) {
-	// 大长度不应 panic，且严格满足字符集约束
+	// A large length must not panic and must still honour the character set exactly
 	for _, tt := range []struct {
 		n        int
 		randType RandType
@@ -151,7 +151,7 @@ func TestRandn_LargeLength(t *testing.T) {
 }
 
 func TestSeed_DeterministicByType(t *testing.T) {
-	// 各类别下相同 seed 均产生相同序列
+	// Every kind yields the same sequence for the same seed
 	for _, rt := range []RandType{RandTypeAll, RandTypeUpper, RandTypeLower, RandTypeDigit} {
 		Seed(99)
 		s1 := Randn(12, rt)

@@ -1,127 +1,142 @@
 # ratelimit
 
-限流器实现包，提供内存与 Redis 两种存储后端：令牌桶、滑动窗口、并发数限制与组合限流，可自由切换。
+Rate limiter implementations with two storage backends, in-memory and Redis: token
+bucket, sliding window, concurrency limit, and chained limiting — freely interchangeable.
 
-> **HTTP 限流中间件**不在本包提供：已统一收敛到 `httpx/middleware` 子包（`middleware.NewRateLimit`），并由 httpx 主包 `httpx.WithRateLimit` 便捷注册。本包只负责提供各类 `Limiter`。
+> The **HTTP rate limiting middleware** is not provided by this package: it now lives in the
+> `httpx/middleware` subpackage (`middleware.NewRateLimit`), and is registered conveniently via
+> `httpx.WithRateLimit` in the main httpx package. This package only provides the various
+> `Limiter` types.
 
-## 特性
+## Features
 
-- **双存储后端**：内存（单机）与 Redis（分布式），经统一 `Limiter` 接口自由切换
-- **令牌桶**：支持突发流量，以固定速率生成令牌
-- **滑动窗口**：精确控制时间窗口内的请求数
-- **并发数限制**：限制同时处理的请求数量（需手动 `Release`）
-- **组合限流**：多个限流器链式组合，可混合内存与 Redis
-- **Lua 脚本**：Redis 限流器用 Lua 脚本保证原子性
-- **线程安全**：所有限流器均线程安全
+- **Dual storage backends**: in-memory (single node) and Redis (distributed), swappable
+  through a unified `Limiter` interface
+- **Token bucket**: tolerates burst traffic and refills tokens at a fixed rate
+- **Sliding window**: precise control over the number of requests in a time window
+- **Concurrency limit**: caps the number of in-flight requests (requires a manual `Release`)
+- **Chained limiting**: chain several limiters, mixing in-memory and Redis
+- **Lua scripts**: Redis limiters use Lua scripts to guarantee atomicity
+- **Thread safety**: every limiter is safe for concurrent use
 
-## 安装
+## Installation
 
 ```bash
 go get github.com/chihqiang/infra-go/ratelimit
 ```
 
-## 限流器
+## Limiters
 
-### 令牌桶
+### Token bucket
 
-以固定速率生成令牌，请求消耗令牌，支持突发流量：
+Tokens are generated at a fixed rate and consumed by requests, allowing burst traffic:
 
 ```go
-// --- 内存 ---
+// --- In-memory ---
 tb := ratelimit.NewTokenBucket(100, 200) // 100 QPS, burst 200
 
-// --- Redis（多实例共享）---
+// --- Redis (shared across instances) ---
 rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379"})
 tb := ratelimit.NewRedisTokenBucket(rdb, "rate:tb", 100, 200)
 
-// 使用
-if tb.Allow() { /* 请求通过 */ }
+// Usage
+if tb.Allow() { /* request allowed */ }
 
-// 带 context（Redis 版本支持超时/取消）
+// With context (the Redis variants support timeout/cancellation)
 ok, err := tb.AllowContext(ctx)
 ```
 
-### 滑动窗口
+### Sliding window
 
-在指定时间窗口内最多允许 N 次请求：
+Allows at most N requests within a given time window:
 
 ```go
-sw := ratelimit.NewSlidingWindow(100, time.Second)                    // 内存：每秒 100 次
+sw := ratelimit.NewSlidingWindow(100, time.Second)                    // in-memory: 100 per second
 sw := ratelimit.NewRedisSlidingWindow(rdb, "rate:sw", 100, time.Second) // Redis
 
-if sw.Allow() { /* 请求通过 */ }
+if sw.Allow() { /* request allowed */ }
 ```
 
-### 并发数限制
+### Concurrency limit
 
-限制同时处理的请求数量，需手动 `Release`：
+Caps the number of requests handled concurrently; a manual `Release` is required:
 
 ```go
-c := ratelimit.NewConcurrency(10) // 最多 10 并发
+c := ratelimit.NewConcurrency(10) // at most 10 concurrent
 
 if c.Allow() {
     defer c.Release()
-    // 处理请求
+    // handle the request
 }
 ```
 
-### 组合限流
+### Chained limiting
 
-多个限流器链式组合（全部通过才放行），可混合内存与 Redis：
+Chains several limiters (all of them must pass), mixing in-memory and Redis:
 
 ```go
 memTB := ratelimit.NewTokenBucket(100, 200)
 redisSW := ratelimit.NewRedisSlidingWindow(rdb, "rate:sw", 1000, time.Minute)
 
 chain := ratelimit.NewChain(memTB, redisSW)
-if chain.Allow() { /* 两个限流器都通过 */ }
+if chain.Allow() { /* both limiters passed */ }
 ```
 
-## HTTP 限流中间件
+## HTTP rate limiting middleware
 
-HTTP 限流中间件已迁至 `httpx/middleware` 子包：`middleware.NewRateLimit(limiter, skipPaths...)`（面向对象，返回标准 `func(http.Handler) http.Handler`，可被 gin/echo 等复用）；httpx 主包内置 `httpx.WithRateLimit` 便捷注册。`limiter` 参数类型 `middleware.RateLimiter` 与本包 `Limiter` 方法集一致，本包各类限流器可直接传入。
+The HTTP rate limiting middleware has moved to the `httpx/middleware` subpackage:
+`middleware.NewRateLimit(limiter, skipPaths...)` (object-oriented, returning a standard
+`func(http.Handler) http.Handler` that gin/echo and others can reuse); the main httpx package
+ships the `httpx.WithRateLimit` convenience registration. The `limiter` parameter type
+`middleware.RateLimiter` has the same method set as this package's `Limiter`, so any limiter
+here can be passed directly.
 
-特性：
+Features:
 
-- 被限流返回 **429 Too Many Requests**，并按 RFC 6585 §4 携带 **`Retry-After`**
-- 通过 `AllowContext` 复用请求 context，Redis 限流器自动获得超时控制
-- 限流组件异常时 **fail-open 放行**并记录错误日志，避免 Redis 抖动拖垮服务
-- `skipPaths` 可跳过健康检查等路径（精确匹配或 `*` 前缀通配，同 `httpx.WithLogger`）
-- `limiter` 为 nil 时降级为不限流并记录告警（不 panic）
+- Throttled requests get **429 Too Many Requests**, plus **`Retry-After`** per RFC 6585 §4
+- Reuses the request context through `AllowContext`, so Redis limiters get timeout control
+  automatically
+- When the limiter itself fails, requests are **failed open** and an error is logged, so a
+  flaky Redis cannot drag the service down
+- `skipPaths` skips paths such as health checks (exact match or `*` prefix wildcard, same as
+  `httpx.WithLogger`)
+- A nil `limiter` degrades to no limiting and logs a warning (no panic)
 
-### Retry-After（建议重试间隔）
+### Retry-After (suggested retry interval)
 
-本包的限流器均实现了 `RetryAfter() time.Duration`，HTTP 中间件据此生成
-`Retry-After`（RFC 9110 §10.2.3），让客户端在正确的时机重试而非盲目退避：
+Every limiter in this package implements `RetryAfter() time.Duration`, which the HTTP
+middleware uses to build `Retry-After` (RFC 9110 §10.2.3), letting clients retry at the right
+moment instead of backing off blindly:
 
-| 限流器 | `RetryAfter()` 含义 |
+| Limiter | Meaning of `RetryAfter()` |
 |--------|------------------|
-| `TokenBucket` | 距下一个令牌可用（由实时令牌数与 `rate` 算出） |
-| `SlidingWindow` | 最早一次记录滑出窗口 |
-| `RedisTokenBucket` | 生成一个令牌所需时长（按 `rate` 估计） |
-| `RedisSlidingWindow` | 整个窗口时长（保守上界，避免在限流路径上再访问 Redis） |
-| `Concurrency` | **未实现** —— 占用时长不可预测，编造数值会误导客户端 |
+| `TokenBucket` | Time until the next token is available (derived from the live token count and `rate`) |
+| `SlidingWindow` | When the oldest record slides out of the window |
+| `RedisTokenBucket` | How long it takes to generate one token (estimated from `rate`) |
+| `RedisSlidingWindow` | The whole window duration (a conservative upper bound, avoiding another Redis round trip on the throttling path) |
+| `Concurrency` | **Not implemented** — the hold duration is unpredictable and any invented value would mislead clients |
 
 ```http
 HTTP/1.1 429 Too Many Requests
 Retry-After: 2
 ```
 
-> 自定义限流器若未实现 `RetryAfter()`，可用
-> `middleware.NewRateLimit(lim).WithRetryAfter(d)` 给出固定值；
-> 两者都没有时**省略该头**，而不是发送编造的时长。
+> If a custom limiter does not implement `RetryAfter()`, use
+> `middleware.NewRateLimit(lim).WithRetryAfter(d)` to supply a fixed value;
+> when neither exists, **omit the header** rather than sending an invented duration.
 >
-> 数值统一**向上取整到秒**；不足 1 秒也输出 `1`，避免 `Retry-After: 0`。
+> Values are always **rounded up to whole seconds**; anything under 1 second still emits `1`,
+> avoiding `Retry-After: 0`.
 
-### httpx 用法
+### Usage with httpx
 
 ```go
-server.Use(httpx.WithRateLimit(ratelimit.NewTokenBucket(100, 200)))          // 100 QPS、突发 200
-server.Use(httpx.WithRateLimit(ratelimit.NewSlidingWindow(10, time.Minute))) // 每分钟 10 次
-server.Use(httpx.WithRateLimit(redisLimiter, "/healthz", "/metrics"))        // 跳过探活接口
+server.Use(httpx.WithRateLimit(ratelimit.NewTokenBucket(100, 200)))          // 100 QPS, burst 200
+server.Use(httpx.WithRateLimit(ratelimit.NewSlidingWindow(10, time.Minute))) // 10 per minute
+server.Use(httpx.WithRateLimit(redisLimiter, "/healthz", "/metrics"))        // skip probes
 ```
 
-### 标准 net/http / 其它框架用法
+### Usage with standard net/http / other frameworks
 
 ```go
 import "github.com/chihqiang/infra-go/httpx/middleware"
@@ -131,9 +146,12 @@ handler := middleware.NewRateLimit(limiter).Middleware()(http.HandlerFunc(apiHan
 http.ListenAndServe(":8080", handler)
 ```
 
-### 按用户/IP 精细化限流
+### Per-user / per-IP fine-grained limiting
 
-`httpx.WithRateLimit` 为全局限流（整个服务共享同一实例）。需要按用户、IP、路由等维度独立计数时，按维度 key 构建限流器并自行封装（取客户端 IP 直接用 `x.ClientIP`，已处理反代/XFF，勿手写 `net.SplitHostPort`）：
+`httpx.WithRateLimit` is a global limiter (the whole service shares one instance). When you
+need independent counters per user, IP, route, and so on, build a limiter from a dimension key
+and wrap it yourself (get the client IP with `x.ClientIP`, which already handles reverse
+proxies/XFF — do not hand-roll `net.SplitHostPort`):
 
 ```go
 import "github.com/chihqiang/infra-go/httpx/x"
@@ -141,7 +159,7 @@ import "github.com/chihqiang/infra-go/httpx/x"
 func RateLimitByIP(rdb *redis.Client, rate, burst float64) func(http.Handler) http.Handler {
     return func(next http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-            ip := x.ClientIP(r) // 真实客户端 IP（含反代/可信代理解析）
+            ip := x.ClientIP(r) // real client IP (resolves reverse proxies / trusted proxies)
             key := fmt.Sprintf("rate_limit:ip:%s", ip)
             limiter := ratelimit.NewRedisTokenBucket(rdb, key, rate, burst)
             if !limiter.Allow() {
@@ -155,9 +173,9 @@ func RateLimitByIP(rdb *redis.Client, rate, burst float64) func(http.Handler) ht
 }
 ```
 
-## 接口
+## Interface
 
-所有限流器实现 `Limiter`，内存与 Redis 版本可自由替换：
+All limiters implement `Limiter`, so the in-memory and Redis variants are interchangeable:
 
 ```go
 type Limiter interface {
@@ -166,15 +184,15 @@ type Limiter interface {
 }
 ```
 
-## 工厂函数
+## Factory functions
 
-通过 `StoreType` 自由切换存储后端：
+Switch storage backends freely via `StoreType`:
 
 ```go
 limiter := ratelimit.NewTokenBucketWithStore(
-    ratelimit.StoreRedis,            // 或 ratelimit.StoreMemory
-    rdb,                              // Redis 客户端（Memory 传 nil）
-    "rate_limit_key",                 // 限流键名（Memory 传空）
+    ratelimit.StoreRedis,            // or ratelimit.StoreMemory
+    rdb,                              // Redis client (nil for Memory)
+    "rate_limit_key",                 // limiter key name (empty for Memory)
     ratelimit.TokenBucketConfig{Rate: 100, Burst: 200},
 )
 
@@ -186,47 +204,56 @@ limiter = ratelimit.NewSlidingWindowWithStore(
 )
 ```
 
-## 分布式场景
+## Distributed scenarios
 
-Redis 限流器适用于多实例部署，各实例共享同一 Redis 键实现全局限流：
+Redis limiters suit multi-instance deployments: every instance shares the same Redis key to
+enforce a global limit:
 
 ```go
-// 实例 1 与实例 2 共享同一个键 → 共享 100 QPS 配额
+// Instance 1 and instance 2 share one key → they share a 100 QPS quota
 tb1 := ratelimit.NewRedisTokenBucket(rdb, "shared:api:limit", 100, 200)
 tb2 := ratelimit.NewRedisTokenBucket(rdb, "shared:api:limit", 100, 200)
 ```
 
-> **要求**：所有实例必须把**同一个键**传给限流器，且各实例使用**同一组** `rate`/`burst`/`limit`/`window` 参数。
-> 参数不一致时，脚本会按调用方自己传入的值判断，导致行为不可预期。
+> **Requirement**: every instance must pass the **same key** to the limiter, and all instances
+> must use the **same set** of `rate`/`burst`/`limit`/`window` parameters.
+> With mismatched parameters the script judges by whatever the caller passed, which makes
+> behavior unpredictable.
 
-## 原理说明
+## How it works
 
-### Redis 令牌桶
+### Redis token bucket
 
-用 Lua 脚本 + Redis Hash（`tokens` / `last_update`）保证原子性：读取令牌数与上次更新时间 → 计算期间新增令牌 → 判断是否足够并消耗 → 更新状态与过期时间。
+A Lua script plus a Redis Hash (`tokens` / `last_update`) guarantees atomicity: read the token
+count and the last update time → compute the tokens added since → check whether enough are
+available and consume them → update the state and the expiry.
 
-### Redis 滑动窗口
+### Redis sliding window
 
-用 Lua 脚本 + Redis ZSET 实现：`ZREMRANGEBYSCORE` 移除窗口外旧记录 → `ZCARD` 统计当前窗口请求数 → 未超限则 `ZADD` 当前时间戳 → 设置键过期自动清理。
+Implemented with a Lua script plus a Redis ZSET: `ZREMRANGEBYSCORE` drops records outside the
+window → `ZCARD` counts the requests in the current window → if still under the limit, `ZADD`
+the current timestamp → the key expiry is set for automatic cleanup.
 
-ZSET 成员（member）的格式为 `<进程唯一前缀>:<毫秒时间戳>:<进程内计数>`，
-前缀由 `crypto/rand` 生成，保证**跨进程**唯一。
+The ZSET member format is `<process-unique prefix>:<millisecond timestamp>:<in-process count>`,
+where the prefix is generated with `crypto/rand` to guarantee **cross-process** uniqueness.
 
-> 这一点对计数的正确性至关重要：`ZADD` 对已存在的成员只更新 score、不增加基数，
-> 而窗口大小是用 `ZCARD` 统计的。若成员不含节点标识，两个实例在同一毫秒
-> 各自从计数 1 开始，就会生成相同的成员 → `ZADD` 覆盖 → `ZCARD` 低估真实请求数
-> → 实际放行量超过 `limit`，全局限流形同虚设。
+> This matters for counting correctness: `ZADD` only updates the score of an existing member
+> and does not increase the cardinality, while the window size is measured with `ZCARD`.
+> If members carried no node identity, two instances starting at count 1 in the same
+> millisecond would produce identical members → `ZADD` overwrites → `ZCARD` undercounts the
+> real requests → more traffic is let through than `limit` allows, making the global limit
+> useless.
 
-## 错误处理
+## Error handling
 
 ```go
-if !limiter.Allow() { /* 被限流 */ }
+if !limiter.Allow() { /* rate limited */ }
 
 ok, err := limiter.AllowContext(ctx)
-if err != nil { /* Redis 错误或 context 取消 */ }
-if !ok { /* 被限流 */ }
+if err != nil { /* Redis error or context cancellation */ }
+if !ok { /* rate limited */ }
 ```
 
-| 错误 | 说明 |
+| Error | Description |
 |------|------|
-| `ErrLimitExceeded` | 已定义但**当前不被任何限流器返回**；被限流时 `Allow`/`AllowContext` 返回 `false`（error 为 nil），仅 Redis 或 ctx 出错时才有非 nil error |
+| `ErrLimitExceeded` | Defined but **currently returned by no limiter**; when throttled, `Allow`/`AllowContext` return `false` (with a nil error), and a non-nil error only appears when Redis or the ctx fails |

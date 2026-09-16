@@ -7,16 +7,16 @@ import (
 	"strconv"
 )
 
-// --- 字符串转换 ---
+// --- String conversion ---
 
-// ToString 将 any 转换为 string，转换失败返回空字符串。
-// 支持 string、[]byte、json.Number、fmt.Stringer 以及基本数值类型。
+// ToString converts any to string, returning an empty string if the conversion fails.
+// Supports string, []byte, json.Number, fmt.Stringer and the basic numeric types.
 func ToString(v any) string {
 	val, _ := ToStringE(v)
 	return val
 }
 
-// ToStringE 将 any 转换为 string，返回转换结果和错误。
+// ToStringE converts any to string and returns the result along with an error.
 func ToStringE(v any) (string, error) {
 	switch val := v.(type) {
 	case nil:
@@ -58,7 +58,7 @@ func ToStringE(v any) (string, error) {
 	case error:
 		return val.Error(), nil
 	default:
-		// 尝试 JSON 序列化
+		// fall back to JSON marshal
 		b, err := json.Marshal(v)
 		if err != nil {
 			return "", castErr(reflect.TypeOf(v).String(), "string")

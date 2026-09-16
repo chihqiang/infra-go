@@ -7,32 +7,37 @@ import (
 	"time"
 )
 
-// Google SRE 熔断算法参数。
+// Google SRE breaker algorithm parameters.
 const (
-	// window 统计窗口总时长：10 秒。
+	// window is the total length of the statistical window: 10 seconds.
 	window = time.Second * 10
-	// buckets 滑动窗口桶数量。
+	// buckets is the number of buckets in the rolling window.
 	buckets = 40
-	// forcePassDuration 强制放行间隔：超过该时长未放行则放行一个探测请求（半开状态）。
+	// forcePassDuration is the forced-pass interval: when nothing has passed for
+	// longer than this, one probe request is let through (half-open state).
 	forcePassDuration = time.Second
-	// k 拒绝公式中的请求放大系数，默认 1.5。
+	// k is the request amplification factor of the rejection formula, default 1.5.
 	k = 1.5
-	// minK 放大系数下限，防止权重过小。
+	// minK is the lower bound of the amplification factor, keeping the weight from
+	// becoming too small.
 	minK = 1.1
-	// protection 小流量保护：总请求数低于该值时不被拒绝。
+	// protection is the low-traffic guard: requests are not rejected while the total
+	// number of requests is below this value.
 	protection = 5
 )
 
-// googleBreaker 基于 Google SRE 客户端限流算法（见
-// https://landing.google.com/sre/sre-book/chapters/handling-overload/ 的
-// Client-Side Throttling 一节）。
+// googleBreaker implements the Google SRE client-side throttling algorithm (see
+// the Client-Side Throttling section of
+// https://landing.google.com/sre/sre-book/chapters/handling-overload/).
 //
-// 拒绝概率由滑动窗口内的请求/成功/失败统计计算：
+// The rejection probability is computed from the request/success/failure statistics
+// of the rolling window:
 //
 //	weightedAccepts = max(k - (k-minK) * failingBuckets/buckets, minK) * accepts
 //	dropRatio = (total - protection - weightedAccepts) / (total + 1)
 //
-// dropRatio > 0 时按概率拒绝请求；冷却期后强制放行一个探测请求。
+// When dropRatio > 0 requests are rejected probabilistically; after a cool-down
+// period one probe request is forced through.
 type googleBreaker struct {
 	k          float64
 	minK       float64
@@ -42,15 +47,15 @@ type googleBreaker struct {
 	protection int64
 }
 
-// windowResult 滑动窗口聚合结果。
+// windowResult is the aggregated result of the rolling window.
 type windowResult struct {
-	accepts        int64 // 成功数
-	total          int64 // 总请求数
-	failingBuckets int64 // 连续失败桶数
-	workingBuckets int64 // 有成功的桶数
+	accepts        int64 // successes
+	total          int64 // total requests
+	failingBuckets int64 // number of consecutive failing buckets
+	workingBuckets int64 // number of buckets with successes
 }
 
-// newGoogleBreaker 创建 Google SRE 熔断器，使用 cfg 中的算法参数。
+// newGoogleBreaker creates a Google SRE breaker using the algorithm parameters in cfg.
 func newGoogleBreaker(cfg sreConfig) *googleBreaker {
 	return &googleBreaker{
 		k:          cfg.k,
@@ -62,28 +67,32 @@ func newGoogleBreaker(cfg sreConfig) *googleBreaker {
 	}
 }
 
-// accept 判断请求是否允许通过；返回 nil 允许，返回 ErrServiceUnavailable 拒绝。
+// accept decides whether the request may pass; nil means allowed and
+// ErrServiceUnavailable means rejected.
 func (b *googleBreaker) accept() error {
 	history := b.history()
 
-	// 计算加权成功数：失败越集中（连续失败桶越多），权重越低，越容易被拒绝
+	// Weighted accepts: the more concentrated the failures (the more consecutive
+	// failing buckets), the lower the weight and the more likely a rejection
 	w := b.k - (b.k-b.minK)*float64(history.failingBuckets)/buckets
 	weightedAccepts := math.Max(w, b.minK) * float64(history.accepts)
 
-	// Google SRE 拒绝公式；total 很小（< protection）时结果非正，天然不拒绝
+	// Google SRE rejection formula; when total is tiny (< protection) the result is
+	// non-positive, so nothing is rejected
 	dropRatio := (float64(history.total-b.protection) - weightedAccepts) / float64(history.total+1)
 	if dropRatio <= 0 {
 		return nil
 	}
 
-	// 半开：距上次放行超过冷却期，强制放行一个探测请求
+	// Half-open: more than a cool-down since the last pass, force one probe through
 	lastPass := b.lastPass.Load()
 	if lastPass > 0 && time.Now().UnixNano()-lastPass > int64(forcePassDuration) {
 		b.lastPass.Set(time.Now().UnixNano())
 		return nil
 	}
 
-	// 有成功请求的桶占比越高，拒绝概率越低（工作正常的时段被稀释）
+	// The higher the share of buckets with successes, the lower the rejection
+	// probability (healthy periods dilute it)
 	dropRatio *= float64(buckets-history.workingBuckets) / buckets
 
 	if b.proba.TrueOnProba(dropRatio) {
@@ -94,7 +103,8 @@ func (b *googleBreaker) accept() error {
 	return nil
 }
 
-// allow 判断请求是否允许通过，返回内部 Promise 用于上报结果。
+// allow decides whether the request may pass and returns an internal Promise for
+// reporting the outcome.
 func (b *googleBreaker) allow() (internalPromise, error) {
 	if err := b.accept(); err != nil {
 		b.markDrop()
@@ -103,8 +113,9 @@ func (b *googleBreaker) allow() (internalPromise, error) {
 	return googlePromise{b: b}, nil
 }
 
-// doReq 执行请求：先判断是否允许，再执行并上报成功/失败。
-// fallback 非空时，熔断打开走降级逻辑。
+// doReq runs the request: first decide whether it is allowed, then run it and
+// report success/failure.
+// When fallback is non-nil, an open breaker goes through the fallback logic.
 func (b *googleBreaker) doReq(req func() error, fallback Fallback, acceptable Acceptable) error {
 	if err := b.accept(); err != nil {
 		b.markDrop()
@@ -116,7 +127,8 @@ func (b *googleBreaker) doReq(req func() error, fallback Fallback, acceptable Ac
 
 	var succ bool
 	defer func() {
-		// 请求 panic 时 succ 为 false，视为失败；同时 panic 会继续向上传播
+		// When the request panics, succ stays false and it counts as a failure; the
+		// panic itself keeps propagating upwards
 		if succ {
 			b.markSuccess()
 		} else {
@@ -131,11 +143,13 @@ func (b *googleBreaker) doReq(req func() error, fallback Fallback, acceptable Ac
 	return err
 }
 
-// history 聚合滑动窗口内的统计结果。
-// 遍历逻辑在此内联，不抽成 rollingWindow 上的公共方法：accept 每次判定都会调用它，
-// 回调闭包与逐桶取模的开销在热路径上不可忽略。
-// 注意：workingBuckets/failingBuckets 依赖遍历顺序（连续成功/失败桶计数），
-// 因此无法增量维护，这里保持遍历；两段循环避免了每桶一次的 % size 取模。
+// history aggregates the statistics of the rolling window.
+// The traversal is inlined here rather than exposed as a public method on
+// rollingWindow: accept calls it on every decision, and on the hot path the cost
+// of a callback closure plus a modulo per bucket is not negligible.
+// Note: workingBuckets/failingBuckets depend on the traversal order (they count
+// consecutive success/failure buckets), so they cannot be maintained
+// incrementally and the traversal stays; the two loops avoid one % size per bucket.
 func (b *googleBreaker) history() windowResult {
 	var result windowResult
 	rw := b.stat
@@ -157,7 +171,8 @@ func (b *googleBreaker) history() windowResult {
 	return result
 }
 
-// aggregate 将单个桶累加进聚合结果（供 history 内联循环调用，可被内联）。
+// aggregate accumulates a single bucket into the result (called from the inlined
+// loop in history, so it can be inlined).
 func aggregate(result *windowResult, bk *bucket) {
 	result.accepts += bk.Success
 	result.total += bk.Sum
@@ -177,7 +192,7 @@ func (b *googleBreaker) markDrop()    { b.stat.add(drop) }
 func (b *googleBreaker) markFailure() { b.stat.add(fail) }
 func (b *googleBreaker) markSuccess() { b.stat.add(success) }
 
-// googlePromise 实现 internalPromise，将结果上报给熔断器。
+// googlePromise implements internalPromise, reporting the outcome to the breaker.
 type googlePromise struct {
 	b *googleBreaker
 }
@@ -185,15 +200,17 @@ type googlePromise struct {
 func (p googlePromise) Accept() { p.b.markSuccess() }
 func (p googlePromise) Reject() { p.b.markFailure() }
 
-// proba 基于概率判断是否执行，用于按拒绝概率采样。
-// 使用 math/rand/v2 的全局函数，并发安全且无额外锁。
+// proba decides whether to act based on a probability, used to sample by
+// rejection ratio.
+// It uses the global functions of math/rand/v2, which are concurrency-safe and
+// need no extra lock.
 type proba struct{}
 
 func newProba() *proba {
 	return &proba{}
 }
 
-// TrueOnProba 以 prob 概率返回 true。
+// TrueOnProba returns true with probability prob.
 func (p *proba) TrueOnProba(prob float64) bool {
 	if prob <= 0 {
 		return false
@@ -201,7 +218,8 @@ func (p *proba) TrueOnProba(prob float64) bool {
 	return rand.Float64() < prob
 }
 
-// atomicNano 原子存储 UnixNano 时刻，用于记录上次放行时间。
+// atomicNano atomically stores a UnixNano timestamp, used to record the last pass
+// time.
 type atomicNano struct {
 	val atomic.Int64
 }

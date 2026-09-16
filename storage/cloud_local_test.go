@@ -11,11 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 本文件覆盖云存储（OSS/COS/KODO）中不依赖真实云服务即可验证的本地分支：
-// ctx 快速失败、凭证生成（uploadToken）、URL 解析回退等。
-// 真实的上传/删除走云 SDK 需真实环境，不在本地测试范围内。
+// This file covers the local branches of the cloud storages (OSS/COS/KODO) that
+// can be verified without a real cloud service: ctx fast-fail, credential
+// generation (uploadToken), URL resolution fallback, and so on.
+// Real uploads/deletes go through the cloud SDKs and need a real environment, so
+// they are out of scope for local tests.
 
-// --- OSS ctx 快速失败 ---
+// --- OSS ctx fast-fail ---
 
 func TestOSS_WriteCancelledCtx(t *testing.T) {
 	s, err := NewOSS(&OSSConfig{
@@ -49,10 +51,10 @@ func TestOSS_DeleteCancelledCtx(t *testing.T) {
 	assert.Contains(t, err.Error(), "delete OSS object")
 }
 
-// --- resolveOSSURL 解析 ---
+// --- resolveOSSURL resolution ---
 
 func TestResolveOSSURL_Default(t *testing.T) {
-	// 无 URL、endpoint 无协议 → 默认 https://bucket.endpoint
+	// No URL and an endpoint without a protocol -> default https://bucket.endpoint
 	got := resolveOSSURL(&OSSConfig{
 		Endpoint: "oss-cn-hangzhou.aliyuncs.com",
 		Bucket:   "bkt",
@@ -69,7 +71,7 @@ func TestResolveOSSURL_CustomURL(t *testing.T) {
 	assert.Equal(t, "https://cdn.example.com", got)
 }
 
-// --- COS ctx 快速失败 ---
+// --- COS ctx fast-fail ---
 
 func TestCOS_WriteCancelledCtx(t *testing.T) {
 	s, err := NewCOS(&COSConfig{
@@ -101,7 +103,7 @@ func TestCOS_DeleteCancelledCtx(t *testing.T) {
 	assert.Contains(t, err.Error(), "delete COS object")
 }
 
-// --- KODO 本地分支 ---
+// --- KODO local branches ---
 
 func TestKODO_UploadToken(t *testing.T) {
 	s, err := NewKODO(&KODOConfig{
@@ -113,7 +115,7 @@ func TestKODO_UploadToken(t *testing.T) {
 
 	ks, ok := s.(*kodoStorage)
 	require.True(t, ok)
-	// 上传凭证应非空（纯本地 HMAC 签名）
+	// The upload credential must be non-empty (pure local HMAC signature)
 	assert.NotEmpty(t, ks.uploadToken())
 }
 
@@ -147,7 +149,7 @@ func TestKODO_DeleteCancelledCtx(t *testing.T) {
 	assert.Contains(t, err.Error(), "delete KODO object")
 }
 
-// --- OSS Read/Exists ctx 快速失败 ---
+// --- OSS Read/Exists ctx fast-fail ---
 
 func TestOSS_ReadCancelledCtx(t *testing.T) {
 	s, err := NewOSS(&OSSConfig{
@@ -181,7 +183,7 @@ func TestOSS_ExistsCancelledCtx(t *testing.T) {
 	assert.Contains(t, err.Error(), "check OSS object")
 }
 
-// --- COS Read/Exists ctx 快速失败 ---
+// --- COS Read/Exists ctx fast-fail ---
 
 func TestCOS_ReadCancelledCtx(t *testing.T) {
 	s, err := NewCOS(&COSConfig{
@@ -213,7 +215,7 @@ func TestCOS_ExistsCancelledCtx(t *testing.T) {
 	assert.Contains(t, err.Error(), "check COS object")
 }
 
-// --- KODO Read/Exists 本地分支 ---
+// --- KODO Read/Exists local branches ---
 
 func TestKODO_ReadCancelledCtx(t *testing.T) {
 	s, err := NewKODO(&KODOConfig{
@@ -246,7 +248,7 @@ func TestKODO_ExistsCancelledCtx(t *testing.T) {
 }
 
 func TestKODO_ReadURLNotSet(t *testing.T) {
-	// 未配置公开访问域名 URL：Read 应在发起网络请求前返回错误
+	// No public access domain in URL: Read must fail before any network request
 	s, err := NewKODO(&KODOConfig{
 		AccessKey: "test-access-key",
 		SecretKey: "test-secret-key",
@@ -259,10 +261,10 @@ func TestKODO_ReadURLNotSet(t *testing.T) {
 	assert.Contains(t, err.Error(), "KODO URL is empty")
 }
 
-// --- 云驱动 HTTP 状态码语义（用 httptest 替代真实云服务） ---
+// --- Cloud driver HTTP status code semantics (httptest stands in for the real cloud service) ---
 
-// TestCOS_DeleteAccepts204 验证 COS 删除的 204 No Content 被视为成功，
-// 而不是被误判为失败（历史缺陷：只判断 == 200）。
+// TestCOS_DeleteAccepts204 verifies that a COS delete returning 204 No Content is
+// treated as success rather than a failure (historical defect: only == 200 was checked).
 func TestCOS_DeleteAccepts204(t *testing.T) {
 	var gotMethod, gotPath string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -282,7 +284,7 @@ func TestCOS_DeleteAccepts204(t *testing.T) {
 	assert.True(t, strings.HasSuffix(gotPath, "dir/a.txt"), "unexpected path: %q", gotPath)
 }
 
-// TestCOS_DeletePropagatesServerError 验证 5xx 仍会被报错。
+// TestCOS_DeletePropagatesServerError verifies that a 5xx is still reported as an error.
 func TestCOS_DeletePropagatesServerError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -297,7 +299,8 @@ func TestCOS_DeletePropagatesServerError(t *testing.T) {
 	assert.Contains(t, err.Error(), "delete COS object")
 }
 
-// TestKODO_ReadAcceptsAny2xx 验证 KODO 读取接受任意 2xx（如 CDN 返回 206）。
+// TestKODO_ReadAcceptsAny2xx verifies that a KODO read accepts any 2xx
+// (for example 206 returned by a CDN).
 func TestKODO_ReadAcceptsAny2xx(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusPartialContent)
@@ -311,7 +314,7 @@ func TestKODO_ReadAcceptsAny2xx(t *testing.T) {
 	assert.Equal(t, "partial", string(data))
 }
 
-// TestKODO_ReadRejects4xx 验证 KODO 读取仍然拒绝 4xx。
+// TestKODO_ReadRejects4xx verifies that a KODO read still rejects 4xx.
 func TestKODO_ReadRejects4xx(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

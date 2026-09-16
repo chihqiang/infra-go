@@ -11,19 +11,19 @@ import (
 	"github.com/chihqiang/infra-go/cast"
 )
 
-// 错误定义。
+// Error definitions.
 var (
-	// errUnknownType 未知类型，无法设置值。
+	// errUnknownType indicates an unknown type whose value cannot be set.
 	errUnknownType = errors.New("unknown type")
 )
 
-// setWithProperType 根据目标类型设置值。
-// 布尔类型使用 cast.ToBoolE，Duration 类型使用 cast.ToDurationE，
-// 整数和浮点类型保留 strconv 以支持位宽溢出检查。
-// 类型预判（isTime/isDuration/isFileHeader）来自缓存的 fieldMeta，
-// 避免运行时 value.Interface().(type) 断言。
+// setWithProperType sets a value according to the target type.
+// Booleans use cast.ToBoolE and Duration uses cast.ToDurationE,
+// while integers and floats keep strconv to support bit-width overflow checks.
+// Type pre-detection (isTime/isDuration/isFileHeader) comes from the cached fieldMeta,
+// avoiding runtime value.Interface().(type) assertions.
 func setWithProperType(val string, value reflect.Value, fm *fieldMeta, opt setOptions) error {
-	// 字符串类型不去除空格，保留原始数据
+	// String values are not trimmed, keeping the original data
 	if value.Kind() != reflect.String {
 		val = strings.TrimSpace(val)
 	}
@@ -38,7 +38,7 @@ func setWithProperType(val string, value reflect.Value, fm *fieldMeta, opt setOp
 	case reflect.Int32:
 		return setIntField(val, 32, value)
 	case reflect.Int64:
-		// time.Duration 底层是 int64
+		// time.Duration is backed by int64
 		if fm != nil && fm.isDuration {
 			return setTimeDuration(val, value)
 		}
@@ -68,7 +68,7 @@ func setWithProperType(val string, value reflect.Value, fm *fieldMeta, opt setOp
 		if fm != nil && fm.isFileHeader {
 			return nil
 		}
-		// 其他结构体尝试 JSON 解析
+		// Other structs fall back to JSON parsing
 		return json.Unmarshal([]byte(val), value.Addr().Interface())
 	case reflect.Map:
 		return json.Unmarshal([]byte(val), value.Addr().Interface())
@@ -83,8 +83,8 @@ func setWithProperType(val string, value reflect.Value, fm *fieldMeta, opt setOp
 	return nil
 }
 
-// setIntField 设置有符号整数字段。
-// 保留 strconv.ParseInt 以支持位宽溢出检查。
+// setIntField sets a signed integer field.
+// strconv.ParseInt is kept to support bit-width overflow checks.
 func setIntField(val string, bitSize int, field reflect.Value) error {
 	if val == "" {
 		val = "0"
@@ -96,8 +96,8 @@ func setIntField(val string, bitSize int, field reflect.Value) error {
 	return err
 }
 
-// setUintField 设置无符号整数字段。
-// 保留 strconv.ParseUint 以支持位宽溢出检查。
+// setUintField sets an unsigned integer field.
+// strconv.ParseUint is kept to support bit-width overflow checks.
 func setUintField(val string, bitSize int, field reflect.Value) error {
 	if val == "" {
 		val = "0"
@@ -109,8 +109,8 @@ func setUintField(val string, bitSize int, field reflect.Value) error {
 	return err
 }
 
-// setBoolField 设置布尔字段。
-// 使用 cast.ToBoolE 进行类型转换。
+// setBoolField sets a boolean field.
+// It converts the value using cast.ToBoolE.
 func setBoolField(val string, field reflect.Value) error {
 	if val == "" {
 		field.SetBool(false)
@@ -124,8 +124,8 @@ func setBoolField(val string, field reflect.Value) error {
 	return nil
 }
 
-// setFloatField 设置浮点字段。
-// 保留 strconv.ParseFloat 以支持位宽溢出检查。
+// setFloatField sets a floating-point field.
+// strconv.ParseFloat is kept to support bit-width overflow checks.
 func setFloatField(val string, bitSize int, field reflect.Value) error {
 	if val == "" {
 		val = "0.0"
@@ -137,9 +137,9 @@ func setFloatField(val string, bitSize int, field reflect.Value) error {
 	return err
 }
 
-// setTimeField 设置 time.Time 字段。
-// 支持通过 `time_format` 标签指定格式，默认 RFC3339。
-// 时间相关标签信息已缓存在 fieldMeta 中。
+// setTimeField sets a time.Time field.
+// The layout can be set with the `time_format` tag and defaults to RFC3339.
+// The time-related tag information is already cached in fieldMeta.
 func setTimeField(val string, fm *fieldMeta, value reflect.Value) error {
 	timeFormat := fm.timeFormat
 	if timeFormat == "" {
@@ -151,7 +151,7 @@ func setTimeField(val string, fm *fieldMeta, value reflect.Value) error {
 		return nil
 	}
 
-	// 支持 unix 时间戳
+	// Support unix timestamps
 	switch tf := strings.ToLower(timeFormat); tf {
 	case "unix", "unixmilli", "unixmicro", "unixnano":
 		tv, err := strconv.ParseInt(val, 10, 64)
@@ -193,8 +193,8 @@ func setTimeField(val string, fm *fieldMeta, value reflect.Value) error {
 	return nil
 }
 
-// setTimeDuration 设置 time.Duration 字段。
-// 使用 cast.ToDurationE 进行类型转换。
+// setTimeDuration sets a time.Duration field.
+// It converts the value using cast.ToDurationE.
 func setTimeDuration(val string, value reflect.Value) error {
 	if val == "" {
 		value.Set(reflect.ValueOf(time.Duration(0)))
@@ -208,7 +208,7 @@ func setTimeDuration(val string, value reflect.Value) error {
 	return nil
 }
 
-// setSlice 设置切片字段。
+// setSlice sets a slice field.
 func setSlice(vals []string, value reflect.Value, fm *fieldMeta, opt setOptions) error {
 	slice := reflect.MakeSlice(value.Type(), len(vals), len(vals))
 	for i, s := range vals {
@@ -220,7 +220,7 @@ func setSlice(vals []string, value reflect.Value, fm *fieldMeta, opt setOptions)
 	return nil
 }
 
-// setFormMap 将表单数据直接填充到 map 类型目标。
+// setFormMap fills the form data directly into a map-typed target.
 func setFormMap(ptr any, form map[string][]string) error {
 	el := reflect.TypeOf(ptr).Elem()
 
@@ -241,7 +241,7 @@ func setFormMap(ptr any, form map[string][]string) error {
 	}
 	for k, v := range form {
 		if len(v) > 0 {
-			ptrMap[k] = v[len(v)-1] // 取最后一个值
+			ptrMap[k] = v[len(v)-1] // take the last value
 		}
 	}
 	return nil

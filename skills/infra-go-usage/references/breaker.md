@@ -1,76 +1,76 @@
 # breaker
 
-熔断器，基于 Google SRE 自适应过载算法，保护下游依赖（数据库、HTTP API、Redis 等）在故障时不被级联拖垮。
+Circuit breaker based on Google's SRE adaptive overload algorithm; protects downstream dependencies (databases, HTTP APIs, Redis, etc.) from cascading failures.
 
-## 特性
+## Features
 
-- **Google SRE 算法**：滑动窗口统计错误率，按概率拒绝请求，避免雪崩
-- **三态自动流转**：关闭 → 打开 → 半开（冷却期后放行探测请求，成功则恢复）
-- **快速失败**：熔断打开时请求立即返回 `ErrServiceUnavailable`，不再等待慢速下游
-- **自定义错误策略**：`DoWithAcceptable` 排除 4xx 等业务错误，精确感知下游健康
-- **降级支持**：`DoWithFallback` 熔断打开时执行兜底逻辑（缓存、队列、友好错误）
-- **Promise 模式**：`Allow` 手动控制成功/失败上报
-- **全局管理**：按名称共享熔断器，`Do` 系列便捷函数开箱即用
+- **Google SRE algorithm**: computes the error rate over a sliding window and rejects requests probabilistically to avoid avalanches
+- **Automatic three-state transitions**: closed → open → half-open (probe requests are allowed through after the cooldown; success restores the circuit)
+- **Fail fast**: while the circuit is open, requests immediately return `ErrServiceUnavailable` instead of waiting for a slow downstream
+- **Custom error policy**: `DoWithAcceptable` excludes business errors such as 4xx, sensing downstream health precisely
+- **Fallback support**: `DoWithFallback` runs fallback logic (cache, queue, friendly error) while the circuit is open
+- **Promise mode**: `Allow` gives manual control over success/failure reporting
+- **Global management**: share breakers by name; the `Do` helpers work out of the box
 
-## 安装
+## Installation
 
 ```bash
 go get github.com/chihqiang/infra-go/breaker
 ```
 
-## 基本用法
+## Basic usage
 
 ```go
 b := breaker.NewBreaker(breaker.WithName("payment-gateway"))
 
-// 简单模式：统计所有非 nil 错误
+// Simple mode: count every non-nil error
 err := b.Do(func() error {
     return callPaymentAPI(req)
 })
 if errors.Is(err, breaker.ErrServiceUnavailable) {
-    // 熔断器打开，下游不可用
+    // Circuit is open, downstream unavailable
 }
 ```
 
-## 降级（DoWithFallback）
+## Fallback (DoWithFallback)
 
-熔断打开时执行降级逻辑：
+Runs fallback logic while the circuit is open:
 
 ```go
 err := b.DoWithFallback(func() error {
     return callPaymentAPI(req)
 }, func(err error) error {
-    // 返回缓存结果、加入重试队列，或返回友好错误
+    // Return a cached result, enqueue for retry, or return a friendly error
     return serveCachedResult(req)
 })
 ```
 
-## 排除业务错误（DoWithAcceptable）
+## Excluding business errors (DoWithAcceptable)
 
-精确控制哪些错误计入失败计数，避免 `ErrNotFound` 等业务错误触发熔断：
+Precisely control which errors count as failures, so business errors such as `ErrNotFound` don't trip the breaker:
 
 ```go
 err := b.DoWithAcceptable(func() error {
     return callPaymentAPI(req)
 }, func(err error) bool {
-    // 返回 true = "此错误可接受，不计入熔断计数"
+    // true = "this error is acceptable, don't count it toward the breaker"
     return errors.Is(err, ErrNotFound) || errors.Is(err, ErrUnauthorized)
 })
 ```
 
-组合使用 `DoWithFallbackAcceptable` 可同时降级 + 自定义错误策略。
+Use `DoWithFallbackAcceptable` to combine fallback and a custom error policy.
 
-## Promise 模式（手动控制）
+## Promise mode (manual control)
 
-`Allow` 适合需要异步上报结果的场景：
+`Allow` suits scenarios that need to report results asynchronously:
 
 ```go
 promise, err := b.Allow()
 if err != nil {
-    // 熔断器打开
+    // Circuit is open
     return err
 }
-// 执行请求后上报结果
+// Report the result after executing the request
 if success {
     promise.Accept()
 } else {
@@ -78,23 +78,23 @@ if success {
 }
 ```
 
-## 全局管理器
+## Global manager
 
-按名称共享熔断器，适合多处调用同一下游的场景（统计一致）：
+Share breakers by name; useful when the same downstream is called from many places (consistent statistics):
 
 ```go
-// 同名的熔断器全局共享
+// Breakers with the same name are shared globally
 err := breaker.Do("payment-gateway", func() error {
     return callPaymentAPI(req)
 })
 
-// 关闭某条调用链的熔断保护
+// Disable breaker protection for one call chain
 breaker.NoBreakerFor("health-check")
 ```
 
-## 上下文版本
+## Context variants
 
-所有 `Do` 方法都有 `DoCtx` 变体，context 取消时直接返回 context 错误，不执行请求：
+Every `Do` method has a `DoCtx` variant: when the context is cancelled it returns the context error directly without executing the request:
 
 ```go
 err := b.DoCtx(ctx, func() error {
@@ -102,20 +102,20 @@ err := b.DoCtx(ctx, func() error {
 })
 ```
 
-## 方法一览
+## Method overview
 
-| 方法 | 说明 |
+| Method | Description |
 | ------ | ------ |
-| `Allow()` / `AllowCtx(ctx)` | 检查是否放行，返回 Promise |
-| `Do(req)` / `DoCtx(ctx, req)` | 执行请求，熔断打开立即失败 |
-| `DoWithAcceptable(req, acceptable)` | 自定义错误可接受策略 |
-| `DoWithFallback(req, fallback)` | 熔断打开时执行降级 |
-| `DoWithFallbackAcceptable(req, fallback, acceptable)` | 降级 + 自定义错误策略 |
-| `GetBreaker(name)` / `Do(name, req)` | 全局共享熔断器 |
+| `Allow()` / `AllowCtx(ctx)` | Check whether the request is allowed; returns a Promise |
+| `Do(req)` / `DoCtx(ctx, req)` | Execute the request; fails immediately while the circuit is open |
+| `DoWithAcceptable(req, acceptable)` | Custom error-acceptance policy |
+| `DoWithFallback(req, fallback)` | Run fallback while the circuit is open |
+| `DoWithFallbackAcceptable(req, fallback, acceptable)` | Fallback + custom error policy |
+| `GetBreaker(name)` / `Do(name, req)` | Globally shared breakers |
 
-## 注意事项
+## Notes
 
-- **不要吞掉错误**：熔断器依赖准确的错误反馈计算错误率，不要在回调中吞掉真实错误
-- **配合超时使用**：熔断器防止级联失败，但仍需为每次调用设置超时，避免 goroutine 堆积
-- **为熔断器命名**：唯一名称使日志能区分不同故障来源
-- 熔断打开时会输出告警日志，包含最近 5 条失败原因，便于排查
+- **Don't swallow errors**: the breaker relies on accurate error feedback to compute the error rate; don't swallow real errors in the callback
+- **Use it together with timeouts**: the breaker prevents cascading failures, but every call still needs a timeout to avoid goroutine buildup
+- **Name your breakers**: a unique name lets logs distinguish different failure sources
+- When the circuit opens, a warning log is emitted listing the last 5 failure reasons, making troubleshooting easier

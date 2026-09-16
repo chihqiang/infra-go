@@ -8,18 +8,20 @@ import (
 	"github.com/go-playground/validator/v10"
 )
 
-// --- 验证器 ---
+// --- Validator ---
 
-// StructValidator 描述结构体校验器，用于绑定后校验。
-// 可通过 SetValidateFn 换成自定义校验入口（如接入不同校验库）。
+// StructValidator describes a struct validator used to validate after binding.
+// It can be replaced with a custom validation entry point via SetValidateFn
+// (e.g. to plug in a different validation library).
 type StructValidator interface {
-	// ValidateStruct 验证结构体，验证通过返回 nil。
+	// ValidateStruct validates a struct, returning nil when validation passes.
 	ValidateStruct(any) error
-	// Engine 返回底层的验证引擎。
+	// Engine returns the underlying validation engine.
 	Engine() any
 }
 
-// DefaultValidator 默认校验器，基于 go-playground/validator/v10，标签为 binding。
+// DefaultValidator is the default validator, based on go-playground/validator/v10
+// with the `binding` tag.
 type DefaultValidator struct {
 	once     sync.Once
 	validate *validator.Validate
@@ -27,8 +29,8 @@ type DefaultValidator struct {
 
 var _ StructValidator = (*DefaultValidator)(nil)
 
-// ValidateStruct 验证结构体。
-// 支持 struct、指针指向的 struct、以及 slice/array（逐元素验证）。
+// ValidateStruct validates a struct.
+// It supports structs, pointers to structs, and slices/arrays (validated element by element).
 func (v *DefaultValidator) ValidateStruct(obj any) error {
 	if obj == nil {
 		return nil
@@ -64,19 +66,19 @@ func (v *DefaultValidator) ValidateStruct(obj any) error {
 	}
 }
 
-// validateStruct 验证单个结构体。
+// validateStruct validates a single struct.
 func (v *DefaultValidator) validateStruct(obj any) error {
 	v.lazyInit()
 	return v.validate.Struct(obj)
 }
 
-// Engine 返回底层的验证引擎。
+// Engine returns the underlying validation engine.
 func (v *DefaultValidator) Engine() any {
 	v.lazyInit()
 	return v.validate
 }
 
-// lazyInit 延迟初始化验证器。
+// lazyInit lazily initializes the validator.
 func (v *DefaultValidator) lazyInit() {
 	v.once.Do(func() {
 		v.validate = validator.New()
@@ -84,16 +86,17 @@ func (v *DefaultValidator) lazyInit() {
 	})
 }
 
-// defaultValidator 默认校验实例，未通过 SetValidateFn 替换时使用。
+// defaultValidator is the default validation instance, used unless replaced via SetValidateFn.
 var defaultValidator = &DefaultValidator{}
 
-// validateFn 当前校验入口。绑定器在绑定后校验时调用它；
-// 未通过 SetValidateFn 替换时使用内置 defaultValidator。
+// validateFn is the current validation entry point; binders call it to validate
+// after binding. The built-in defaultValidator is used unless it has been replaced.
 var validateFn = func(obj any) error {
 	return defaultValidator.ValidateStruct(obj)
 }
 
-// SetValidateFn 替换全局校验入口；fn 为 nil 时恢复内置默认校验器。
+// SetValidateFn replaces the global validation entry point; a nil fn restores the built-in
+// default validator.
 func SetValidateFn(fn func(any) error) {
 	if fn == nil {
 		validateFn = func(obj any) error {
@@ -104,7 +107,7 @@ func SetValidateFn(fn func(any) error) {
 	validateFn = fn
 }
 
-// validate 使用当前校验入口验证 obj。
+// validate validates obj using the current validation entry point.
 func validate(obj any) error {
 	if validateFn == nil {
 		return nil
@@ -112,7 +115,7 @@ func validate(obj any) error {
 	return validateFn(obj)
 }
 
-// Validate 使用当前校验入口验证结构体。
+// Validate validates a struct using the current validation entry point.
 func Validate(obj any) error {
 	return validate(obj)
 }

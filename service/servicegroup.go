@@ -7,29 +7,33 @@ import (
 	"github.com/chihqiang/infra-go/logger"
 )
 
-// --- 接口定义 ---
+// --- Interface definitions ---
 
-// Starter 包装 Start 方法，用于启动服务。
+// Starter wraps the Start method and is used to start a service.
 type Starter interface {
 	Start()
 }
 
-// Stopper 包装 Stop 方法，用于停止服务。
+// Stopper wraps the Stop method and is used to stop a service.
 type Stopper interface {
 	Stop()
 }
 
-// Service 是同时具备 Start 和 Stop 能力的服务接口。
+// Service is the interface of a service that can both start and stop.
 //
-// 实现契约（重要）：
-//   - Start 通常阻塞直到服务退出（例如等待停止信号）。
-//   - Stop 可能在任何时刻被调用，包括与 Start 并发、或紧接 Start 开始之后。
-//     实现必须幂等，并能容忍"停止请求早于服务自身完成初始化"的情况
-//     （例如先记录停止意图，待初始化完成后再执行实际关闭）。
+// Implementation contract (important):
+//   - Start usually blocks until the service exits (for example while waiting for a stop
+//     signal).
+//   - Stop may be called at any moment, including concurrently with Start or right after
+//     Start has begun. The implementation must be idempotent and must tolerate a "stop
+//     request arriving before the service has finished its own initialisation" (for example
+//     by recording the stop intent first and performing the real shutdown once
+//     initialisation completes).
 //
-// ServiceGroup 保证 Stop 至多下发一次，且不会早于该服务的 Start 被调用
-// （见 ServiceGroup.doStop 的启动屏障）；但无法保证 Stop 一定晚于
-// Start 内部的初始化完成，这段窗口需由各服务自行处理。
+// ServiceGroup guarantees that Stop is issued at most once and never before that service's
+// Start has been called (see the start barrier in ServiceGroup.doStop); it cannot guarantee
+// that Stop comes after the initialisation inside Start has finished, and that window is up to
+// each service to handle.
 type Service interface {
 	Starter
 	Stopper
@@ -37,34 +41,40 @@ type Service interface {
 
 // --- ServiceGroup ---
 
-// ServiceGroup 管理一组 Service，支持并发启动和并发停止。
+// ServiceGroup manages a group of Services and supports concurrent start and stop.
 //
-// 启动：所有 Service 并发调用 Start，ServiceGroup.Start 阻塞直到全部返回。
-// 停止：所有 Service 并发调用 Stop，Stop 保证只执行一次（sync.Once）。
-// 顺序：Add 追加到尾部（O(1)），启动按添加顺序并发，停止时按添加的逆序并发。
-// Panic：Start 和 Stop 中的 panic 都会被恢复，通过 logger 记录错误日志，
-// 不中断其他服务。Start 中 panic 会自动触发 Stop 解除其他服务阻塞。
+// Start: every Service is started concurrently and ServiceGroup.Start blocks until all of them
+// return.
+// Stop: every Service is stopped concurrently and Stop runs only once (sync.Once).
+// Order: Add appends to the tail (O(1)), starting is concurrent in the order of addition and
+// stopping is concurrent in the reverse order of addition.
+// Panic: panics in Start and Stop are recovered and logged through logger without interrupting
+// the other services. A panic in Start automatically triggers Stop to unblock the other
+// services.
 //
-// 生命周期约束：Add 必须在 Start 之前调用。Start 之后再 Add 的服务不会被启动，
-// 也不会被停止（Start/Stop 在下发时对服务列表取快照）。
+// Lifecycle constraint: Add must be called before Start. Services added after Start has begun
+// are neither started nor stopped (Start/Stop take a snapshot of the service list when they
+// dispatch).
 //
-// 典型用法：
+// Typical usage:
 //
 //	sg := service.NewServiceGroup()
 //	sg.Add(httpService)
 //	sg.Add(redisService)
-//	sg.Start() // 阻塞，所有服务退出后返回
+//	sg.Start() // blocks and returns once every service has exited
 type ServiceGroup struct {
 	mu       sync.Mutex
 	services []Service
-	// started 标记 doStart 已开始，供 doStop 判断是否需要等待启动屏障。
+	// started marks that doStart has begun, which lets doStop decide whether it has to wait
+	// for the start barrier.
 	started bool
-	// allEntered 在所有服务 goroutine 进入 Start 之前关闭，作为停止屏障。
+	// allEntered is closed before every service goroutine enters Start, acting as the stop
+	// barrier.
 	allEntered chan struct{}
 	stopOnce   func()
 }
 
-// NewServiceGroup 创建一个 ServiceGroup。
+// NewServiceGroup creates a ServiceGroup.
 func NewServiceGroup() *ServiceGroup {
 	sg := &ServiceGroup{
 		allEntered: make(chan struct{}),
@@ -73,57 +83,65 @@ func NewServiceGroup() *ServiceGroup {
 	return sg
 }
 
-// Add 将 service 添加到组中。
-// 追加到尾部（O(1)），启动按添加顺序，停止时按逆序（后添加的先停止）。
+// Add adds service to the group.
+// It appends to the tail (O(1)); starting follows the order of addition and stopping follows
+// the reverse order (the most recently added stops first).
 //
-// 必须在 Start 之前调用：Start 会对服务列表取快照，
-// 之后添加的服务不会被启动，也不会被停止。
-// 并发调用安全，但并发 Add 与 Start 的先后顺序不确定。
+// It must be called before Start: Start takes a snapshot of the service list, so services
+// added afterwards are neither started nor stopped.
+// Concurrent calls are safe, but the order between a concurrent Add and Start is undetermined.
 func (sg *ServiceGroup) Add(service Service) {
 	sg.mu.Lock()
 	sg.services = append(sg.services, service)
 	sg.mu.Unlock()
 }
 
-// snapshot 返回服务列表的副本，避免持有锁执行用户代码（Start/Stop）。
+// snapshot returns a copy of the service list, avoiding running user code (Start/Stop) while
+// holding the lock.
 func (sg *ServiceGroup) snapshot() []Service {
 	sg.mu.Lock()
 	defer sg.mu.Unlock()
-	// 拷贝一份：即便调用方在 Start 期间并发 Add，也不会改写到正在遍历的切片。
+	// Copy it: even if the caller adds a service concurrently during Start, the slice being
+	// iterated is never modified.
 	out := make([]Service, len(sg.services))
 	copy(out, sg.services)
 	return out
 }
 
-// Start 并发启动所有 Service，阻塞直到全部退出。
-// 如果某个 Service 在 Start 中 panic，会自动触发 Stop 停止其他服务，
-// 并通过 logger 记录错误日志（含服务索引与类型名），不会重新 panic。
+// Start starts every Service concurrently and blocks until all of them have exited.
+// If a Service panics inside Start, Stop is triggered automatically to stop the other
+// services and the error is recorded through logger (including the service index and type
+// name); the panic is not re-raised.
 //
-// 停止屏障：doStop 会等待所有服务 goroutine 进入 Start 之后才下发 Stop，
-// 避免"服务尚未启动就被 Stop，随后启动却再也收不到停止信号"。
-// 调用此方法后不应再有任何后续逻辑代码。
+// Stop barrier: doStop waits until every service goroutine has entered Start before
+// dispatching Stop, which avoids a "service stopped before it ever started and then never
+// receiving the stop signal once it does start".
+// No further logic should follow a call to this method.
 func (sg *ServiceGroup) Start() {
 	sg.doStart()
 }
 
-// Stop 并发停止所有 Service，保证只执行一次。
+// Stop stops every Service concurrently and runs only once.
 func (sg *ServiceGroup) Stop() {
 	sg.stopOnce()
 }
 
-// doStart 并发启动所有 Service 并等待全部退出。
-// Start 中的 panic 会被恢复，触发 Stop 解除其他服务阻塞，通过 logger 记录错误。
+// doStart starts every Service concurrently and waits for all of them to exit.
+// A panic in Start is recovered, triggers Stop to unblock the other services and is recorded
+// through logger.
 func (sg *ServiceGroup) doStart() {
 	services := sg.snapshot()
 
-	// 标记启动已开始：doStop 据此决定是否需要等待启动屏障。
-	// 必须在启动 goroutine 之前设置，否则 Stop 可能在标记前到达并跳过等待。
+	// Mark that starting has begun: doStop uses this to decide whether it has to wait for the
+	// start barrier.
+	// It must be set before the goroutines are started, otherwise Stop could arrive before the
+	// mark and skip the wait.
 	sg.mu.Lock()
 	sg.started = true
 	sg.mu.Unlock()
 
-	// 启动屏障计数：每个服务在调用 Start 之前 Done 一次。
-	// 当所有服务都已进入 Start，关闭 allEntered 允许 doStop 下发停止。
+	// Start barrier counter: every service calls Done once before entering Start. Once all of
+	// them have entered Start, closing allEntered lets doStop dispatch the stop.
 	var entered sync.WaitGroup
 	entered.Add(len(services))
 	go func() {
@@ -143,14 +161,17 @@ func (sg *ServiceGroup) doStart() {
 					panicOnce.Do(func() {
 						logger.Errorf("service: panic during start, index: %d, type: %T, reason: %v",
 							idx, s, r)
-						// 同步触发停止，确保其他服务的 Start 阻塞被解除。
-						// doStop 会先等待所有服务进入 Start，因此不会出现
-						// "Stop 先于 Start" 导致服务永远收不到停止信号。
+						// Trigger the stop synchronously to make sure the blocked Start calls of
+						// the other services are released.
+						// doStop first waits until every service has entered Start, so a
+						// "Stop before Start" that would leave a service without a stop signal
+						// forever cannot happen.
 						sg.stopOnce()
 					})
 				}
 			}()
-			// 在进入 Start 之前上报，使停止屏障能在 Start 阻塞时正常放行。
+			// Report before entering Start, so that the stop barrier can be released even while
+			// Start blocks.
 			entered.Done()
 			s.Start()
 		}(i, svc)
@@ -158,17 +179,18 @@ func (sg *ServiceGroup) doStart() {
 	wg.Wait()
 }
 
-// doStop 并发停止所有 Service 并等待全部完成。
-// Stop 中的 panic 只记录，不中断其他服务的停止。
+// doStop stops every Service concurrently and waits for all of them to finish.
+// A panic in Stop is only logged and does not interrupt the stopping of the other services.
 func (sg *ServiceGroup) doStop() {
-	// 等待所有服务进入 Start 后再下发停止。
+	// Wait until every service has entered Start before dispatching the stop.
 	//
-	// 不等待的话，某个服务 panic 触发的 Stop 会作用于"尚未启动"的服务：
-	// 它们的 Stop 先被调用（多半是空操作），随后才执行 Start，
-	// 而 stopOnce 已耗尽，这些服务启动后将永远收不到停止信号
-	// （阻塞在 Start 中，进程无法退出）。
+	// Without the wait, a Stop triggered by a panicking service would act on services that
+	// have not started yet: their Stop is called first (usually a no-op) and only afterwards
+	// does Start run, while stopOnce is already exhausted, so those services never receive a
+	// stop signal once they start (they block inside Start and the process cannot exit).
 	//
-	// 仅当 Start 已开始才等待：否则 allEntered 永远不会关闭，Stop 会永久阻塞。
+	// Only wait when Start has already begun: otherwise allEntered is never closed and Stop
+	// would block forever.
 	sg.mu.Lock()
 	started := sg.started
 	sg.mu.Unlock()
@@ -177,7 +199,7 @@ func (sg *ServiceGroup) doStop() {
 	}
 
 	var wg sync.WaitGroup
-	// 逆序遍历：后添加的服务先停止
+	// Iterate in reverse: the most recently added service stops first
 	services := sg.snapshot()
 	for i := len(services) - 1; i >= 0; i-- {
 		svc := services[i]
@@ -196,21 +218,21 @@ func (sg *ServiceGroup) doStop() {
 	wg.Wait()
 }
 
-// --- 适配函数 ---
+// --- Adapter functions ---
 
-// WithStart 将一个 start func 包装为 Service（Stop 为空操作）。
+// WithStart wraps a start func as a Service (Stop is a no-op).
 func WithStart(start func()) Service {
 	return startOnlyService{start: start}
 }
 
-// WithStarter 将一个 Starter 包装为 Service（Stop 为空操作）。
+// WithStarter wraps a Starter as a Service (Stop is a no-op).
 func WithStarter(start Starter) Service {
 	return starterOnlyService{Starter: start}
 }
 
-// --- 内部适配类型 ---
+// --- Internal adapter types ---
 
-// noopStopper 是一个 Stop 为空操作的 Stopper 实现。
+// noopStopper is a Stopper implementation whose Stop is a no-op.
 type noopStopper struct{}
 
 func (noopStopper) Stop() {}
@@ -229,17 +251,20 @@ type starterOnlyService struct {
 	noopStopper
 }
 
-// --- error 型服务适配 ---
+// --- Adapter for services that return errors ---
 
-// AsService 将实现了 Start() error 与 Stop() error 的对象适配为 Service，便于直接纳入 ServiceGroup。
-// 典型对象如 *httpx.Server（Start/Stop 均返回 error，签名与 Service.Starter/Stopper 不同）。
+// AsService adapts an object implementing Start() error and Stop() error into a Service, so
+// that it can be added to a ServiceGroup directly.
+// A typical object is *httpx.Server (both Start and Stop return an error, a signature that
+// differs from Service.Starter/Stopper).
 //
 //	sg := service.NewServiceGroup()
 //	sg.Add(service.AsService(srv)) // srv *httpx.Server
 //	sg.Start()
 //
-// Start / Stop 返回的 error 都会记录为错误日志（Service 接口无返回值，无法向上传递）；
-// Start 中的 panic 仍由 ServiceGroup 统一恢复并触发 Stop。
+// The errors returned by Start / Stop are logged as errors (the Service interface has no
+// return value, so they cannot be propagated upwards); a panic in Start is still recovered by
+// ServiceGroup, which also triggers Stop.
 func AsService[T interface {
 	Start() error
 	Stop() error
@@ -247,7 +272,8 @@ func AsService[T interface {
 	return errorServiceAdapter[T]{s: s}
 }
 
-// errorServiceAdapter 把 Start() error + Stop() error 的对象包装为无返回值的 Service。
+// errorServiceAdapter wraps an object with Start() error + Stop() error as a Service that
+// returns nothing.
 type errorServiceAdapter[T interface {
 	Start() error
 	Stop() error

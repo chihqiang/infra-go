@@ -2,18 +2,18 @@ package websocket
 
 import "sync"
 
-// MemoryRoom 内存房间实现。
-// 使用两个 map 维护 room → fds 和 fd → rooms 的双向映射。
-// 适用于单机部署，通过 sync.RWMutex 保证并发安全。
+// MemoryRoom is the in-memory room implementation.
+// Two maps keep the bidirectional mapping between room → fds and fd → rooms.
+// It fits standalone deployments and is made concurrency-safe by sync.RWMutex.
 //
-// 使用 sync.RWMutex + map 维护双向映射，保证并发安全。
+// sync.RWMutex + maps keep the bidirectional mapping and guarantee concurrency safety.
 type MemoryRoom struct {
 	mu    sync.RWMutex
 	rooms map[string]map[ConnID]struct{} // room -> set of fds
 	fds   map[ConnID]map[string]struct{} // fd -> set of rooms
 }
 
-// NewMemoryRoom 创建一个内存房间。
+// NewMemoryRoom creates an in-memory room.
 func NewMemoryRoom() *MemoryRoom {
 	return &MemoryRoom{
 		rooms: make(map[string]map[ConnID]struct{}),
@@ -21,12 +21,12 @@ func NewMemoryRoom() *MemoryRoom {
 	}
 }
 
-// Add 将连接加入房间。
+// Add adds a connection to the given rooms.
 func (r *MemoryRoom) Add(fd ConnID, rooms ...string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// 确保 fd 在 fds 映射中存在
+	// Make sure the fd exists in the fds map
 	fdRooms, ok := r.fds[fd]
 	if !ok {
 		fdRooms = make(map[string]struct{})
@@ -34,7 +34,7 @@ func (r *MemoryRoom) Add(fd ConnID, rooms ...string) {
 	}
 
 	for _, room := range rooms {
-		// 加入 room → fds 映射
+		// Add to the room → fds mapping
 		roomFds, ok := r.rooms[room]
 		if !ok {
 			roomFds = make(map[ConnID]struct{})
@@ -42,13 +42,13 @@ func (r *MemoryRoom) Add(fd ConnID, rooms ...string) {
 		}
 		roomFds[fd] = struct{}{}
 
-		// 加入 fd → rooms 映射
+		// Add to the fd → rooms mapping
 		fdRooms[room] = struct{}{}
 	}
 }
 
-// Delete 将连接从房间移除。
-// 如果 rooms 为空，则移除该连接所在的所有房间。
+// Delete removes a connection from the given rooms.
+// If rooms is empty, the connection is removed from all of its rooms.
 func (r *MemoryRoom) Delete(fd ConnID, rooms ...string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -58,7 +58,7 @@ func (r *MemoryRoom) Delete(fd ConnID, rooms ...string) {
 		return
 	}
 
-	// 如果未指定 rooms，移除该连接所在的所有房间
+	// When rooms is not given, remove every room the connection is in
 	if len(rooms) == 0 {
 		for room := range fdRooms {
 			if roomFds, ok := r.rooms[room]; ok {
@@ -88,7 +88,7 @@ func (r *MemoryRoom) Delete(fd ConnID, rooms ...string) {
 	}
 }
 
-// GetClients 获取房间内的所有连接 ID。
+// GetClients returns all connection IDs in the room.
 func (r *MemoryRoom) GetClients(room string) []ConnID {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -105,7 +105,7 @@ func (r *MemoryRoom) GetClients(room string) []ConnID {
 	return fds
 }
 
-// GetRooms 获取连接所在的所有房间名称。
+// GetRooms returns the names of all rooms the connection is in.
 func (r *MemoryRoom) GetRooms(fd ConnID) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -122,7 +122,7 @@ func (r *MemoryRoom) GetRooms(fd ConnID) []string {
 	return rooms
 }
 
-// Clear 清空所有房间和连接映射。
+// Clear clears all rooms and connection mappings.
 func (r *MemoryRoom) Clear() {
 	r.mu.Lock()
 	defer r.mu.Unlock()

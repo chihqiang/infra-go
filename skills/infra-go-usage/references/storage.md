@@ -1,8 +1,9 @@
 # storage
 
-统一对象存储接口，支持本地文件系统、阿里云 OSS、腾讯云 COS 和七牛云 KODO，通过工厂模式根据配置自动选择实现。
+A unified object storage interface supporting the local filesystem, Alibaba Cloud OSS, Tencent
+Cloud COS, and Qiniu KODO, with a factory that selects the implementation from the config.
 
-## 架构
+## Architecture
 
 ```bash
 Config.Driver ──▶ New() ──┬── "local" ──▶ NewLocal() ──▶ localStorage
@@ -11,21 +12,27 @@ Config.Driver ──▶ New() ──┬── "local" ──▶ NewLocal() ─�
                           └── "kodo"  ──▶ NewKODO()  ──▶ kodoStorage
 ```
 
-所有实现都满足 `Storage` 接口（5 个方法）：
+All implementations satisfy the `Storage` interface (5 methods):
 
 ```go
 type Storage interface {
-    Write(ctx context.Context, path string, content []byte) error      // 写入对象
-    Read(ctx context.Context, path string) ([]byte, error)             // 读取对象完整内容
-    Exists(ctx context.Context, path string) (bool, error)             // 判断对象是否存在
-    Delete(ctx context.Context, path string) (int64, error)            // 删除对象，返回删除数量
-    URL(ctx context.Context, path string) (string, error)              // 拼接对象访问 URL
+    Write(ctx context.Context, path string, content []byte) error      // write an object
+    Read(ctx context.Context, path string) ([]byte, error)             // read the full object content
+    Exists(ctx context.Context, path string) (bool, error)             // check whether an object exists
+    Delete(ctx context.Context, path string) (int64, error)            // delete objects, returning the count
+    URL(ctx context.Context, path string) (string, error)              // build the object access URL
 }
 ```
 
-ctx 用于控制请求超时和取消。注意：各云 SDK 的 context 支持程度不一，实现统一为**发起 SDK 调用前先检查 `ctx.Err()` 做快速失败**，不会中断已发起的 SDK 调用：阿里云 OSS SDK 不支持原生 context 取消；KODO 的 Delete 使用了不支持 context 的 Batch API、Exists 的 Stat 基于服务端查询；KODO 的 Read 走公开域名 HTTP GET，需配置 `URL`（私有空间暂不支持下载）。
+ctx controls request timeout and cancellation. Note that the cloud SDKs differ in their context
+support: the implementations uniformly **check `ctx.Err()` before starting an SDK call for a
+quick failure** and never interrupt an SDK call already in flight — the Alibaba Cloud OSS SDK
+does not support native context cancellation; KODO's Delete uses the Batch API, which has no
+context support, and its Exists relies on a server-side Stat query; KODO's Read performs an HTTP
+GET against the public domain and requires `URL` to be configured (private buckets cannot be
+downloaded yet).
 
-## 快速开始
+## Quick start
 
 ```go
 package main
@@ -38,7 +45,7 @@ import (
 )
 
 func main() {
-    // --- 通过工厂创建（推荐） ---
+    // --- create through the factory (recommended) ---
     s, err := storage.New(storage.Config{
         Driver: storage.DriverOSS,
         OSS: &storage.OSSConfig{
@@ -52,35 +59,35 @@ func main() {
         logger.Fatal("failed to create storage", logger.Err(err))
     }
 
-    // 写入文件
+    // write a file
     ctx := context.Background()
     err = s.Write(ctx, "test/hello.txt", []byte("hello world"))
     if err != nil {
         logger.Fatal("failed to write file", logger.Err(err))
     }
 
-    // 获取文件访问 URL
+    // get the file access URL
     u, err := s.URL(ctx, "test/hello.txt")
     if err != nil {
         logger.Fatal("failed to get file URL", logger.Err(err))
     }
     logger.Infof("file URL: %s", u)
 
-    // 判断对象是否存在
+    // check whether the object exists
     exists, err := s.Exists(ctx, "test/hello.txt")
     if err != nil {
         logger.Fatal("failed to check file", logger.Err(err))
     }
     logger.Infof("file exists: %v", exists)
 
-    // 读取对象内容（读回做校验/处理等）
+    // read the object content (read back for verification/processing, etc.)
     data, err := s.Read(ctx, "test/hello.txt")
     if err != nil {
         logger.Fatal("failed to read file", logger.Err(err))
     }
     logger.Infof("file content: %s", data)
 
-    // 删除文件
+    // delete the file
     count, err := s.Delete(ctx, "test/hello.txt")
     if err != nil {
         logger.Fatal("failed to delete file", logger.Err(err))
@@ -89,15 +96,18 @@ func main() {
 }
 ```
 
-## 读取与存在性判断（Read / Exists）
+## Reading and existence checks (Read / Exists)
 
-`Read` 读取对象完整内容并以 `[]byte` 返回，适合内容量不大的读回校验、图片处理、模板渲染等场景；对象不存在时返回错误。
-`Exists` 基于各驱动的元信息查询（Head/Stat）判断对象是否存在，适合上传前去重、资源可用性校验等场景。
+`Read` reads the full object content and returns it as `[]byte`, suited to reading back modest
+payloads for verification, image processing, template rendering, and similar; it returns an error
+when the object does not exist.
+`Exists` checks whether an object exists using each driver's metadata query (Head/Stat), suited to
+de-duplication before upload, resource availability checks, and similar.
 
 ```go
 ctx := context.Background()
 
-// 先判断、再读取（不存在时不触发 Read 的错误）
+// check first, then read (a missing object does not trigger a Read error)
 if ok, err := s.Exists(ctx, "img/a.png"); err != nil {
     logger.Fatal("check failed", logger.Err(err))
 } else if !ok {
@@ -111,83 +121,89 @@ if ok, err := s.Exists(ctx, "img/a.png"); err != nil {
 }
 ```
 
-各驱动实现要点：
+Implementation notes per driver:
 
-| 驱动 | Read | Exists |
+| Driver | Read | Exists |
 | ------ | ------ | ------ |
-| `local` | `os.ReadFile` 读取本地文件 | `os.Stat`，文件不存在返回 `(false, nil)` |
+| `local` | `os.ReadFile` to read a local file | `os.Stat`; returns `(false, nil)` when the file does not exist |
 | `oss` | `bucket.GetObject` → `io.ReadAll` | `bucket.IsObjectExist` |
 | `cos` | `Object.Get` → `resp.Body` | `Object.IsExist` |
-| `kodo` | 需配置公开访问域名 `URL`，否则报错；私有空间暂不支持 | `Stat`，HTTP 612（no such file）视为不存在 |
+| `kodo` | requires the public access domain `URL`, otherwise it errors; private buckets unsupported | `Stat`; HTTP 612 (no such file) counts as non-existent |
 
-## 配置
+## Configuration
 
-### 通用配置
+### Common config
 
 ```go
 type Config struct {
-    Driver Driver        // 存储驱动类型，支持 "local"、"oss"、"cos"、"kodo"，必填
-    Local  *LocalConfig  // 本地文件系统配置，Driver 为 "local" 时使用
-    OSS    *OSSConfig    // 阿里云 OSS 配置，Driver 为 "oss" 时使用
-    COS    *COSConfig    // 腾讯云 COS 配置，Driver 为 "cos" 时使用
-    KODO   *KODOConfig   // 七牛云 KODO 配置，Driver 为 "kodo" 时使用
+    Driver Driver        // storage driver, one of "local", "oss", "cos", "kodo"; required
+    Local  *LocalConfig  // local filesystem config, used when Driver is "local"
+    OSS    *OSSConfig    // Alibaba Cloud OSS config, used when Driver is "oss"
+    COS    *COSConfig    // Tencent Cloud COS config, used when Driver is "cos"
+    KODO   *KODOConfig   // Qiniu KODO config, used when Driver is "kodo"
 }
 ```
 
-### 本地文件系统 Local
+### Local filesystem
 
-将文件直接写入本地磁盘目录，适合开发/单机场景或作为云存储的本地替代，无需任何云凭证：
+Writes files straight into a local disk directory; suited to development/single-node setups or as
+a local replacement for cloud storage, and needs no cloud credentials at all:
 
 ```go
 type LocalConfig struct {
-    RootDir string // 本地存储根目录，必填；文件写入此目录下，path 对应根目录下的相对路径
-    URL     string // 访问 URL 前缀（可选），如 http://localhost:8080/static；为空时 URL() 返回 file:// 本地路径
+    RootDir string // storage root directory; required. Files land under it; path is relative to it
+    URL     string // access URL prefix (optional), e.g. http://localhost:8080/static; empty means a file:// path
 }
 ```
 
-使用示例：
+Example usage:
 
 ```go
-// 通过工厂创建
+// create through the factory
 s, err := storage.New(storage.Config{
     Driver: storage.DriverLocal,
     Local: &storage.LocalConfig{
         RootDir: "./data/storage",
-        URL:     "http://localhost:8080/static", // 可选
+        URL:     "http://localhost:8080/static", // optional
     },
 })
 
-// 或直接创建
+// or create directly
 s, err := storage.NewLocal(&storage.LocalConfig{
     RootDir: "./data/storage",
 })
 
 ctx := context.Background()
-if err := s.Write(ctx, "a/b.txt", []byte("hello")); err != nil { /* 自动创建目录 */ }
-u, err := s.URL(ctx, "a/b.txt") // "file:///.../data/storage/a/b.txt" 或配置前缀
+if err := s.Write(ctx, "a/b.txt", []byte("hello")); err != nil { /* directories are created automatically */ }
+u, err := s.URL(ctx, "a/b.txt") // "file:///.../data/storage/a/b.txt" or the configured prefix
 n, err := s.Delete(ctx, "a/b.txt")
 ```
 
-> **路径安全**：传入的 `path` 一律按 `RootDir` 下的相对路径处理，任何逃逸根目录的路径都会被拒绝并返回错误（`path escapes root directory`），包括 `..` 回溯、经过 `..` 归一化后仍逃逸的路径，以及空路径。前导 `/` 会被裁剪，因此 `"/a/b.txt"` 与 `"a/b.txt"` 等价。
+> **Path safety**: a `path` passed in is always treated as relative to `RootDir`, and any path that
+escapes the root is rejected with an error (`path escapes root directory`), including `..`
+traversal, paths that still escape after `..` normalization, and empty paths. A leading `/` is
+trimmed, so `"/a/b.txt"` and `"a/b.txt"` are equivalent.
 >
-> 由于 `path` 可能来自不可信输入（上传文件名、用户指定的 key），请勿为绕过该校验而在上层自行拼接绝对路径。该防护为词法校验，不解析符号链接——若需防范符号链接逃逸，应对 `RootDir` 的写入权限做管控。
+> Since `path` may come from untrusted input (upload file names, user-supplied keys), do not build
+> absolute paths upstream just to bypass this check. The protection is lexical and does not resolve
+> symlinks — to guard against symlink escapes, restrict write permissions on `RootDir`.
 
-### 阿里云 OSS
+### Alibaba Cloud OSS
 
 ```go
 type OSSConfig struct {
-    Endpoint        string // 访问域名，例如 "oss-cn-hangzhou.aliyuncs.com"
+    Endpoint        string // endpoint, e.g. "oss-cn-hangzhou.aliyuncs.com"
     AccessKeyID     string // AccessKey ID
     AccessKeySecret string // AccessKey Secret
-    Bucket          string // 存储空间名称
-    URL             string // 文件访问域名（CDN），为空时默认 https://{bucket}.{endpoint}
+    Bucket          string // bucket name
+    URL             string // file access domain (CDN); defaults to https://{bucket}.{endpoint} when empty
 }
 ```
 
-使用示例：
+Example usage:
 
 ```go
-// 通过工厂创建
+// create through the factory
 s, err := storage.New(storage.Config{
     Driver: storage.DriverOSS,
     OSS: &storage.OSSConfig{
@@ -195,96 +211,96 @@ s, err := storage.New(storage.Config{
         AccessKeyID:     "your-access-key-id",
         AccessKeySecret: "your-access-key-secret",
         Bucket:          "your-bucket",
-        URL:             "https://cdn.example.com", // 可选，为空时默认 https://{bucket}.{endpoint}
+        URL:             "https://cdn.example.com", // optional; defaults to https://{bucket}.{endpoint}
     },
 })
 
-// 或直接创建
+// or create directly
 s, err := storage.NewOSS(&storage.OSSConfig{
     Endpoint:        "oss-cn-hangzhou.aliyuncs.com",
     AccessKeyID:     "your-access-key-id",
     AccessKeySecret: "your-access-key-secret",
     Bucket:          "your-bucket",
-    URL:             "https://cdn.example.com", // 可选
+    URL:             "https://cdn.example.com", // optional
 })
 ```
 
-完整区域列表参考：<https://help.aliyun.com/zh/oss/user-guide/regions-and-endpoints>
+Full region list: <https://help.aliyun.com/zh/oss/user-guide/regions-and-endpoints>
 
-### 腾讯云 COS
+### Tencent Cloud COS
 
 ```go
 type COSConfig struct {
-    BucketURL string // 存储桶地址，例如 "https://bucket-name.cos.ap-beijing.myqcloud.com"
+    BucketURL string // bucket URL, e.g. "https://bucket-name.cos.ap-beijing.myqcloud.com"
     SecretID  string // SecretID
     SecretKey string // SecretKey
-    URL       string // 文件访问域名（CDN），为空时默认使用 BucketURL
+    URL       string // file access domain (CDN); falls back to BucketURL when empty
 }
 ```
 
-使用示例：
+Example usage:
 
 ```go
-// 通过工厂创建
+// create through the factory
 s, err := storage.New(storage.Config{
     Driver: storage.DriverCOS,
     COS: &storage.COSConfig{
         BucketURL: "https://bucket-name.cos.ap-beijing.myqcloud.com",
         SecretID:  "your-secret-id",
         SecretKey: "your-secret-key",
-        URL:       "https://cdn.example.com", // 可选，为空时默认使用 BucketURL
+        URL:       "https://cdn.example.com", // optional; falls back to BucketURL when empty
     },
 })
 
-// 或直接创建
+// or create directly
 s, err := storage.NewCOS(&storage.COSConfig{
     BucketURL: "https://bucket-name.cos.ap-beijing.myqcloud.com",
     SecretID:  "your-secret-id",
     SecretKey: "your-secret-key",
-    URL:       "https://cdn.example.com", // 可选
+    URL:       "https://cdn.example.com", // optional
 })
 ```
 
-存储桶列表参考：<https://console.cloud.tencent.com/cos5/bucket>
+Bucket list: <https://console.cloud.tencent.com/cos5/bucket>
 
-### 七牛云 KODO
+### Qiniu KODO
 
 ```go
 type KODOConfig struct {
     AccessKey string // AccessKey
     SecretKey string // SecretKey
-    Bucket    string // 存储空间名称
-    Region    string // 存储区域，默认 "z0"
-    URL       string // 文件访问域名（CDN），七牛云必须绑定域名，调用 URL() 时必填
+    Bucket    string // bucket name
+    Region    string // storage region, default "z0"
+    URL       string // file access domain (CDN); Qiniu requires a bound domain, mandatory for URL()
 }
 ```
 
-支持的区域：
+Supported regions:
 
-| 区域值 | 说明 |
+| Region value | Description |
 | -------- | ------ |
-| `z0` | 华东（默认） |
-| `z1` | 华北 |
-| `z2` | 华南 |
-| `na0` | 北美 |
-| `as0` | 东南亚 |
+| `z0` | East China (default) |
+| `z1` | North China |
+| `z2` | South China |
+| `na0` | North America |
+| `as0` | Southeast Asia |
 
-使用示例：
+Example usage:
 
 ```go
-// 通过工厂创建
+// create through the factory
 s, err := storage.New(storage.Config{
     Driver: storage.DriverKODO,
     KODO: &storage.KODOConfig{
         AccessKey: "your-access-key",
         SecretKey: "your-secret-key",
         Bucket:    "your-bucket",
-        Region:    "z0", // 可选，默认 z0
-        URL:       "https://cdn.example.com", // 调用 URL() 时必填
+        Region:    "z0", // optional, defaults to z0
+        URL:       "https://cdn.example.com", // required when calling URL()
     },
 })
 
-// 或直接创建
+// or create directly
 s, err := storage.NewKODO(&storage.KODOConfig{
     AccessKey: "your-access-key",
     SecretKey: "your-secret-key",
@@ -293,25 +309,27 @@ s, err := storage.NewKODO(&storage.KODOConfig{
 })
 ```
 
-区域列表参考：<https://developer.qiniu.com/kodo/manual/1671/region-endpoint-fq>
+Region list: <https://developer.qiniu.com/kodo/manual/1671/region-endpoint-fq>
 
 ## MustNew
 
-出错时 panic，适合初始化场景：
+Panics on error; suited to initialization:
 
 ```go
-// Storage 为无状态客户端（接口 5 方法：Write/Read/Exists/Delete/URL，无 Close，无需释放）
+// Storage is a stateless client (the 5 interface methods Write/Read/Exists/Delete/URL;
+// no Close, nothing to release)
 s := storage.MustNew(storage.Config{
     Driver: storage.DriverOSS,
     OSS:    &storage.OSSConfig{...},
 })
 ```
 
-## 多存储实例 Storages
+## Multiple storage instances: Storages
 
-`Storages` 是 `map[string]Storage` 类型，key 为实例别名，value 为已实例化的 `Storage`，
-支持一个集合管理多个存储桶/多套凭证（如不同业务的头像、附件、视频桶），每个实例可有
-独立的访问地址。先分别实例化，再用类型转换直接构造 `Storages` 集合：
+`Storages` is a `map[string]Storage` keyed by instance alias, holding instantiated `Storage`
+values. It lets one collection manage several buckets / credential sets (say separate avatar,
+attachment, and video buckets), where each instance may have its own access URL. Instantiate them
+separately first, then build the `Storages` collection with a type conversion:
 
 ```go
 images, err := storage.NewOSS(&storage.OSSConfig{
@@ -336,15 +354,15 @@ storages := storage.Storages(map[string]Storage{
 
 ctx := context.Background()
 
-// 按别名写入 / 读取 / 判断存在 / 删除 / 取 URL
+// write / read / check existence / delete / get URL by alias
 err = storages.Write(ctx, "images", "a.png", []byte("..."))
 data, err := storages.Read(ctx, "images", "a.png")
 ok, err := storages.Exists(ctx, "images", "a.png")
 count, err := storages.Delete(ctx, "images", "a.png")
 u, err := storages.URL(ctx, "docs", "manual.pdf")
 
-// 或取出单个实例
+// or fetch a single instance
 s, ok := storages.Get("images")
 ```
 
-`Storages` 也支持多种驱动共存（OSS + COS + KODO 混用）。
+`Storages` also supports several drivers coexisting (OSS + COS + KODO mixed).

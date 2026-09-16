@@ -17,7 +17,7 @@ func newMiniRedis(t *testing.T) (*miniredis.Miniredis, *redis.Client) {
 	return mr, client
 }
 
-// --- RedisRoom 测试 ---
+// --- RedisRoom tests ---
 
 func TestRedisRoom_AddAndGet(t *testing.T) {
 	_, client := newMiniRedis(t)

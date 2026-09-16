@@ -2,30 +2,32 @@ package syncx
 
 import "sync"
 
-// OnceValue 泛型版本的 sync.OnceValue。
-// 保证函数只执行一次，后续调用返回缓存的结果。
-// 若 load 函数 panic，panic 会传播给调用方，且不会缓存失败结果。
+// OnceValue is the generic counterpart of sync.OnceValue.
+// The function is guaranteed to run only once; later calls return the cached
+// result. If load panics, the panic propagates to the caller and the failed
+// result is not cached.
 //
-// 用法：
+// Usage:
 //
 //	var config = syncx.NewOnceValue(func() *Config {
 //	    return loadConfig()
 //	})
-//	cfg := config.Get() // 只加载一次，后续直接返回缓存
+//	cfg := config.Get() // loads once; later calls return the cached value
 type OnceValue[T any] struct {
 	once     sync.Once
 	value    T
-	panicVal any // 记录 load panic 的值，用于后续调用重新 panic
+	panicVal any // records the value of a load panic, re-panicked on later calls
 	load     func() T
 }
 
-// NewOnceValue 创建一个只执行一次的值加载器。
+// NewOnceValue creates a value loader that runs at most once.
 func NewOnceValue[T any](load func() T) *OnceValue[T] {
 	return &OnceValue[T]{load: load}
 }
 
-// Get 返回值，首次调用会执行 load 函数，后续调用直接返回缓存值。
-// 若 load panic，panic 会传播给调用方（与官方 sync.OnceValue 一致）。
+// Get returns the value. The first call runs load; later calls return the cached
+// value directly. If load panics, the panic propagates to the caller (matching
+// the standard sync.OnceValue).
 func (o *OnceValue[T]) Get() T {
 	o.once.Do(func() {
 		defer func() {
@@ -41,11 +43,12 @@ func (o *OnceValue[T]) Get() T {
 	return o.value
 }
 
-// OnceError 泛型版本的只执行一次的 error 加载器。
-// 用于懒加载并缓存可能失败的操作。
-// 若 load 函数 panic，panic 会传播给调用方，且不会缓存失败结果。
+// OnceError is a generic run-at-most-once loader that also carries an error.
+// It is meant for lazily loading and caching an operation that may fail.
+// If load panics, the panic propagates to the caller and the failed result is
+// not cached.
 //
-// 用法：
+// Usage:
 //
 //	var conn = syncx.NewOnceError(func() (*sql.DB, error) {
 //	    return sql.Open("mysql", dsn)
@@ -55,17 +58,18 @@ type OnceError[T any] struct {
 	once     sync.Once
 	value    T
 	err      error
-	panicVal any // 记录 load panic 的值，用于后续调用重新 panic
+	panicVal any // records the value of a load panic, re-panicked on later calls
 	load     func() (T, error)
 }
 
-// NewOnceError 创建一个只执行一次的值加载器（带 error）。
+// NewOnceError creates a value loader that runs at most once and returns an error.
 func NewOnceError[T any](load func() (T, error)) *OnceError[T] {
 	return &OnceError[T]{load: load}
 }
 
-// Get 返回值和错误，首次调用会执行 load 函数，后续调用直接返回缓存结果。
-// 若 load panic，panic 会传播给调用方（与官方 sync.OnceValue 一致）。
+// Get returns the value and error. The first call runs load; later calls return
+// the cached result directly. If load panics, the panic propagates to the caller
+// (matching the standard sync.OnceValue).
 func (o *OnceError[T]) Get() (T, error) {
 	o.once.Do(func() {
 		defer func() {

@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 对应 query.go：QueryBinding。
+// Covers query.go: QueryBinding.
 
 type queryReq struct {
 	Name  string `form:"name" binding:"required"`
@@ -32,7 +32,7 @@ func TestQuery_Bind(t *testing.T) {
 
 func TestQuery_ValidationError(t *testing.T) {
 	var q queryReq
-	require.Error(t, Query.Bind(newQueryReq("/?name=Alice&age=25"), &q)) // 缺 email
+	require.Error(t, Query.Bind(newQueryReq("/?name=Alice&age=25"), &q)) // email is missing
 }
 
 func TestQuery_DefaultValue(t *testing.T) {
@@ -94,5 +94,5 @@ func TestQuery_IntOverflow(t *testing.T) {
 		V int8 `form:"v"`
 	}
 	var r iReq
-	require.Error(t, Query.Bind(newQueryReq("/?v=300"), &r)) // int8 溢出
+	require.Error(t, Query.Bind(newQueryReq("/?v=300"), &r)) // int8 overflow
 }

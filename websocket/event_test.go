@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- Event 测试 ---
+// --- Event tests ---
 
 func TestEvent_NewEvent(t *testing.T) {
 	e, err := NewEvent("test", map[string]int{"a": 1})

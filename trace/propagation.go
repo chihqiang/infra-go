@@ -5,7 +5,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 )
 
-// init 设置全局传播器，支持 W3C TraceContext 和 Baggage。
+// init sets the global propagator, supporting W3C TraceContext and Baggage.
 func init() {
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},

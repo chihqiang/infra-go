@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- ToDuration 测试 ---
+// --- ToDuration tests ---
 
 func TestToDuration(t *testing.T) {
 	assert.Equal(t, 5*time.Second, ToDuration("5s"))
@@ -23,7 +23,7 @@ func TestToDurationE_Error(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- ToTime 测试 ---
+// --- ToTime tests ---
 
 func TestToTime(t *testing.T) {
 	// RFC3339
@@ -32,11 +32,11 @@ func TestToTime(t *testing.T) {
 	assert.Equal(t, time.January, tm.Month())
 	assert.Equal(t, 15, tm.Day())
 
-	// Unix 时间戳
+	// Unix timestamp
 	tm2 := ToTime("1700000000")
 	assert.Equal(t, 2023, tm2.Year())
 
-	// 数值
+	// numeric
 	tm3 := ToTime(int64(1700000000))
 	assert.Equal(t, 2023, tm3.Year())
 
@@ -49,7 +49,7 @@ func TestToTimeE_Error(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- 补充：ToDurationE / ToTimeE 类型族与失败分支 ---
+// --- Additional coverage: ToDurationE / ToTimeE type family and failure branches ---
 
 func TestToDurationE_TypeFamily(t *testing.T) {
 	cases := []struct {
@@ -84,7 +84,7 @@ func TestToDurationE_TypeFamily(t *testing.T) {
 }
 
 func TestToDurationE_Errors(t *testing.T) {
-	_, err := ToDurationE(json.Number("1.5")) // Int64 失败
+	_, err := ToDurationE(json.Number("1.5")) // Int64 fails
 	assert.Error(t, err)
 	_, err = ToDurationE([]int{})
 	assert.Error(t, err)

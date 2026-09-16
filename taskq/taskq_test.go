@@ -50,14 +50,16 @@ func TestFillDefault_Override(t *testing.T) {
 	assert.Equal(t, 5, c.DefaultMaxRetry)
 }
 
-// TestFillDefault_ExplicitZeroViaOption 验证 Config 结构体无法表达的显式 0
-// 可通过 Option 设置（asynq 语义：0 次重试）。
+// TestFillDefault_ExplicitZeroViaOption verifies that an explicit 0, which the
+// Config struct cannot represent, can be set through an Option
+// (asynq semantics: zero retries).
 func TestFillDefault_ExplicitZeroViaOption(t *testing.T) {
 	c := fillDefault(Config{}, WithDefaultMaxRetry(0))
-	assert.Equal(t, 0, c.DefaultMaxRetry, "显式 0 不应被填充为默认值 25")
+	assert.Equal(t, 0, c.DefaultMaxRetry, "an explicit 0 must not be filled with the default 25")
 }
 
-// TestFillDefault_OptionOverridesConfig 验证 Option 优先于 Config 中的非零字段。
+// TestFillDefault_OptionOverridesConfig verifies that an Option takes precedence
+// over a non-zero field in Config.
 func TestFillDefault_OptionOverridesConfig(t *testing.T) {
 	c := fillDefault(Config{DefaultMaxRetry: 5, DefaultTimeout: time.Second}, WithDefaultMaxRetry(0))
 	assert.Equal(t, 0, c.DefaultMaxRetry)
@@ -123,8 +125,9 @@ func TestProducer_Enqueue(t *testing.T) {
 	assert.Equal(t, asynq.TaskStatePending, info.State)
 }
 
-// TestProducer_EnqueueExplicitZero 验证 Option 设置的显式 0 真正落到投递的任务上，
-// 而不是被 fillDefault 替换为默认值（testConfig 里是 3）。
+// TestProducer_EnqueueExplicitZero verifies that an explicit 0 set through an
+// Option really lands on the enqueued task instead of being replaced by the
+// default (3 in testConfig).
 func TestProducer_EnqueueExplicitZero(t *testing.T) {
 	addr, cleanup := newMiniRedis(t)
 	defer cleanup()
@@ -134,14 +137,16 @@ func TestProducer_EnqueueExplicitZero(t *testing.T) {
 
 	info, err := p.Enqueue(context.Background(), asynq.NewTask("test:zero", []byte("{}")))
 	require.NoError(t, err)
-	assert.Equal(t, 0, info.MaxRetry, "任务应不重试")
+	assert.Equal(t, 0, info.MaxRetry, "the task must not be retried")
 }
 
-// TestProducer_EnqueueZeroTimeoutNotExpressible 锁定 asynq 的既定行为，
-// 也是 taskq 不提供 WithDefaultTimeout 的原因：
-// 即使把 asynq.Timeout(0) 直接传给入队，asynq 也会把它视为未设置
-// 并回落 30 分钟默认超时（见 asynq.EnqueueContext 对 noTimeout 的处理）。
-// 因此该 Option 给不出比 Config 更多的能力，不加不实之名不副实的 API。
+// TestProducer_EnqueueZeroTimeoutNotExpressible pins down asynq's established
+// behaviour, which is also why taskq does not offer WithDefaultTimeout: even when
+// asynq.Timeout(0) is passed directly to the enqueue call, asynq treats it as
+// unset and falls back to the 30 minute default timeout (see how
+// asynq.EnqueueContext handles noTimeout).
+// The Option therefore cannot offer more than Config already does, so no API that
+// promises more than it delivers is added.
 func TestProducer_EnqueueZeroTimeoutNotExpressible(t *testing.T) {
 	addr, cleanup := newMiniRedis(t)
 	defer cleanup()
@@ -155,7 +160,7 @@ func TestProducer_EnqueueZeroTimeoutNotExpressible(t *testing.T) {
 		asynq.Timeout(0),
 	)
 	require.NoError(t, err)
-	assert.Equal(t, 30*time.Minute, info.Timeout, "asynq 会把 0 超时归一化为默认 30m")
+	assert.Equal(t, 30*time.Minute, info.Timeout, "asynq normalizes a 0 timeout to the default 30m")
 }
 
 func TestProducer_EnqueuePayload(t *testing.T) {

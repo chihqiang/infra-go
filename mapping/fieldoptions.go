@@ -22,7 +22,8 @@ const (
 	equalToken      = "="
 	escapeChar      = '\\'
 
-	// optionalNegatePrefix 是 optional 依赖的取反前缀，如 `optional=!Other`。
+	// optionalNegatePrefix is the negation prefix for optional dependencies,
+	// e.g. `optional=!Other`.
 	optionalNegatePrefix = "!"
 
 	leftBracket        = '('
@@ -36,29 +37,30 @@ var (
 	errNumberRange = fmt.Errorf("invalid number range setting")
 )
 
-// fieldOptions 存储从结构体标签中解析出的字段选项。
+// fieldOptions holds the field options parsed from a struct tag.
 type fieldOptions struct {
-	// Default 字段的默认值。
+	// Default is the field's default value.
 	Default string
-	// EnvVar 环境变量名，如果设置了，优先从环境变量读取。
+	// EnvVar is the environment variable name; when set, the value is read from
+	// it first.
 	EnvVar string
-	// Optional 字段是否可选。
+	// Optional reports whether the field is optional.
 	Optional bool
-	// OptionalDep 可选依赖，用于条件可选。
-	// 标签 `optional=Other` 表示只有在 Other 已设置时此字段才可选；
-	// `optional=!Other` 表示只有在 Other 未设置时此字段才可选。
+	// OptionalDep is the optional dependency used for conditional optionality.
+	// The tag `optional=Other` means this field is optional only when Other is
+	// set; `optional=!Other` means it is optional only when Other is not set.
 	OptionalDep string
-	// OptionalDepNegate 表示 OptionalDep 是否带 "!" 前缀（取反）。
+	// OptionalDepNegate reports whether OptionalDep carries the "!" negation prefix.
 	OptionalDepNegate bool
-	// Options 允许的值列表。
+	// Options is the list of allowed values.
 	Options []string
-	// Range 数值范围。
+	// Range is the numeric range.
 	Range *numberRange
-	// FromString 是否从字符串解析值。
+	// FromString reports whether the value is parsed from a string.
 	FromString bool
 }
 
-// numberRange 表示一个数值范围。
+// numberRange represents a numeric range.
 type numberRange struct {
 	left         float64
 	leftInclude  bool
@@ -66,7 +68,7 @@ type numberRange struct {
 	rightInclude bool
 }
 
-// hasDefault 返回是否设置了默认值。
+// hasDefault reports whether a default value is set.
 func (o *fieldOptions) hasDefault() (string, bool) {
 	if o == nil {
 		return "", false
@@ -74,12 +76,12 @@ func (o *fieldOptions) hasDefault() (string, bool) {
 	return o.Default, len(o.Default) > 0
 }
 
-// isOptional 返回是否可选。
+// isOptional reports whether the field is optional.
 func (o *fieldOptions) isOptional() bool {
 	return o != nil && o.Optional
 }
 
-// allowedOptions 返回允许的值列表。
+// allowedOptions returns the list of allowed values.
 func (o *fieldOptions) allowedOptions() []string {
 	if o == nil {
 		return nil
@@ -87,12 +89,12 @@ func (o *fieldOptions) allowedOptions() []string {
 	return o.Options
 }
 
-// isFromString 返回是否从字符串解析。
+// isFromString reports whether the value is parsed from a string.
 func (o *fieldOptions) isFromString() bool {
 	return o != nil && o.FromString
 }
 
-// isInRange 检查数值是否在范围内。
+// isInRange reports whether the number lies within the range.
 func (o *fieldOptions) isInRange(v float64) bool {
 	if o == nil || o.Range == nil {
 		return true
@@ -113,7 +115,7 @@ func (o *fieldOptions) isInRange(v float64) bool {
 	return true
 }
 
-// fieldOptionsCacheValue 缓存已解析的标签选项，避免重复解析。
+// fieldOptionsCacheValue caches the parsed tag options to avoid re-parsing.
 type fieldOptionsCacheValue struct {
 	key     string
 	options *fieldOptions
@@ -125,9 +127,10 @@ var (
 	optionsCacheLock sync.RWMutex
 )
 
-// parseKeyAndOptions 从结构体字段的标签中解析键名和选项。
-// tagName 是标签名，通常是 "json"。
-// 返回解析出的键名（如果标签为空则返回字段名）、选项和错误。
+// parseKeyAndOptions parses the key name and options from a struct field tag.
+// tagName is the tag name, usually "json".
+// It returns the parsed key name (the field name when the tag is empty), the
+// options and an error.
 func parseKeyAndOptions(tagName string, field reflect.StructField) (string, *fieldOptions, error) {
 	value := strings.TrimSpace(field.Tag.Get(tagName))
 	if len(value) == 0 {
@@ -160,7 +163,7 @@ func parseKeyAndOptions(tagName string, field reflect.StructField) (string, *fie
 	return field.Name, opts, err
 }
 
-// doParseKeyAndOptions 实际解析标签值。
+// doParseKeyAndOptions performs the actual tag value parsing.
 func doParseKeyAndOptions(fieldName, value string) (string, *fieldOptions, error) {
 	segments := parseSegments(value)
 	key := strings.TrimSpace(segments[0])
@@ -181,19 +184,23 @@ func doParseKeyAndOptions(fieldName, value string) (string, *fieldOptions, error
 	return key, &opts, nil
 }
 
-// parseOption 解析单个选项。
+// parseOption parses a single option.
 //
-// 支持 `key` 与 `key=value` 两种形式（value 中不允许再出现 `=`）。
+// Both the `key` and the `key=value` forms are supported (value may not contain
+// another `=`).
 //
-// 未知选项一律返回错误：旧实现用 strings.HasPrefix 逐个匹配且没有 default 分支，导致
-//   - 拼写错误被静默忽略（`optinal` 不报错，字段按必填处理，直到运行期才以
-//     "field not set" 暴露，错误信息也不指向真实原因）；
-//   - 前缀误匹配（`defaultFoo=bar` 被当成 `default=bar` 生效）。
+// Unknown options always return an error: the old implementation matched each
+// prefix with strings.HasPrefix and had no default branch, so
+//   - typos were silently ignored (`optinal` did not fail; the field was treated
+//     as required and only surfaced at runtime as "field not set", with an error
+//     message that pointed at the wrong cause);
+//   - prefixes matched incorrectly (`defaultFoo=bar` took effect as
+//     `default=bar`).
 func parseOption(opts *fieldOptions, fieldName, option string) error {
 	name, value, hasValue := strings.Cut(option, equalToken)
 	name = strings.TrimSpace(name)
 
-	// 校验 value 形状：不允许出现第二个 "="，也不允许空值
+	// Validate the shape of value: no second "=" and no empty value are allowed
 	if hasValue {
 		if strings.Contains(value, equalToken) {
 			return fmt.Errorf("invalid %q option for field %q", name, fieldName)
@@ -210,7 +217,7 @@ func parseOption(opts *fieldOptions, fieldName, option string) error {
 		if !hasValue {
 			return nil
 		}
-		// `optional=!Other` → 依赖取反
+		// `optional=!Other` -> negated dependency
 		dep := value
 		if strings.HasPrefix(dep, optionalNegatePrefix) {
 			opts.OptionalDepNegate = true
@@ -263,9 +270,11 @@ func parseOption(opts *fieldOptions, fieldName, option string) error {
 		return nil
 
 	case optionInherit:
-		// inherit 曾在此解析并置位，但从未被 unmarshaler 读取，
-		// 属于"文档承诺了却什么都没做"的选项。该语义在本设计中没有定义
-		// （标签驱动的反序列化没有"父级"概念），因此明确拒绝而不是静默忽略。
+		// inherit used to be parsed and stored here, but the unmarshaler never
+		// read it: an option that "promised" something and did nothing. Its
+		// semantics are undefined in this design (tag-driven unmarshalling has no
+		// notion of a "parent"), so it is rejected explicitly instead of being
+		// silently ignored.
 		return fmt.Errorf(
 			"option %q of field %q is not supported: "+
 				"define the value explicitly or give it a default instead",
@@ -276,8 +285,8 @@ func parseOption(opts *fieldOptions, fieldName, option string) error {
 	}
 }
 
-// parseOptionsValue 解析允许值列表。
-// 支持两种格式: [a,b,c] 或 a|b|c
+// parseOptionsValue parses the list of allowed values.
+// Two formats are supported: [a,b,c] or a|b|c
 func parseOptionsValue(val string) []string {
 	if len(val) == 0 {
 		return nil
@@ -288,12 +297,12 @@ func parseOptionsValue(val string) []string {
 	return strings.Split(val, optionSeparator)
 }
 
-// parseNumberRange 解析数值范围。
-// 支持以下格式:
+// parseNumberRange parses a numeric range.
+// The following formats are supported:
 //
-//	[:5]  (:5]  [:5)  (:5)    — 只有上界
-//	[1:]  [1:)  (1:]  (1:)    — 只有下界
-//	[1:5] [1:5) (1:5] (1:5)   — 上下界都有
+//	[:5]  (:5]  [:5)  (:5)    — upper bound only
+//	[1:]  [1:)  (1:]  (1:)    — lower bound only
+//	[1:5] [1:5] (1:5] (1:5)   — both bounds
 func parseNumberRange(str string) (*numberRange, error) {
 	if len(str) == 0 {
 		return nil, errNumberRange
@@ -346,7 +355,7 @@ func parseNumberRange(str string) (*numberRange, error) {
 		return nil, errNumberRange
 	}
 
-	// [2:2] 有效, [2:2) 无效, (2:2] 无效, (2:2) 无效
+	// [2:2] is valid; [2:2), (2:2] and (2:2) are invalid
 	if left == right && (!leftInclude || !rightInclude) {
 		return nil, errNumberRange
 	}
@@ -381,8 +390,9 @@ func isRightInclude(b byte) (bool, error) {
 	}
 }
 
-// parseSegments 将标签值按逗号分隔为段，但括号内的逗号不作为分隔符。
-// 例如: "name,options=[a,b,c],range=[0:100]" => ["name", "options=[a,b,c]", "range=[0:100]"]
+// parseSegments splits a tag value into segments on commas, but commas inside
+// brackets are not treated as separators.
+// For example: "name,options=[a,b,c],range=[0:100]" => ["name", "options=[a,b,c]", "range=[0:100]"]
 func parseSegments(val string) []string {
 	var segments []string
 	var escaped, grouped bool
@@ -428,8 +438,8 @@ func parseSegments(val string) []string {
 	return segments
 }
 
-// parseGroupedSegments 解析被括号包围的值列表。
-// 例如: "[a,b,c]" => ["a", "b", "c"]
+// parseGroupedSegments parses a bracket-wrapped value list.
+// For example: "[a,b,c]" => ["a", "b", "c"]
 func parseGroupedSegments(val string) []string {
 	val = strings.TrimLeftFunc(val, func(r rune) bool {
 		return r == leftBracket || r == leftSquareBracket

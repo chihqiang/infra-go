@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// 对应 max_conns.go：并发连接数限制中间件。
+// Covers max_conns.go: the concurrency limiting middleware.
 
 func TestMaxConns_DisabledWhenNonPositive(t *testing.T) {
 	silenceLogger(t)
@@ -25,11 +25,11 @@ func TestMaxConns_RejectsOverLimit(t *testing.T) {
 
 	release := make(chan struct{})
 	slow := func(w http.ResponseWriter, r *http.Request) {
-		<-release // 占用唯一并发名额直到测试放行
+		<-release // hold the only concurrency slot until the test releases it
 		w.WriteHeader(http.StatusOK)
 	}
 
-	// 第一个请求占用名额（在 goroutine 中阻塞）
+	// The first request takes the slot (blocks inside a goroutine)
 	rec1 := httptest.NewRecorder()
 	req1 := httptest.NewRequest(http.MethodGet, "/", nil)
 	done := make(chan struct{})
@@ -38,15 +38,15 @@ func TestMaxConns_RejectsOverLimit(t *testing.T) {
 		mw(http.HandlerFunc(slow)).ServeHTTP(rec1, req1)
 	}()
 
-	// 等待名额被占用（给 goroutine 调度时间）
+	// Wait for the slot to be taken (give the goroutine time to be scheduled)
 	time.Sleep(20 * time.Millisecond)
 
-	// 第二个请求超限 → 503
+	// The second request exceeds the limit → 503
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 	rec2 := perform(mw, ok, httptest.NewRequest(http.MethodGet, "/", nil))
 	assert.Equal(t, http.StatusServiceUnavailable, rec2.Code)
 
-	// 释放名额，第一个请求完成
+	// Release the slot so the first request completes
 	close(release)
 	<-done
 	assert.Equal(t, http.StatusOK, rec1.Code)

@@ -16,32 +16,38 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
-// agentState 表示一次 agent 生命周期的资源。
+// agentState holds the resources of one agent lifecycle.
 type agentState struct {
 	tp *sdktrace.TracerProvider
-	// closers 需要在 StopAgent 时释放（如 file 导出器的文件句柄）。
-	// 由 agent 自己持有，而不是存在包级变量中——后者在多实例/重复启动时会互相覆盖，
-	// 导致先前打开的文件永远无法关闭（句柄泄漏）。
+	// closers must be released in StopAgent (e.g. the file handle of the file exporter).
+	// They are owned by the agent itself instead of living in package-level variables:
+	// the latter overwrite each other with multiple instances or repeated starts, so
+	// previously opened files could never be closed (handle leak).
 	closers []func() error
 }
 
 var (
-	// agentLk 保护 currentAgent，使 StartAgent/StopAgent 可安全并发调用。
+	// agentLk guards currentAgent so StartAgent/StopAgent can be called concurrently.
 	agentLk      sync.Mutex
 	currentAgent *agentState
 )
 
-// StartAgent 启动链路追踪 agent。
+// StartAgent starts the tracing agent.
 //
-// 重复调用时行为如下：
-//   - 已有一个运行中的 agent（未调用 StopAgent）→ 忽略本次配置并记录警告。
-//     配置在 agent 启动时快照，无法热更新；需要换配置请先 StopAgent 再 StartAgent。
-//   - 已调用过 StopAgent → 允许重新启动（使用新配置）。
+// When called repeatedly the behaviour is:
+//   - an agent is already running (StopAgent was not called) → the new config is
+//     ignored and a warning is logged.
+//     The config is snapshotted when the agent starts and cannot be hot-reloaded;
+//     to change it, call StopAgent first and then StartAgent.
+//   - StopAgent has already been called → starting again is allowed (with the new
+//     config).
 //
-// opts 用于表达 Config 结构体无法表达的显式零值（如 Sampler = 0），见 Option。
+// opts express explicit zero values that the Config struct cannot represent
+// (such as Sampler = 0); see Option.
 //
-// 旧实现用 sync.Once 实现“只初始化一次”，副作用是 StopAgent 之后再也无法重启，
-// 而 otel 仍指向已关闭的 TracerProvider，导致后续 span 被静默丢弃。
+// The old implementation used sync.Once for "initialise only once", with the side
+// effect that nothing could be restarted after StopAgent, while otel still pointed
+// at a shut-down TracerProvider, so later spans were silently dropped.
 func StartAgent(cfg Config, opts ...Option) {
 	c := fillDefault(cfg, opts...)
 
@@ -65,8 +71,10 @@ func StartAgent(cfg Config, opts ...Option) {
 	currentAgent = st
 }
 
-// StopAgent 关闭链路追踪 agent，刷新未导出的 span，并释放导出器占用的句柄。
-// 通常在程序退出前调用；可重复调用（幂等），也可在之后重新 StartAgent。
+// StopAgent shuts the tracing agent down, flushes spans that were not exported yet
+// and releases the handles held by the exporters.
+// It is normally called before the program exits; it is idempotent and the agent can
+// be started again afterwards.
 func StopAgent() {
 	agentLk.Lock()
 	defer agentLk.Unlock()
@@ -80,7 +88,7 @@ func StopAgent() {
 	if st.tp != nil {
 		_ = st.tp.Shutdown(context.Background())
 	}
-	// 关闭文件等资源，避免句柄泄漏
+	// Close resources such as files to avoid leaking handles
 	for _, closeFn := range st.closers {
 		if closeFn != nil {
 			_ = closeFn()
@@ -88,37 +96,39 @@ func StopAgent() {
 	}
 }
 
-// startAgent 启动 agent 的内部实现，返回本次生命周期的状态。
+// startAgent is the internal implementation that starts the agent and returns the
+// state of this lifecycle.
 func startAgent(c Config) (*agentState, error) {
-	// 添加服务名资源属性
+	// Add the service name resource attribute
 	AddResources(semconv.ServiceNameKey.String(c.Name))
 
 	opts := []sdktrace.TracerProviderOption{
-		// 基于父 span 的采样率设置
+		// Sampler ratio based on the parent span
 		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(c.Sampler))),
-		// 记录应用信息到 Resource（快照当前属性，之后新增的不再生效）
+		// Record application information into the Resource (snapshots the current
+		// attributes; ones added later take no effect)
 		sdktrace.WithResource(resource.NewSchemaless(resourceAttrs()...)),
 	}
 
 	st := &agentState{}
 
-	// 配置导出器
+	// Configure the exporter
 	if len(c.Endpoint) > 0 {
 		exp, closers, err := createExporterWithClosers(c)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create trace exporter: %w", err)
 		}
 		st.closers = closers
-		// 生产环境使用批量导出
+		// Production environments use batch export
 		opts = append(opts, sdktrace.WithBatcher(exp))
 	}
 
 	st.tp = sdktrace.NewTracerProvider(opts...)
 
-	// 设置全局 TracerProvider
+	// Set the global TracerProvider
 	otel.SetTracerProvider(st.tp)
 
-	// 设置错误处理器，将 otel 内部错误转发到 logger
+	// Set the error handler, forwarding otel internal errors to the logger
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
 		logger.Error(fmt.Sprintf("[otel] error: %v", err))
 	}))
@@ -126,10 +136,12 @@ func startAgent(c Config) (*agentState, error) {
 	return st, nil
 }
 
-// createExporterWithClosers 创建导出器，并返回需要随 agent 生命周期释放的关闭函数。
+// createExporterWithClosers creates the exporter and returns the close functions that
+// must be released with the agent lifecycle.
 //
-// 关闭函数由调用方（startAgent → agentState.closers）持有，在 StopAgent 时释放；
-// 唯一的调用方必须处理返回值，否则 file 导出器的文件句柄会泄漏。
+// The close functions are held by the caller (startAgent → agentState.closers) and
+// released in StopAgent; the single caller must handle the return value, otherwise
+// the file handle of the file exporter leaks.
 func createExporterWithClosers(c Config) (sdktrace.SpanExporter, []func() error, error) {
 	switch c.Batcher {
 	case BatcherZipkin:
@@ -137,7 +149,7 @@ func createExporterWithClosers(c Config) (sdktrace.SpanExporter, []func() error,
 		return exp, nil, err
 
 	case BatcherOTLPGRPC:
-		// 使用非阻塞模式，避免导出器不可达时拖慢应用启动
+		// Use non-blocking mode so an unreachable exporter does not slow down startup
 		opts := []otlptracegrpc.Option{
 			otlptracegrpc.WithEndpoint(c.Endpoint),
 		}
@@ -173,7 +185,8 @@ func createExporterWithClosers(c Config) (sdktrace.SpanExporter, []func() error,
 		}
 		exp, err := stdouttrace.New(stdouttrace.WithWriter(f))
 		if err != nil {
-			// 创建失败时立即释放已打开的文件，避免句柄泄漏
+			// Release the already opened file immediately when creation fails, to avoid
+			// leaking the handle
 			_ = closeFn()
 			return nil, nil, err
 		}

@@ -10,9 +10,9 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 )
 
-// buildGormLogger 构建 GORM 日志记录器。
-// 如果已设置全局 logger，则将 GORM 日志桥接到 logger 包；
-// 否则使用标准库 log 输出到 stdout。
+// buildGormLogger builds the GORM logger.
+// When a global logger is set, GORM logs are bridged into the logger package; otherwise the
+// standard library log is used and writes to stdout.
 func buildGormLogger(c Config) gormlogger.Interface {
 	logLevel := gormlogger.LogLevel(c.LogLevel)
 
@@ -20,7 +20,7 @@ func buildGormLogger(c Config) gormlogger.Interface {
 	if l := logger.GetGlobal(); l != nil {
 		writer = newGormWriter(l)
 	} else {
-		// 未设置全局 logger 时使用标准输出
+		// Fall back to standard output when no global logger is set
 		writer = log.New(os.Stdout, "\r\n", log.LstdFlags)
 	}
 
@@ -35,18 +35,19 @@ func buildGormLogger(c Config) gormlogger.Interface {
 	)
 }
 
-// gormWriter 将 GORM 的日志输出桥接到 logger 包。
+// gormWriter bridges GORM's log output into the logger package.
 type gormWriter struct {
 	log logger.ILogger
 }
 
-// newGormWriter 创建一个使用 logger 的 GORM 日志写入器。
+// newGormWriter creates a GORM log writer that uses logger.
 func newGormWriter(l logger.ILogger) *gormWriter {
 	return &gormWriter{log: l}
 }
 
-// Printf 实现 gormlogger.Writer 接口。
-// 根据 GORM 日志内容中的级别标识，转发到对应级别的 logger 方法。
+// Printf implements the gormlogger.Writer interface.
+// It inspects the level marker in the GORM log message and forwards it to the matching
+// logger method.
 func (w *gormWriter) Printf(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	lower := strings.ToLower(msg)

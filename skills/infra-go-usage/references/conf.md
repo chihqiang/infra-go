@@ -1,33 +1,33 @@
 # conf
 
-配置文件加载与解析包，支持 JSON / YAML 格式，提供默认值填充、环境变量读取、参数验证等能力。
+Configuration loading and parsing package; supports JSON / YAML formats and provides default-value filling, environment variable reading, parameter validation and more.
 
-## 特性
+## Features
 
-- **多格式支持**：`.json`、`.yaml`、`.yml`
-- **默认值**：通过 `default` 标签指令为字段设置默认值
-- **环境变量**：通过 `env` 标签指令优先从环境变量读取值
-- **参数验证**：
-  - `range` — 数值范围校验
-  - `options` — 枚举值校验
-  - `optional` — 标记字段为可选
-- **自定义验证**：实现 `Validator` 接口，加载后自动调用
-- **环境变量展开**：配置文件中可使用 `${VAR}` / `$VAR` 引用环境变量，支持 `${VAR:-default}` 默认值语法
-- **大小写不敏感**：配置文件中的键名与结构体字段名大小写不敏感匹配（不改变 map 字段的数据键，见「切片与 Map」）
-- **嵌套结构体**：支持嵌套结构体、匿名嵌入字段、切片、Map 等复杂类型
-- **大整数精度**：使用 `json.Number` 保持数值精度，避免大整数丢失精度
+- **Multiple formats**: `.json`, `.yaml`, `.yml`
+- **Defaults**: set field defaults through the `default` tag directive
+- **Environment variables**: read a value from an environment variable first through the `env` tag directive
+- **Parameter validation**:
+  - `range` — numeric range validation
+  - `options` — enum value validation
+  - `optional` — mark a field as optional
+- **Custom validation**: implement the `Validator` interface; it is called automatically after loading
+- **Environment variable expansion**: config files may reference environment variables with `${VAR}` / `$VAR` and support the `${VAR:-default}` default-value syntax
+- **Case-insensitive**: keys in the config file match struct field names case-insensitively (map data keys are left unchanged, see "Slices and Maps")
+- **Nested structs**: supports nested structs, anonymous embedded fields, slices, maps and other complex types
+- **Big-integer precision**: uses `json.Number` to preserve numeric precision, avoiding loss for big integers
 
-## 快速开始
+## Quick start
 
-### 安装
+### Installation
 
 ```bash
 go get github.com/chihqiang/infra-go/conf
 ```
 
-### 基本用法
+### Basic usage
 
-定义配置结构体，使用 `json` 标签声明字段名和选项：
+Define a config struct and declare field names and options with `json` tags:
 
 ```go
 package main
@@ -49,13 +49,13 @@ type Config struct {
 
 func main() {
     var cfg Config
-    // 出错时 panic
+    // panics on error
     conf.MustLoad("config.json", &cfg)
     fmt.Printf("%+v\n", cfg)
 }
 ```
 
-`config.json`：
+`config.json`:
 
 ```json
 {
@@ -67,7 +67,7 @@ func main() {
 }
 ```
 
-等价的 `config.yaml`：
+The equivalent `config.yaml`:
 
 ```yaml
 host: 127.0.0.1
@@ -81,7 +81,7 @@ logMode: console
 
 ### Load
 
-从文件加载配置，返回 error。
+Loads config from a file and returns an error.
 
 ```go
 func Load(file string, v any, opts ...Option) error
@@ -96,7 +96,7 @@ if err := conf.Load("config.yaml", &cfg); err != nil {
 
 ### MustLoad
 
-从文件加载配置，出错时 panic。适合在程序启动阶段使用。
+Loads config from a file and panics on error. Suited to program startup.
 
 ```go
 func MustLoad(path string, v any, opts ...Option)
@@ -109,7 +109,7 @@ conf.MustLoad("config.yaml", &cfg)
 
 ### LoadFromJSONBytes
 
-从 JSON 字节流加载配置。
+Loads config from a JSON byte stream.
 
 ```go
 func LoadFromJSONBytes(content []byte, v any) error
@@ -122,7 +122,7 @@ err := conf.LoadFromJSONBytes([]byte(`{"host": "127.0.0.1", "port": 9090}`), &cf
 
 ### LoadFromYAMLBytes
 
-从 YAML 字节流加载配置。
+Loads config from a YAML byte stream.
 
 ```go
 func LoadFromYAMLBytes(content []byte, v any) error
@@ -135,7 +135,7 @@ err := conf.LoadFromYAMLBytes([]byte("host: 127.0.0.1\nport: 9090\n"), &cfg)
 
 ### FillDefault
 
-仅为结构体填充默认值和环境变量（不从文件加载）。要求结构体所有字段必须为零值。
+Only fills defaults and environment variables for a struct (no file loading). Requires every struct field to be at its zero value.
 
 ```go
 func FillDefault(v any) error
@@ -151,8 +151,8 @@ if err := conf.FillDefault(&cfg); err != nil {
 
 ### UseEnv
 
-`Option` 选项，展开配置文件中的环境变量引用（`${VAR}` 或 `$VAR`）。
-同时支持 `${VAR:-default}` 语法：当 `VAR` 未设置或为空字符串时，回退到 `default`（字面值）。
+`Option` that expands environment variable references (`${VAR}` or `$VAR`) in the config file.
+It also supports the `${VAR:-default}` syntax: when `VAR` is unset or an empty string, it falls back to `default` (a literal value).
 
 ```go
 func UseEnv() Option
@@ -168,7 +168,7 @@ conf.MustLoad("config.json", &cfg, conf.UseEnv())
 ```
 
 ```yaml
-# config.yaml — 未设置 JWT_SECRET 时 secret 回退 dev-secret
+# config.yaml — secret falls back to dev-secret when JWT_SECRET is unset
 jwt:
   secret: ${JWT_SECRET:-dev-secret}
   issuer: ${JWT_ISSUER:-my-app}
@@ -179,53 +179,57 @@ var cfg ServerConfig
 conf.MustLoad("config.yaml", &cfg, conf.UseEnv())
 ```
 
-注意：`:-` 默认值按 shell 语义处理（变量未设置**或为空**均回退默认值），
-且 `default` 为字面值，不会二次展开其中的 `${...}`。
+Note: the `:-` default follows shell semantics (the default is used when the variable is unset **or empty**),
+and `default` is a literal value — any `${...}` inside it is not expanded a second time.
 
 ### ExpandEnv
 
-公开的环境变量展开函数，`UseEnv` 内部即调用它（**在解析之后**对解析出的字符串展开，
-见下方「展开时机与安全性」）。若需在加载配置之外复用同一展开语义，可直接调用：
+A public environment-variable expansion function; `UseEnv` calls it internally (**after** parsing,
+to expand the parsed strings — see "Expansion timing and safety" below). Call it directly if you need the
+same expansion semantics outside config loading:
 
 ```go
 func ExpandEnv(s string) string
 ```
 
 ```go
-// 展开任意文本（含 ${VAR} / $VAR / ${VAR:-default} / $$ 转义）
+// expand arbitrary text (including ${VAR} / $VAR / ${VAR:-default} / $$ escapes)
 os.Setenv("MODE", "prod")
 conf.ExpandEnv("host=${DB_HOST:-localhost} mode=$MODE")
 // -> "host=localhost mode=prod"
 
-// $$ 展开为字面量 $（用于密码等含 $ 的值）
+// $$ expands to a literal $ (for values containing $, such as passwords)
 conf.ExpandEnv("p$$ssword")   // -> "p$ssword"
 conf.ExpandEnv("100$$-${MODE}") // -> "100$-prod"
 ```
 
-### 展开时机与安全性
+### Expansion timing and safety
 
-`UseEnv` **先解析、再展开**：解析出的数据结构中，只有字符串（值与 map 的键）会被展开，
-展开结果不会被重新解析。因此：
+`UseEnv` **parses first, then expands**: within the parsed data structure only strings (values and map keys)
+are expanded, and the expansion result is never parsed again. Therefore:
 
-- **不会破坏配置结构**：环境变量的值即使包含 `","admin":true` 这类片段，也只会成为
-  一个字符串值，不会凭空创建新的配置键。
-- **特殊字符安全**：值中的引号、大括号、逗号、换行、`:` 等不会影响解析。
-- **字面 `$` 可写**：用 `$$` 转义（旧的文本替换实现在未转义时会把 `p$ssword` 吞成 `p`）。
-- **不二次展开**：环境变量的值里含 `${...}` 时原样保留。
-- 键重名保护：两个键展开成同一名字时返回错误，而不是静默丢弃其中一个。
+- **The config structure is never broken**: even if an environment variable's value contains a fragment like
+  `","admin":true`, it only becomes a string value and never creates new config keys out of thin air.
+- **Special characters are safe**: quotes, braces, commas, newlines, `:` and so on in the value don't affect parsing.
+- **A literal `$` can be written**: escape it as `$$` (the old text-replacement implementation swallowed
+  `p$ssword` down to `p` when unescaped).
+- **No double expansion**: a `${...}` inside an environment variable's value is kept as-is.
+- Duplicate-key protection: if two keys expand to the same name an error is returned, rather than silently
+  dropping one of them.
 
-> **注意**：环境变量的值一律作为**字符串**写入。若某个配置项需要数组或对象，
-> 请在配置文件中直接书写该结构，而不是把 JSON 字符串塞进环境变量——
-> 那种写法依赖"展开后重新解析"，正是上述注入问题的来源。
+> **Note**: the value of an environment variable is always written as a **string**. If a config item needs an
+> array or an object, write that structure directly in the config file instead of stuffing a JSON string into
+> an environment variable — that approach relies on "parse again after expansion", which is exactly the source
+> of the injection problem described above.
 
-## 标签指令
+## Tag directives
 
-所有指令在 `json` 标签中通过逗号分隔声明，格式为 `json:"key,directive1,directive2,..."`。
-当 `key` 为空时，使用字段名作为 key。
+All directives are declared in the `json` tag, separated by commas, in the form `json:"key,directive1,directive2,..."`.
+When `key` is empty, the field name is used as the key.
 
-### default — 默认值
+### default — default values
 
-当配置文件中未提供该字段时，使用默认值填充。
+Filled in when the config file doesn't provide that field.
 
 ```go
 type Config struct {
@@ -236,11 +240,11 @@ type Config struct {
 }
 ```
 
-支持所有基本类型、`time.Duration`、切片。切片默认值格式为 `[a,b,c]`。
+Supports all primitive types, `time.Duration` and slices. The slice default format is `[a,b,c]`.
 
-### env — 环境变量
+### env — environment variables
 
-优先从指定环境变量读取值，如果环境变量为空则回退到配置文件。
+Reads the value from the given environment variable first, falling back to the config file when it is empty.
 
 ```go
 type Config struct {
@@ -253,20 +257,20 @@ type Config struct {
 APP_NAME=myapp ./myapp
 ```
 
-### optional — 可选字段
+### optional — optional fields
 
-标记字段为可选，配置文件中未提供时不报错。
+Marks a field as optional so no error is raised when the config file doesn't provide it.
 
 ```go
 type Config struct {
-    Name    string `json:"name"`        // 必填
-    Verbose bool   `json:",optional"`   // 可选
+    Name    string `json:"name"`        // required
+    Verbose bool   `json:",optional"`   // optional
 }
 ```
 
-### range — 数值范围
+### range — numeric range
 
-校验数值是否在指定范围内，格式为 `[left:right]`，支持开闭区间。
+Validates that a number falls within the given range, in the format `[left:right]`, with open and closed bounds.
 
 ```go
 type Config struct {
@@ -277,31 +281,31 @@ type Config struct {
 }
 ```
 
-区间符号说明：
+Range symbols:
 
-| 符号 | 含义 |
+| Symbol | Meaning |
 | ------ | ------ |
-| `[` | 闭区间，包含左边界 |
-| `(` | 开区间，不包含左边界 |
-| `]` | 闭区间，包含右边界 |
-| `)` | 开区间，不包含右边界 |
+| `[` | Closed bound: includes the left edge |
+| `(` | Open bound: excludes the left edge |
+| `]` | Closed bound: includes the right edge |
+| `)` | Open bound: excludes the right edge |
 
-省略边界时表示无限制：`[:100]` 表示 ≤ 100，`[1:]` 表示 ≥ 1。
+Omitting a bound means unlimited: `[:100]` means ≤ 100 and `[1:]` means ≥ 1.
 
-### options — 枚举值
+### options — enum values
 
-校验值是否在允许的选项列表中。
+Validates that the value is in the allowed list of options.
 
 ```go
 type Config struct {
     LogMode string `json:",options=[file,console]"`
-    Env     string `json:",options=[dev|staging|prod]"`  // 也可用 | 分隔
+    Env     string `json:",options=[dev|staging|prod]"`  // a | separator also works
 }
 ```
 
-### string — 从字符串解析
+### string — parse from a string
 
-强制将配置值转为字符串后再解析，适用于值类型不匹配时的自动转换。
+Forces the config value to be treated as a string before parsing; useful for automatic conversion when the value type doesn't match.
 
 ```go
 type Config struct {
@@ -310,12 +314,12 @@ type Config struct {
 ```
 
 ```json
-{"port": "9090"}  // 字符串 "9090" 会被解析为 int 9090
+{"port": "9090"}  // the string "9090" is parsed into the int 9090
 ```
 
-## 自定义验证
+## Custom validation
 
-实现 `Validator` 接口，在配置加载完成后自动执行自定义验证逻辑。
+Implement the `Validator` interface to run custom validation logic automatically once config loading completes.
 
 ```go
 type Validator interface {
@@ -335,15 +339,15 @@ func (c ServerConfig) Validate() error {
     return nil
 }
 
-// 加载配置时会自动调用 Validate()
+// Validate() is called automatically when the config is loaded
 var cfg ServerConfig
 err := conf.Load("config.json", &cfg)
-// 如果 Port <= 1024，err 包含 "port must be > 1024"
+// if Port <= 1024, err contains "port must be > 1024"
 ```
 
-## 嵌套结构体
+## Nested structs
 
-支持任意层级的嵌套结构体，每个层级的字段都会独立应用默认值和验证。
+Arbitrary nesting levels are supported; defaults and validation are applied independently at every level.
 
 ```go
 type Database struct {
@@ -372,11 +376,11 @@ type AppConfig struct {
 }
 ```
 
-加载后 `DB.Host` 使用默认值 `localhost`，`Redis` 全部使用默认值。
+After loading, `DB.Host` uses the default `localhost` and every `Redis` field uses its default.
 
-## 匿名嵌入字段
+## Anonymous embedded fields
 
-支持匿名嵌入结构体，嵌入的字段会被展平处理。
+Anonymous embedded structs are supported; the embedded fields are flattened.
 
 ```go
 type Base struct {
@@ -394,9 +398,9 @@ type Server struct {
 {"name": "api-server"}
 ```
 
-加载后 `Server.Host` 为 `0.0.0.0`，`Server.Port` 为 `8080`。
+After loading, `Server.Host` is `0.0.0.0` and `Server.Port` is `8080`.
 
-## 切片与 Map
+## Slices and Maps
 
 ```go
 type Config struct {
@@ -414,23 +418,24 @@ type Config struct {
 }
 ```
 
-> **Map 的键保持原样**：大小写不敏感匹配只作用于「配置键 → 结构体字段」的查找，
-> 不会改写 map 字段的数据键。因此 `labels` 的键会原样保留：
+> **Map keys are kept as-is**: case-insensitive matching only applies to the “config key → struct field”
+> lookup and never rewrites the data keys of a map field. So the keys of `labels` are preserved verbatim:
 >
 > ```json
 > {"labels": {"AppName": "svc", "Env": "prod"}}
 > ```
 >
-> 加载后 `Labels` 为 `{"AppName": "svc", "Env": "prod"}`（而非全小写）。
-> 仅大小写不同的键（如 `AppName` 与 `appname`）会作为两个独立键保留，不会被合并。
+> After loading, `Labels` is `{"AppName": "svc", "Env": "prod"}` (not lower-cased).
+> Keys that differ only in case (such as `AppName` and `appname`) are kept as two separate keys and are not merged.
 >
-> 若同一层级存在多个仅大小写不同的键去匹配**同一个字段**（如同时有 `Host` 与 `HOST`
-> 且字段标签为 `host`），则精确匹配优先；若都无法精确匹配且存在多个候选，会返回
-> “ambiguous key” 错误，而不是依赖 map 遍历顺序任选其一。
+> If several keys differing only in case at the same level try to match **the same field** (for example
+> both `Host` and `HOST` with a field tag of `host`), an exact match wins; if none matches exactly and
+> several candidates remain, an “ambiguous key” error is returned rather than picking one arbitrarily
+> based on map iteration order.
 
-## 大整数精度
+## Big-integer precision
 
-内部使用 `json.Number` 保持数值精度，不会丢失大整数精度。
+Internally `json.Number` preserves numeric precision, so big integers are not truncated.
 
 ```go
 type Config struct {
@@ -446,7 +451,7 @@ type Config struct {
 }
 ```
 
-## 完整示例
+## Complete example
 
 ```go
 package main
@@ -484,7 +489,7 @@ func (c ServerConfig) Validate() error {
 }
 
 func main() {
-    // 从环境变量引用
+    // reference an environment variable
     os.Setenv("DB_PASSWORD", "secret")
 
     var cfg ServerConfig
@@ -495,7 +500,7 @@ func main() {
 }
 ```
 
-`config.yaml`：
+`config.yaml`:
 
 ```yaml
 host: 127.0.0.1

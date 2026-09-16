@@ -7,14 +7,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 本文件覆盖 optional 条件依赖（optional=Dep / optional=!Dep）的行为。
+// This file covers the behaviour of optional conditional dependencies
+// (optional=Dep / optional=!Dep).
 //
-// 历史缺陷：OptionalDep 会被解析写入 fieldOptions，但 unmarshaler 从未读取它，
-// 也不读取 Inherit。结果是文档承诺"当 other 未设置时此字段可选"，
-// 实际字段**无条件可选**，且没有任何报错。
+// Historic defect: OptionalDep was parsed into fieldOptions, but the unmarshaler
+// never read it, nor did it read Inherit. The result was that the documentation
+// promised "this field is optional when other is not set" while the field was in
+// fact **unconditionally optional**, with no error at all.
 
-// TestUnmarshal_OptionalDep_PresentMakesOptional 验证 `optional=other`：
-// 依赖存在时字段可选（可缺省）。
+// TestUnmarshal_OptionalDep_PresentMakesOptional verifies `optional=other`:
+// the field is optional (may be omitted) when the dependency is present.
 func TestUnmarshal_OptionalDep_PresentMakesOptional(t *testing.T) {
 	type Config struct {
 		Other string `json:"other,optional"`
@@ -45,8 +47,8 @@ func TestUnmarshal_OptionalDep_PresentMakesOptional(t *testing.T) {
 	})
 }
 
-// TestUnmarshal_OptionalDepNegated 验证 `optional=!other`：
-// 依赖不存在时字段可选。
+// TestUnmarshal_OptionalDepNegated verifies `optional=!other`:
+// the field is optional when the dependency is not present.
 func TestUnmarshal_OptionalDepNegated(t *testing.T) {
 	type Config struct {
 		Other string `json:"other,optional"`
@@ -75,8 +77,9 @@ func TestUnmarshal_OptionalDepNegated(t *testing.T) {
 	})
 }
 
-// TestUnmarshal_OptionalDepWithDefault 验证有默认值时依赖不满足仍走默认值逻辑
-// （默认值优先于"必填"判定）。
+// TestUnmarshal_OptionalDepWithDefault verifies that when a default exists the
+// default logic still runs even if the dependency is unmet (the default takes
+// precedence over the "required" decision).
 func TestUnmarshal_OptionalDepWithDefault(t *testing.T) {
 	type Config struct {
 		Other string `json:"other,optional"`
@@ -89,10 +92,12 @@ func TestUnmarshal_OptionalDepWithDefault(t *testing.T) {
 	assert.Equal(t, "d", cfg.Value)
 }
 
-// TestUnmarshal_OptionalDepUnknownDependency 回归测试：依赖名写错必须报错。
+// TestUnmarshal_OptionalDepUnknownDependency is a regression test: a misspelled
+// dependency name must report an error.
 //
-// 不校验的话，依赖名拼错会让字段**永久变为必填**（依赖永远找不到），
-// 属于难以定位的静默行为偏差。
+// Without the check, a typo in the dependency name makes the field
+// **permanently required** (the dependency is never found), a silent behavioural
+// deviation that is hard to track down.
 func TestUnmarshal_OptionalDepUnknownDependency(t *testing.T) {
 	type Config struct {
 		Other string `json:"other,optional"`
@@ -105,15 +110,17 @@ func TestUnmarshal_OptionalDepUnknownDependency(t *testing.T) {
 	assert.Contains(t, err.Error(), "does not match any field key")
 }
 
-// TestUnmarshal_OptionalDepCaseInsensitiveViaCanonicalKey 验证依赖查找与字段查找
-// 走同一条路径（设置 canonicalKey 时同样大小写不敏感）。
+// TestUnmarshal_OptionalDepCaseInsensitiveViaCanonicalKey verifies that the
+// dependency lookup and the field lookup take the same path (equally
+// case-insensitive when canonicalKey is set).
 func TestUnmarshal_OptionalDepCaseInsensitiveViaCanonicalKey(t *testing.T) {
 	type Config struct {
 		Other string `json:"other,optional"`
 		Value string `json:"value,optional=other"`
 	}
 
-	// 配置里键名是大写，字段标签是小写 → 依赖判定必须同样不敏感
+	// The config key is upper case while the field tag is lower case, so the
+	// dependency check must be equally insensitive
 	var cfg Config
 	err := UnmarshalJsonMap(map[string]any{"OTHER": "x"}, &cfg,
 		WithCanonicalKeyFunc(lowerFunc))
@@ -121,7 +128,8 @@ func TestUnmarshal_OptionalDepCaseInsensitiveViaCanonicalKey(t *testing.T) {
 	assert.Equal(t, "x", cfg.Other)
 }
 
-// TestUnmarshal_OptionalDepNested 验证嵌套结构体中的条件可选独立生效。
+// TestUnmarshal_OptionalDepNested verifies that conditional optionality applies
+// independently inside nested structs.
 func TestUnmarshal_OptionalDepNested(t *testing.T) {
 	type Inner struct {
 		Flag  string `json:"flag,optional"`
@@ -149,7 +157,7 @@ func TestUnmarshal_OptionalDepNested(t *testing.T) {
 	})
 }
 
-// lowerFunc 供 WithCanonicalKeyFunc 使用，避免额外 import strings。
+// lowerFunc is used by WithCanonicalKeyFunc to avoid an extra strings import.
 func lowerFunc(s string) string {
 	b := []byte(s)
 	for i := range b {

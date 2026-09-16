@@ -2,19 +2,24 @@ package middleware
 
 import "context"
 
-// routePatternCtxKey 是路由模板在 context 中的键。
-// 使用独立的未导出类型，避免与其它包的 key 冲突。
+// routePatternCtxKey is the context key for the route template.
+// A dedicated unexported type is used to avoid clashing with keys of other
+// packages.
 type routePatternCtxKey struct{}
 
-// PatternFromContext 返回请求匹配到的路由模板（如 "GET /users/{id}"）。
+// PatternFromContext returns the route template the request matched (such as
+// "GET /users/{id}").
 //
-// 为什么需要它：全局中间件包在 ServeMux **外层**，此时 net/http 尚未把匹配到的
-// 模板写入 r.Pattern（那是 ServeMux 在分发到命中 handler 时才做的事），
-// 因此在全局中间件里读 r.Pattern 恒为空。
-// httpx.Server 会在进入中间件链之前完成路由预判并把模板放入 context，
-// 于是需要"按路由聚合"的中间件（如熔断、指标）能拿到稳定的模板而非具体路径。
+// Why it is needed: global middleware wraps the ServeMux **outside** it, and at
+// that point net/http has not yet written the matched template into r.Pattern
+// (the ServeMux does that only when dispatching to the matched handler), so
+// reading r.Pattern from global middleware is always empty.
+// httpx.Server pre-matches the route before entering the middleware chain and
+// puts the template into the context, so middleware that aggregates per route
+// (such as the circuit breaker or metrics) gets a stable template instead of a
+// concrete path.
 //
-// 未设置时返回 ""。
+// It returns "" when unset.
 func PatternFromContext(ctx context.Context) string {
 	if ctx == nil {
 		return ""
@@ -23,9 +28,9 @@ func PatternFromContext(ctx context.Context) string {
 	return pattern
 }
 
-// ContextWithPattern 把路由模板写入 context。
-// 主要由 httpx.Server 内部使用；其它框架可自行调用，
-// 以便复用依赖路由模板的中间件。
+// ContextWithPattern writes the route template into the context.
+// It is mainly used internally by httpx.Server; other frameworks may call it
+// themselves in order to reuse middleware that depends on the route template.
 func ContextWithPattern(ctx context.Context, pattern string) context.Context {
 	if pattern == "" {
 		return ctx

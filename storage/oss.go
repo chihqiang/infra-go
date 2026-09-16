@@ -11,14 +11,14 @@ import (
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 )
 
-// ossStorage 阿里云 OSS 存储实现。
+// ossStorage is the Alibaba Cloud OSS storage implementation.
 type ossStorage struct {
 	client *oss.Client
 	bucket *oss.Bucket
 	url    string
 }
 
-// NewOSS 根据配置创建阿里云 OSS 存储实例。
+// NewOSS creates an Alibaba Cloud OSS storage instance from the configuration.
 func NewOSS(cfg *OSSConfig) (Storage, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("storage: OSS config is nil")
@@ -53,9 +53,10 @@ func NewOSS(cfg *OSSConfig) (Storage, error) {
 	}, nil
 }
 
-// resolveOSSURL 解析 OSS 文件访问域名。
-// 优先使用配置中的 URL（CDN 域名），为空时默认使用 "https://{bucket}.{endpoint}"。
-// 兼容 endpoint 已包含协议前缀的情况。
+// resolveOSSURL resolves the OSS file access domain.
+// It prefers the URL from the configuration (CDN domain) and falls back to
+// "https://{bucket}.{endpoint}" when that is empty.
+// It also handles the case where endpoint already carries a protocol prefix.
 func resolveOSSURL(cfg *OSSConfig) string {
 	if cfg.URL != "" {
 		return cfg.URL
@@ -66,7 +67,7 @@ func resolveOSSURL(cfg *OSSConfig) string {
 	}
 	u, err := url.Parse(ep)
 	if err != nil {
-		// 解析失败时回退到简单拼接
+		// Fall back to simple concatenation when parsing fails
 		return "https://" + cfg.Bucket + "." + cfg.Endpoint
 	}
 	u.Host = cfg.Bucket + "." + u.Host
@@ -74,8 +75,9 @@ func resolveOSSURL(cfg *OSSConfig) string {
 	return u.String()
 }
 
-// Write 将内容写入 OSS 指定路径。
-// OSS SDK 不支持 context 取消，这里在发起调用前检查 ctx 状态实现快速失败。
+// Write writes content to the given OSS path.
+// The OSS SDK does not support context cancellation, so the ctx state is checked
+// before issuing the call to fail fast.
 func (s *ossStorage) Write(ctx context.Context, path string, content []byte) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("storage: write OSS object %q: %w", path, err)
@@ -86,7 +88,7 @@ func (s *ossStorage) Write(ctx context.Context, path string, content []byte) err
 	return nil
 }
 
-// Read 读取 OSS 指定路径对象的完整内容。
+// Read reads the full content of the object at the given OSS path.
 func (s *ossStorage) Read(ctx context.Context, path string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("storage: read OSS object %q: %w", path, err)
@@ -103,7 +105,7 @@ func (s *ossStorage) Read(ctx context.Context, path string) ([]byte, error) {
 	return data, nil
 }
 
-// Exists 判断 OSS 指定路径的对象是否存在。
+// Exists reports whether the object at the given OSS path exists.
 func (s *ossStorage) Exists(ctx context.Context, path string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, fmt.Errorf("storage: check OSS object %q: %w", path, err)
@@ -115,7 +117,8 @@ func (s *ossStorage) Exists(ctx context.Context, path string) (bool, error) {
 	return found, nil
 }
 
-// Delete 删除 OSS 指定路径的对象，返回删除的对象数量。
+// Delete removes the object at the given OSS path and returns the number of
+// removed objects.
 func (s *ossStorage) Delete(ctx context.Context, path string) (int64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, fmt.Errorf("storage: delete OSS object %q: %w", path, err)
@@ -126,7 +129,7 @@ func (s *ossStorage) Delete(ctx context.Context, path string) (int64, error) {
 	return 1, nil
 }
 
-// URL 根据路径拼接完整的 OSS 访问 URL。
+// URL builds the full OSS access URL from the given path.
 func (s *ossStorage) URL(_ context.Context, path string) (string, error) {
 	return buildURL(s.url, path)
 }

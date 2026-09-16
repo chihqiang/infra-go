@@ -9,12 +9,12 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
-// 对应 tracing.go：HTTP 服务端链路追踪中间件。
-// 未装配 trace agent 时使用 no-op tracer，下列用例验证运行不 panic、
-// context 传播链路建立、ignorePaths 放行等行为。
+// Covers tracing.go: the HTTP server-side tracing middleware.
+// Without a trace agent installed the no-op tracer is used; the cases below verify it runs
+// without panicking, that context propagation is wired up, and that ignorePaths pass through.
 
-// TestTracing_Runs 验证基本工作流：未装配 tracer provider 时用 no-op tracer
-// 正常运行，不 panic。
+// TestTracing_Runs verifies the basic workflow: with no tracer provider installed the no-op
+// tracer runs normally without panicking.
 func TestTracing_Runs(t *testing.T) {
 	handler := NewTracing().Middleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -28,8 +28,8 @@ func TestTracing_Runs(t *testing.T) {
 	assert.Equal(t, "ok", rec.Body.String())
 }
 
-// TestTracing_PropagatesContext 验证中间件将 span 注入 context，
-// 下游 handler 可通过 oteltrace.SpanFromContext 取到 span（no-op 下不 panic）。
+// TestTracing_PropagatesContext verifies the middleware injects the span into the context,
+// so a downstream handler can fetch it via oteltrace.SpanFromContext (no panic under no-op).
 func TestTracing_PropagatesContext(t *testing.T) {
 	var gotSpan oteltrace.Span
 	handler := NewTracing().Middleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -41,17 +41,18 @@ func TestTracing_PropagatesContext(t *testing.T) {
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ctx", nil))
 
 	assert.Equal(t, http.StatusNoContent, rec.Code)
-	assert.NotNil(t, gotSpan) // span 已注入 context（no-op 也返回非 nil span）
+	assert.NotNil(t, gotSpan) // the span is injected into the context (no-op returns a non-nil span too)
 }
 
-// TestTracing_IgnorePaths 验证 ignorePaths 指定的路径直接放行、不追踪，其余路径正常工作。
+// TestTracing_IgnorePaths verifies paths in ignorePaths pass through untraced while other
+// paths work normally.
 func TestTracing_IgnorePaths(t *testing.T) {
 	handler := NewTracing("/health*", "/metrics/*").Middleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	}))
 
-	// 命中忽略规则的路径：正常放行，不 panic
+	// paths matching an ignore rule: pass through normally, no panic
 	for _, p := range []string{"/health", "/healthz", "/health/live", "/metrics/", "/metrics/foo"} {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
@@ -59,7 +60,7 @@ func TestTracing_IgnorePaths(t *testing.T) {
 		assert.Equal(t, "ok", rec.Body.String(), "path %s", p)
 	}
 
-	// 未命中忽略规则的路径：仍然正常工作
+	// paths not matching any ignore rule: still work normally
 	for _, p := range []string{"/api/users", "/metricsx/foo", "/foo/health"} {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
@@ -68,7 +69,7 @@ func TestTracing_IgnorePaths(t *testing.T) {
 	}
 }
 
-// TestTracing_WithTracerName 验证可覆盖 tracer 名称（空值保持默认）。
+// TestTracing_WithTracerName verifies the tracer name can be overridden (empty keeps the default).
 func TestTracing_WithTracerName(t *testing.T) {
 	t1 := NewTracing()
 	assert.Equal(t, defaultTracerName, t1.name)
@@ -77,5 +78,5 @@ func TestTracing_WithTracerName(t *testing.T) {
 	assert.Equal(t, "my-service", t2.name)
 
 	t3 := NewTracing().WithTracerName("")
-	assert.Equal(t, defaultTracerName, t3.name) // 空值不覆盖
+	assert.Equal(t, defaultTracerName, t3.name) // an empty value does not override
 }

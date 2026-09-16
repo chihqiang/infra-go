@@ -1,14 +1,15 @@
 # taskq
 
-基于 [hibiken/asynq](https://github.com/hibiken/asynq) 的异步任务队列二次封装，提供生产者/消费者模式。
+A wrapper around [hibiken/asynq](https://github.com/hibiken/asynq) providing a producer/consumer
+async task queue.
 
-## 架构
+## Architecture
 
 ```text
-Producer ──投递──▶ Redis ──拉取──▶ Consumer ──分发──▶ Handler
+Producer ──enqueue──▶ Redis ──fetch──▶ Consumer ──dispatch──▶ Handler
 ```
 
-## 快速开始
+## Quick start
 
 ```go
 package main
@@ -22,10 +23,10 @@ import (
     "github.com/hibiken/asynq"
 )
 
-// 任务类型名
+// task type name
 const TaskEmailSend = "email:send"
 
-// 任务 payload
+// task payload
 type EmailPayload struct {
     To   string `json:"to"`
     Body string `json:"body"`
@@ -37,7 +38,7 @@ func main() {
         Concurrency: 5,
     }
 
-    // --- 生产者：投递任务 ---
+    // --- producer: enqueue tasks ---
     producer := taskq.NewProducer(cfg)
     defer producer.Close()
 
@@ -50,7 +51,7 @@ func main() {
     }
     logger.Info("task enqueued", logger.String("id", info.ID))
 
-    // --- 消费者：处理任务 ---
+    // --- consumer: process tasks ---
     consumer := taskq.NewConsumer(cfg, nil)
     consumer.HandleFunc(TaskEmailSend, func(ctx context.Context, task *asynq.Task) error {
         var p EmailPayload
@@ -61,80 +62,82 @@ func main() {
         return nil
     })
 
-    // 启动并阻塞，收到信号后优雅关闭
+    // run and block, shutting down gracefully once a signal arrives
     if err := consumer.Run(); err != nil {
         logger.Fatal("consumer run failed", logger.Err(err))
     }
 }
 ```
 
-## 配置
+## Configuration
 
 ```go
 type Config struct {
-    RedisAddr       string        // Redis 地址，默认 "127.0.0.1:6379"
-    RedisPassword   string        // Redis 密码
-    RedisDB         int           // Redis DB 编号
+    RedisAddr       string        // Redis address, default "127.0.0.1:6379"
+    RedisPassword   string        // Redis password
+    RedisDB         int           // Redis DB number
 
-    Concurrency     int           // 消费者并发数，默认 10
-    Queues          map[string]int // 队列优先级，默认 {"default": 1}
-    ShutdownTimeout time.Duration // 优雅关闭超时，默认 8s
+    Concurrency     int           // consumer concurrency, default 10
+    Queues          map[string]int // queue priorities, default {"default": 1}
+    ShutdownTimeout time.Duration // graceful shutdown timeout, default 8s
 
-    DefaultMaxRetry int           // 默认最大重试，默认 25
-    DefaultTimeout  time.Duration // 默认任务超时，默认 30m
-    DefaultQueue    string        // 默认队列名，默认 "default"
+    DefaultMaxRetry int           // default max retries, default 25
+    DefaultTimeout  time.Duration // default task timeout, default 30m
+    DefaultQueue    string        // default queue name, default "default"
 }
 ```
 
-### 无法用 Config 表达的零值：`DefaultMaxRetry = 0`
+### Zero values Config cannot express: `DefaultMaxRetry = 0`
 
-`fillDefault` 采用「字段 == 0 视为未设置」的规则，而 `asynq.MaxRetry(0)` 是有意义的
-取值（**任务失败后不重试**）。因此 `Config{DefaultMaxRetry: 0}` 会被静默填充为 25 次重试，
-与意图相反。需要显式 0 时使用 Option 形式：
+`fillDefault` follows the "field == 0 means unset" rule, whereas `asynq.MaxRetry(0)` is a
+meaningful value (**do not retry after a failure**). `Config{DefaultMaxRetry: 0}` is therefore
+silently filled in with 25 retries, the opposite of the intent. Use the Option form when you need
+an explicit 0:
 
 ```go
-// 投递的任务失败后不重试（否则会被填为默认 25 次）
+// enqueued tasks are not retried after a failure (otherwise it would be filled in as 25)
 producer := taskq.NewProducer(cfg, taskq.WithDefaultMaxRetry(0))
 consumer := taskq.NewConsumer(cfg, nil, taskq.WithDefaultMaxRetry(0))
 ```
 
-| Option | 说明 |
+| Option | Description |
 | ------ | ------ |
-| `WithDefaultMaxRetry(n)` | 显式设置默认最大重试；传 `0` 表示不重试，不会被填充为 25 |
+| `WithDefaultMaxRetry(n)` | Set the default max retries explicitly; `0` means no retry and is not filled in as 25 |
 
-> `DefaultTimeout` **没有**对应的 Option：asynq 自身把 `Timeout(0)` 视为未设置并回落 30 分钟
-> 默认超时（见 `asynq.EnqueueContext` 对 `noTimeout` 的处理），所以传 0 与不传结果完全相同，
-> 本包不提供名不副实的 API。
+> `DefaultTimeout` has **no** corresponding Option: asynq itself treats `Timeout(0)` as unset and
+> falls back to the 30-minute default timeout (see how `asynq.EnqueueContext` handles `noTimeout`),
+> so passing 0 and passing nothing produce identical results, and this package does not ship an API
+> that does not do what its name says.
 >
-> Option 在默认值填充**之后**应用，因此会覆盖 `Config` 中的非零字段。
-> 单次投递的覆盖仍可继续用 `Producer.Enqueue(ctx, task, asynq.MaxRetry(0))`。
+> Options are applied **after** the defaults are filled in, so they override the non-zero fields in
+> `Config`. Per-enqueue overrides can still use `Producer.Enqueue(ctx, task, asynq.MaxRetry(0))`.
 
-## 延迟/定时任务
+## Delayed/scheduled tasks
 
 ```go
-// 5 分钟后执行
+// run 5 minutes later
 producer.EnqueueIn(ctx, task, 5*time.Minute)
 
-// 指定时间执行
+// run at a specific time
 producer.EnqueueAt(ctx, task, time.Now().Add(2*time.Hour))
 ```
 
-## 优先级队列
+## Priority queues
 
 ```go
 cfg := taskq.Config{
     Queues: map[string]int{
-        "critical": 6,  // 60% 的处理概率
+        "critical": 6,  // 60% chance of being processed
         "default":  3,  // 30%
         "low":      1,  // 10%
     },
 }
 
-// 投递到指定队列
+// enqueue into a specific queue
 producer.Enqueue(ctx, task, asynq.Queue("critical"))
 ```
 
-## 中间件
+## Middleware
 
 ```go
 consumer := taskq.NewConsumer(cfg, nil)
@@ -149,9 +152,9 @@ consumer.Use(func(next asynq.Handler) asynq.Handler {
 consumer.HandleFunc("my:task", handler)
 ```
 
-## 集成项目日志
+## Integrating the project logger
 
 ```go
 log := logger.New(logger.Config{Encoding: logger.JSONEncoding})
-consumer := taskq.NewConsumer(cfg, log) // asynq 内部日志走项目 logger
+consumer := taskq.NewConsumer(cfg, log) // asynq's internal logs go through the project logger
 ```

@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- Context 集成测试 ---
+// --- Context integration tests ---
 
 func TestWithClaims(t *testing.T) {
 	ctx := context.Background()
@@ -20,10 +20,10 @@ func TestWithClaims(t *testing.T) {
 
 	newCtx := WithClaims(ctx, claims)
 
-	// 原始 context 不受影响
+	// The original context is unaffected
 	assert.Nil(t, ClaimsFromContext(ctx))
 
-	// 新 context 有 claims
+	// The new context carries claims
 	extracted := ClaimsFromContext(newCtx)
 	require.NotNil(t, extracted)
 	assert.Equal(t, "123", extracted[ClaimKeyUserID])
@@ -35,9 +35,9 @@ func TestClaimsFromContext_Empty(t *testing.T) {
 	assert.Nil(t, ClaimsFromContext(ctx))
 }
 
-// --- AuthMiddleware 测试 ---
+// --- AuthMiddleware tests ---
 
-// headerTokenExtractor 从指定请求头提取 token，用于测试。
+// headerTokenExtractor extracts the token from the named request header, for tests.
 func headerTokenExtractor(headerName string) func(*http.Request) string {
 	return func(r *http.Request) string {
 		return r.Header.Get(headerName)
@@ -66,7 +66,7 @@ func TestAuthMiddleware_Success(t *testing.T) {
 		called = true
 		ctxClaims = ClaimsFromContext(r.Context())
 		gotUserID = ctxClaims[ClaimKeyUserID]
-		// 验证逐个注入的 context value
+		// Verify the individually injected context values
 		gotCtxUserID = r.Context().Value(claimCtxKey(ClaimKeyUserID))
 		w.WriteHeader(http.StatusOK)
 	})
@@ -83,7 +83,7 @@ func TestAuthMiddleware_Success(t *testing.T) {
 	require.NotNil(t, ctxClaims)
 	assert.Equal(t, "alice", ctxClaims[ClaimKeyUsername])
 	assert.Equal(t, "admin", ctxClaims[ClaimKeyRole])
-	// 标准声明和 token_type 不应注入
+	// Standard claims and token_type must not be injected
 	assert.NotContains(t, ctxClaims, ClaimKeyIssuer)
 	assert.NotContains(t, ctxClaims, ClaimKeyTokenType)
 }
@@ -130,7 +130,7 @@ func TestAuthMiddleware_InvalidToken(t *testing.T) {
 func TestAuthMiddleware_ExpiredToken(t *testing.T) {
 	j := newTestJWT(t)
 
-	// 生成已过期的 access token
+	// Generate an already expired access token
 	token, err := j.GenerateToken(Claims{
 		ClaimKeyUserID:    "123",
 		ClaimKeyTokenType: TokenTypeAccess,
@@ -157,7 +157,7 @@ func TestAuthMiddleware_ExpiredToken(t *testing.T) {
 func TestAuthMiddleware_RefreshTokenAsAccess(t *testing.T) {
 	j := newTestJWT(t)
 
-	// 用 refresh token 当作 access token，应被拒绝
+	// Using a refresh token as an access token must be rejected
 	token, err := j.GenerateRefreshToken(Claims{ClaimKeyUserID: "123"})
 	require.NoError(t, err)
 
@@ -178,19 +178,20 @@ func TestAuthMiddleware_RefreshTokenAsAccess(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), msgInvalidToken)
 }
 
-// --- RFC 9110 §15.5.2 / RFC 6750 §3：401 必须携带 WWW-Authenticate ---
+// --- RFC 9110 §15.5.2 / RFC 6750 §3: 401 must carry WWW-Authenticate ---
 
-// TestAuthMiddleware_UnauthorizedCarriesBearerChallenge 回归测试：所有 401 路径都必须
-// 携带符合 RFC 6750 §3 的 Bearer 质询。
+// TestAuthMiddleware_UnauthorizedCarriesBearerChallenge is a regression test:
+// every 401 path must carry a Bearer challenge in line with RFC 6750 §3.
 //
-// 历史缺陷：401 只写了状态码与消息，没有 WWW-Authenticate 头，
-// 违反 RFC 9110 §15.5.2 的 MUST；客户端无法据此判断应采用哪种认证方案。
+// Historic defect: the 401 only set the status code and message with no
+// WWW-Authenticate header, violating the RFC 9110 §15.5.2 MUST; clients could
+// not tell which authentication scheme they were expected to use.
 func TestAuthMiddleware_UnauthorizedCarriesBearerChallenge(t *testing.T) {
 	j := newTestJWT(t)
 	mw := j.AuthMiddleware(headerTokenExtractor("X-Token"))
 	handler := mw(func(w http.ResponseWriter, r *http.Request) {})
 
-	// 过期令牌
+	// Expired token
 	expiredJWT, err := New(Config{
 		Secret:            "test-secret-key",
 		AccessTokenExpire: time.Millisecond,
@@ -200,7 +201,7 @@ func TestAuthMiddleware_UnauthorizedCarriesBearerChallenge(t *testing.T) {
 	require.NoError(t, err)
 	time.Sleep(10 * time.Millisecond)
 
-	// 无效令牌（错误密钥签发）
+	// Invalid token (signed with the wrong secret)
 	otherJWT, err := New(Config{Secret: "another-secret-key"})
 	require.NoError(t, err)
 	otherToken, err := otherJWT.GenerateAccessToken(Claims{ClaimKeyUserID: "1"})
@@ -209,7 +210,7 @@ func TestAuthMiddleware_UnauthorizedCarriesBearerChallenge(t *testing.T) {
 	cases := []struct {
 		name     string
 		token    string
-		wantCode string // RFC 6750 §3 的 error 取值
+		wantCode string // error value from RFC 6750 §3
 	}{
 		{"missing token", "", middleware.BearerErrorInvalidRequest},
 		{"expired token", expiredToken, middleware.BearerErrorInvalidToken},
@@ -239,7 +240,8 @@ func TestAuthMiddleware_UnauthorizedCarriesBearerChallenge(t *testing.T) {
 	}
 }
 
-// TestAuthMiddleware_ChallengeOnSuccess 验证认证成功时不发送质询头。
+// TestAuthMiddleware_ChallengeOnSuccess verifies that no challenge header is
+// sent when authentication succeeds.
 func TestAuthMiddleware_ChallengeOnSuccess(t *testing.T) {
 	j := newTestJWT(t)
 	token, err := j.GenerateAccessToken(Claims{ClaimKeyUserID: "1"})

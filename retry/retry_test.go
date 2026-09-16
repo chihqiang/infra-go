@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- 执行测试 ---
+// --- Execution tests ---
 
 func TestDo_Success(t *testing.T) {
 	var calls int32
@@ -54,11 +54,11 @@ func TestDo_RetryIf_False(t *testing.T) {
 		atomic.AddInt32(&calls, 1)
 		return errors.New("non-retryable error")
 	}, WithMaxRetries(5), WithDelay(1*time.Millisecond), WithRetryIf(func(err error) bool {
-		return false // 不重试
+		return false // do not retry
 	}))
 	require.Error(t, err)
 	assert.True(t, IsNoRetry(err))
-	assert.Equal(t, int32(1), atomic.LoadInt32(&calls)) // 只调用一次
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls)) // called only once
 }
 
 func TestDo_OnRetry(t *testing.T) {
@@ -75,7 +75,7 @@ func TestDo_OnRetry(t *testing.T) {
 		assert.NotEqual(t, 0, attempt)
 	}))
 	require.NoError(t, err)
-	assert.Equal(t, int32(2), atomic.LoadInt32(&retryCalls)) // 重试了 2 次
+	assert.Equal(t, int32(2), atomic.LoadInt32(&retryCalls)) // retried twice
 }
 
 func TestDo_ContextCancelled(t *testing.T) {
@@ -128,7 +128,7 @@ func TestDo_ExponentialBackoff(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int32(4), atomic.LoadInt32(&calls))
 
-	// 验证延迟递增（指数退避）
+	// Verify that the delays grow (exponential backoff)
 	// delays[0] ~ 10ms, delays[1] ~ 20ms, delays[2] ~ 40ms
 	require.Len(t, delays, 3)
 	assert.Greater(t, delays[1], delays[0])
@@ -185,7 +185,7 @@ func TestDo_MaxDelayCap(t *testing.T) {
 	require.Error(t, err)
 	elapsed := time.Since(start)
 
-	// 3 次重试，延迟不应超过 3 * 50ms = 150ms（加上一些开销）
+	// 3 retries, so the delay must not exceed 3 * 50ms = 150ms (plus some overhead)
 	assert.Less(t, elapsed, 300*time.Millisecond)
 }
 
@@ -196,7 +196,7 @@ func TestDo_NilFunction(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// --- 辅助函数测试 ---
+// --- Helper function tests ---
 
 func TestIsMaxRetries(t *testing.T) {
 	assert.True(t, IsMaxRetries(ErrMaxRetries))
@@ -217,15 +217,18 @@ func TestAttempts(t *testing.T) {
 	assert.Equal(t, 6, Attempts(c))
 }
 
-// TestAttempts_WithOption 验证 Attempts 与 DoWithRetryConfig 使用同一套
-// 默认值 + Option 规则，传入同一组 opts 时结果与实际执行次数一致。
+// TestAttempts_WithOption verifies that Attempts and DoWithRetryConfig share the same defaults
+// and Option rules, so passing the same group of opts makes the result match the actual number
+// of executions.
 func TestAttempts_WithOption(t *testing.T) {
-	assert.Equal(t, 1, Attempts(Config{}, WithMaxRetries(0)), "显式不重试时总执行 1 次")
+	assert.Equal(t, 1, Attempts(Config{}, WithMaxRetries(0)),
+		"an explicit no-retry configuration executes exactly once")
 	assert.Equal(t, defaultMaxRetries+1, Attempts(Config{}))
 }
 
-// TestDoWithRetryConfig_ExplicitZeroRetries 验证结构体配置无法表达的
-// "不重试"可通过 WithMaxRetries(0) 表达，且不被 normalize 填充为默认 3 次。
+// TestDoWithRetryConfig_ExplicitZeroRetries verifies that "no retry", which a struct
+// configuration cannot express, can be expressed with WithMaxRetries(0) and is not filled in
+// as the default 3 by normalize.
 func TestDoWithRetryConfig_ExplicitZeroRetries(t *testing.T) {
 	var calls int32
 	err := DoWithRetryConfig(context.Background(), func(context.Context) error {
@@ -234,11 +237,11 @@ func TestDoWithRetryConfig_ExplicitZeroRetries(t *testing.T) {
 	}, Config{MaxRetries: 9}, WithMaxRetries(0))
 
 	assert.ErrorIs(t, err, ErrMaxRetries)
-	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "WithMaxRetries(0) 应只执行一次")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "WithMaxRetries(0) must execute only once")
 }
 
-// TestDoWithRetryConfig_ExplicitZeroDelay 验证 WithDelay(0) 表示立即重试，
-// 不会等待默认的 100ms 初始延迟。
+// TestDoWithRetryConfig_ExplicitZeroDelay verifies that WithDelay(0) means retrying
+// immediately instead of waiting for the default 100ms initial delay.
 func TestDoWithRetryConfig_ExplicitZeroDelay(t *testing.T) {
 	var calls int32
 	start := time.Now()
@@ -251,22 +254,26 @@ func TestDoWithRetryConfig_ExplicitZeroDelay(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, int32(2), atomic.LoadInt32(&calls))
-	assert.Less(t, time.Since(start), 100*time.Millisecond, "零延迟应立刻重试")
+	assert.Less(t, time.Since(start), 100*time.Millisecond, "a zero delay must retry immediately")
 }
 
-// --- 错误链保留（回归：此前用 %s 拼接，errors.Is/As 失效）---
+// --- Error chain preservation (regression: previously formatted with %s, which broke
+// errors.Is/As) ---
 
-// retryTestHTTPError 是用于验证 errors.As 的自定义错误类型。
-// 必须定义在包级别：Go 不允许为函数内定义的局部类型声明方法。
+// retryTestHTTPError is a custom error type used to verify errors.As.
+// It must be declared at package level: Go does not allow declaring methods on a local type
+// defined inside a function.
 type retryTestHTTPError struct{ Code int }
 
 func (e *retryTestHTTPError) Error() string {
 	return fmt.Sprintf("http error: %d", e.Code)
 }
 
-// TestErrorChain_MaxRetries 验证超过重试次数时，原始错误仍可通过 errors.Is/As 识别。
-// 历史缺陷：fmt.Errorf("%w: last error: %s", ...) 把原始错误降级为文本，
-// 上层无法判断到底是超时、连接被拒还是业务错误。
+// TestErrorChain_MaxRetries verifies that the original error can still be recognised through
+// errors.Is/As once the retry count is exceeded.
+// Historical defect: fmt.Errorf("%w: last error: %s", ...) degraded the original error to
+// plain text, so callers could not tell a timeout from a refused connection or a business
+// error.
 func TestErrorChain_MaxRetries(t *testing.T) {
 	sentinel := errors.New("downstream unavailable")
 	calls := 0
@@ -279,17 +286,18 @@ func TestErrorChain_MaxRetries(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, 2, calls)
 
-	// 哨兵与原始错误都必须可识别
+	// Both the sentinel and the original error must be recognisable
 	assert.True(t, IsMaxRetries(err))
 	assert.True(t, errors.Is(err, ErrMaxRetries))
 	assert.True(t, errors.Is(err, sentinel), "underlying error must stay in the chain")
 
-	// 错误信息保持可读
+	// The error message stays readable
 	assert.Contains(t, err.Error(), "max retries exceeded")
 	assert.Contains(t, err.Error(), "downstream unavailable")
 }
 
-// TestErrorChain_ContextDeadline 验证包装后仍能识别 context 错误。
+// TestErrorChain_ContextDeadline verifies that context errors remain recognisable after
+// wrapping.
 func TestErrorChain_ContextDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -304,7 +312,8 @@ func TestErrorChain_ContextDeadline(t *testing.T) {
 		"context error must remain detectable, got: %v", err)
 }
 
-// TestErrorChain_NoRetry 验证 RetryIf 返回 false 时同样保留错误链。
+// TestErrorChain_NoRetry verifies that the error chain is preserved when RetryIf returns
+// false.
 func TestErrorChain_NoRetry(t *testing.T) {
 	sentinel := errors.New("fatal: bad request")
 
@@ -322,7 +331,8 @@ func TestErrorChain_NoRetry(t *testing.T) {
 	assert.Contains(t, err.Error(), "fatal: bad request")
 }
 
-// TestErrorChain_CustomErrorType 验证自定义错误类型可用 errors.As 提取。
+// TestErrorChain_CustomErrorType verifies that a custom error type can be extracted with
+// errors.As.
 func TestErrorChain_CustomErrorType(t *testing.T) {
 	sentinel := &retryTestHTTPError{Code: 503}
 
@@ -337,11 +347,13 @@ func TestErrorChain_CustomErrorType(t *testing.T) {
 	assert.Equal(t, 503, target.Code)
 }
 
-// --- Attempts 与实际执行次数一致 ---
+// --- Attempts matches the actual number of executions ---
 
-// TestAttempts_MatchesActualExecutions 验证 Attempts 的返回值与真实执行次数一致。
-// 历史缺陷：Attempts 直接返回 MaxRetries+1，而 DoWithRetryConfig 会把 0 当作
-// 未设置填充为默认 3，两者对同一份 Config 给出矛盾结论（1 次 vs 实际 4 次）。
+// TestAttempts_MatchesActualExecutions verifies that the value returned by Attempts matches the
+// real number of executions.
+// Historical defect: Attempts returned MaxRetries+1 directly, while DoWithRetryConfig treated
+// 0 as unset and filled in the default 3, so the two contradicted each other for the same
+// Config (1 execution versus 4 in practice).
 func TestAttempts_MatchesActualExecutions(t *testing.T) {
 	cases := []struct {
 		name string
@@ -371,13 +383,16 @@ func TestAttempts_MatchesActualExecutions(t *testing.T) {
 	}
 }
 
-// TestAttempts_ZeroConfigReportsDefaults 验证零值配置报告的是生效后的次数。
+// TestAttempts_ZeroConfigReportsDefaults verifies that a zero-valued configuration reports the
+// number of executions that actually take effect.
 func TestAttempts_ZeroConfigReportsDefaults(t *testing.T) {
 	assert.Equal(t, defaultMaxRetries+1, Attempts(Config{}))
 }
 
-// TestWithMaxRetriesZero_ExecutesOnce 验证 Option 路径可以表达"不重试"（0 次重试）。
-// 字段式配置无法表达 0（会被当作未设置），这是 Option 路径存在的意义。
+// TestWithMaxRetriesZero_ExecutesOnce verifies that the Option path can express "no retry"
+// (0 retries).
+// A field-based configuration cannot express 0 (it would be treated as unset), which is why the
+// Option path exists.
 func TestWithMaxRetriesZero_ExecutesOnce(t *testing.T) {
 	calls := 0
 	err := DoWithConfig(context.Background(), func(context.Context) error {
@@ -389,7 +404,7 @@ func TestWithMaxRetriesZero_ExecutesOnce(t *testing.T) {
 	assert.Equal(t, 1, calls, "WithMaxRetries(0) must execute exactly once")
 }
 
-// --- 错误常量测试 ---
+// --- Error constant tests ---
 
 func TestErrorConstants(t *testing.T) {
 	assert.Equal(t, "retry: max retries exceeded", ErrMaxRetries.Error())

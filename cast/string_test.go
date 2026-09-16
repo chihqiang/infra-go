@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- ToString 测试 ---
+// --- ToString tests ---
 
 func TestToString(t *testing.T) {
 	assert.Equal(t, "hello", ToString("hello"))
@@ -25,11 +25,11 @@ func TestToString(t *testing.T) {
 }
 
 func TestToString_Stringer(t *testing.T) {
-	// error 类型实现 fmt.Stringer，应转为错误消息
+	// the error type implements fmt.Stringer, so it converts to the error message
 	assert.Equal(t, "custom", ToString(errors.New("custom")))
 }
 
-// --- 补充：ToStringE 类型族 ---
+// --- Additional coverage: ToStringE type family ---
 
 func TestToStringE_TypeFamily(t *testing.T) {
 	cases := []struct {
@@ -65,26 +65,26 @@ func TestToStringE_TypeFamily(t *testing.T) {
 }
 
 func TestToStringE_StringerType(t *testing.T) {
-	// 非 error 的 fmt.Stringer（time.Time）走 Stringer 分支
+	// a fmt.Stringer that is not an error (time.Time) takes the Stringer branch
 	s, err := ToStringE(time.Unix(1700000000, 0).UTC())
 	require.NoError(t, err)
 	assert.NotEmpty(t, s)
 }
 
 func TestToStringE_DefaultJSONSuccess(t *testing.T) {
-	// default 分支：json.Marshal 成功的切片 → "[1,2]"
+	// default branch: a slice that json.Marshal handles → "[1,2]"
 	s, err := ToStringE([]int{1, 2})
 	require.NoError(t, err)
 	assert.Equal(t, "[1,2]", s)
 
-	// map 序列化
+	// map serialization
 	s, err = ToStringE(map[string]int{"a": 1})
 	require.NoError(t, err)
 	assert.Contains(t, s, `"a":1`)
 }
 
 func TestToStringE_Errors(t *testing.T) {
-	// func 无法序列化
+	// func cannot be marshalled
 	_, err := ToStringE(func() {})
 	assert.Error(t, err)
 }

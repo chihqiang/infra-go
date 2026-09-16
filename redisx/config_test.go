@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// --- fillDefault 测试 ---
+// --- fillDefault tests ---
 
 func TestFillDefault_AllDefaults(t *testing.T) {
 	c := fillDefault(Config{})
@@ -49,7 +49,8 @@ func TestFillDefault_UserOverrides(t *testing.T) {
 }
 
 func TestFillDefault_EmptyStringOverrides(t *testing.T) {
-	// optional 且无 default 的 string 空值也应生效（Password/KeyPrefix 可显式置空）
+	// An empty string is effective for optional strings without a default
+	// (Password/KeyPrefix can be explicitly cleared)
 	c := fillDefault(Config{Password: "", KeyPrefix: ""})
 	assert.Equal(t, "", c.Password)
 	assert.Equal(t, "", c.KeyPrefix)

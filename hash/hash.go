@@ -13,145 +13,146 @@ import (
 	"golang.org/x/crypto/sha3"
 )
 
-// --- 基础哈希函数 ---
+// --- basic hash functions ---
 
-// MD5 返回输入数据的 MD5 哈希值（16 字节，32 位十六进制字符串）。
-// 注意：MD5 不再安全，不应用于密码存储或安全场景，仅适用于数据校验。
+// MD5 returns the MD5 hash of the input data (16 bytes, 32 hex characters).
+// Note: MD5 is no longer secure and should not be used for password storage or security
+// purposes; it is suitable only for data checksums.
 func MD5(data []byte) string {
 	sum := md5.Sum(data)
 	return hex.EncodeToString(sum[:])
 }
 
-// MD5String 返回字符串的 MD5 哈希值。
+// MD5String returns the MD5 hash of a string.
 func MD5String(s string) string {
 	return MD5([]byte(s))
 }
 
-// SHA1 返回输入数据的 SHA1 哈希值（20 字节，40 位十六进制字符串）。
+// SHA1 returns the SHA1 hash of the input data (20 bytes, 40 hex characters).
 func SHA1(data []byte) string {
 	sum := sha1.Sum(data)
 	return hex.EncodeToString(sum[:])
 }
 
-// SHA1String 返回字符串的 SHA1 哈希值。
+// SHA1String returns the SHA1 hash of a string.
 func SHA1String(s string) string {
 	return SHA1([]byte(s))
 }
 
-// SHA224 返回输入数据的 SHA224 哈希值。
+// SHA224 returns the SHA224 hash of the input data.
 func SHA224(data []byte) string {
 	sum := sha256.Sum224(data)
 	return hex.EncodeToString(sum[:])
 }
 
-// SHA224String 返回字符串的 SHA224 哈希值。
+// SHA224String returns the SHA224 hash of a string.
 func SHA224String(s string) string {
 	return SHA224([]byte(s))
 }
 
-// SHA256 返回输入数据的 SHA256 哈希值（32 字节，64 位十六进制字符串）。
+// SHA256 returns the SHA256 hash of the input data (32 bytes, 64 hex characters).
 func SHA256(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
 
-// SHA256String 返回字符串的 SHA256 哈希值。
+// SHA256String returns the SHA256 hash of a string.
 func SHA256String(s string) string {
 	return SHA256([]byte(s))
 }
 
-// SHA384 返回输入数据的 SHA384 哈希值。
+// SHA384 returns the SHA384 hash of the input data.
 func SHA384(data []byte) string {
 	sum := sha512.Sum384(data)
 	return hex.EncodeToString(sum[:])
 }
 
-// SHA384String 返回字符串的 SHA384 哈希值。
+// SHA384String returns the SHA384 hash of a string.
 func SHA384String(s string) string {
 	return SHA384([]byte(s))
 }
 
-// SHA512 返回输入数据的 SHA512 哈希值（64 字节，128 位十六进制字符串）。
+// SHA512 returns the SHA512 hash of the input data (64 bytes, 128 hex characters).
 func SHA512(data []byte) string {
 	sum := sha512.Sum512(data)
 	return hex.EncodeToString(sum[:])
 }
 
-// SHA512String 返回字符串的 SHA512 哈希值。
+// SHA512String returns the SHA512 hash of a string.
 func SHA512String(s string) string {
 	return SHA512([]byte(s))
 }
 
-// SHA512_224 返回输入数据的 SHA512/224 哈希值。
+// SHA512_224 returns the SHA512/224 hash of the input data.
 func SHA512_224(data []byte) string {
 	sum := sha512.Sum512_224(data)
 	return hex.EncodeToString(sum[:])
 }
 
-// SHA512_224String 返回字符串的 SHA512/224 哈希值。
+// SHA512_224String returns the SHA512/224 hash of a string.
 func SHA512_224String(s string) string {
 	return SHA512_224([]byte(s))
 }
 
-// SHA512_256 返回输入数据的 SHA512/256 哈希值。
+// SHA512_256 returns the SHA512/256 hash of the input data.
 func SHA512_256(data []byte) string {
 	sum := sha512.Sum512_256(data)
 	return hex.EncodeToString(sum[:])
 }
 
-// SHA512_256String 返回字符串的 SHA512/256 哈希值。
+// SHA512_256String returns the SHA512/256 hash of a string.
 func SHA512_256String(s string) string {
 	return SHA512_256([]byte(s))
 }
 
-// --- SHA3 系列 ---
+// --- SHA3 family ---
 
-// SHA3_256 返回输入数据的 SHA3-256 哈希值。
+// SHA3_256 returns the SHA3-256 hash of the input data.
 func SHA3_256(data []byte) string {
 	sum := sha3.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
 
-// SHA3_256String 返回字符串的 SHA3-256 哈希值。
+// SHA3_256String returns the SHA3-256 hash of a string.
 func SHA3_256String(s string) string {
 	return SHA3_256([]byte(s))
 }
 
-// SHA3_512 返回输入数据的 SHA3-512 哈希值。
+// SHA3_512 returns the SHA3-512 hash of the input data.
 func SHA3_512(data []byte) string {
 	sum := sha3.Sum512(data)
 	return hex.EncodeToString(sum[:])
 }
 
-// SHA3_512String 返回字符串的 SHA3-512 哈希值。
+// SHA3_512String returns the SHA3-512 hash of a string.
 func SHA3_512String(s string) string {
 	return SHA3_512([]byte(s))
 }
 
-// --- 文件哈希 ---
+// --- file hashing ---
 
-// FileMD5 计算文件的 MD5 哈希值。
-// 适用于大文件，内部使用流式读取。
+// FileMD5 computes the MD5 hash of a file.
+// It suits large files and reads the content in a streaming fashion internally.
 func FileMD5(path string) (string, error) {
 	return fileHash(path, md5.New())
 }
 
-// FileSHA1 计算文件的 SHA1 哈希值。
+// FileSHA1 computes the SHA1 hash of a file.
 func FileSHA1(path string) (string, error) {
 	return fileHash(path, sha1.New())
 }
 
-// FileSHA256 计算文件的 SHA256 哈希值。
+// FileSHA256 computes the SHA256 hash of a file.
 func FileSHA256(path string) (string, error) {
 	return fileHash(path, sha256.New())
 }
 
-// FileSHA512 计算文件的 SHA512 哈希值。
+// FileSHA512 computes the SHA512 hash of a file.
 func FileSHA512(path string) (string, error) {
 	return fileHash(path, sha512.New())
 }
 
-// fileHash 使用指定的 hash.Hash 计算文件哈希值。
+// fileHash computes a file hash using the given hash.Hash.
 func fileHash(path string, h hash.Hash) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -166,31 +167,32 @@ func fileHash(path string, h hash.Hash) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// --- 通用哈希接口 ---
+// --- generic hash interface ---
 
-// Hash 使用指定的 hash.Hash 计算数据的哈希值，返回十六进制字符串。
-// 适用于需要自定义哈希算法的场景。
+// Hash computes the hash of data with the given hash.Hash and returns a hex string.
+// It is intended for cases that need a custom hash algorithm.
 //
-// h 会先被 Reset，因此复用同一个 hash.Hash 实例（如包级共享的 sha256.New()）
-// 是安全的，每次调用都只对本次 data 求值。
-// 注意：本函数会重置 h 的内部状态，请勿用它计算分块累积的摘要
-// （累积场景应直接使用 h.Write / h.Sum）。
+// h is Reset first, so reusing a single hash.Hash instance (such as a package-level
+// shared sha256.New()) is safe: every call evaluates only the current data.
+// Note: this function resets h's internal state, so do not use it to compute an
+// incrementally accumulated digest (for accumulation use h.Write / h.Sum directly).
 func Hash(data []byte, h hash.Hash) string {
-	// Write 不会重置状态，Sum 也不会。若不 Reset，复用同一实例时
-	// 第二次调用会得到"累积摘要"而非本次数据的摘要，且不会报错。
+	// Write does not reset the state and neither does Sum. Without the Reset, a second
+	// call on a reused instance would return a "cumulative digest" instead of the digest
+	// of the current data, and it would not report any error.
 	h.Reset()
 	_, _ = h.Write(data)
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// --- 编码辅助 ---
+// --- encoding helpers ---
 
-// HexEncode 将字节数组编码为十六进制字符串。
+// HexEncode encodes a byte slice as a hex string.
 func HexEncode(data []byte) string {
 	return hex.EncodeToString(data)
 }
 
-// HexDecode 将十六进制字符串解码为字节数组。
+// HexDecode decodes a hex string into a byte slice.
 func HexDecode(s string) ([]byte, error) {
 	return hex.DecodeString(s)
 }

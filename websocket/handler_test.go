@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// --- EventHandler 测试 ---
+// --- EventHandler tests ---
 
 func TestEventHandler_EventDispatch(t *testing.T) {
 	h := NewEventHandler()
@@ -24,11 +24,11 @@ func TestEventHandler_EventDispatch(t *testing.T) {
 		_ = json.Unmarshal(data, &receivedData)
 	})
 
-	// 模拟收到事件消息
+	// Simulate receiving an event message
 	event := MustNewEvent("greeting", "hello world")
 	data, _ := json.Marshal(event)
 
-	// EventHandler.OnMessage 不需要真实连接
+	// EventHandler.OnMessage does not need a real connection
 	h.HandleMessage(nil, TextMessage, data)
 
 	mu.Lock()
@@ -64,7 +64,7 @@ func TestEventHandler_IgnoreNonText(t *testing.T) {
 		called = true
 	})
 
-	// 二进制消息不应触发事件分发
+	// A binary message must not trigger event dispatch
 	event := MustNewEvent("test", "data")
 	data, _ := json.Marshal(event)
 	h.HandleMessage(nil, BinaryMessage, data)

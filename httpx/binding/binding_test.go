@@ -7,9 +7,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// 对应 binding.go：MIME 常量、绑定器接口、内置实例、Default 选择器。
+// Covers binding.go: MIME constants, binder interfaces, built-in instances, Default selector.
 
-// --- 接口实现断言（编译期） ---
+// --- Interface implementation assertions (compile time) ---
 
 var (
 	_ Binding     = JSON // BindingBody → Binding
@@ -19,10 +19,10 @@ var (
 	_ Binding     = Header
 	_ BindingBody = JSON
 	_ BindingBody = XML
-	_ BindingUri  = Uri // Uri 仅实现 BindingUri（不含 Bind）
+	_ BindingUri  = Uri // Uri only implements BindingUri (without Bind)
 )
 
-// --- MIME 常量 ---
+// --- MIME constants ---
 
 func TestMIMEConstants(t *testing.T) {
 	assert.Equal(t, "application/json", MIMEJSON)
@@ -33,7 +33,7 @@ func TestMIMEConstants(t *testing.T) {
 	assert.Equal(t, "multipart/form-data", MIMEMultipartPOSTForm)
 }
 
-// --- 内置实例名称 ---
+// --- Built-in instance names ---
 
 func TestBuiltinBinders_Name(t *testing.T) {
 	assert.Equal(t, "json", JSON.Name())
@@ -44,14 +44,14 @@ func TestBuiltinBinders_Name(t *testing.T) {
 	assert.Equal(t, "uri", Uri.Name())
 }
 
-// --- Default 绑定器选择 ---
+// --- Default binder selection ---
 
 func TestDefault_Selector(t *testing.T) {
-	// GET 固定返回 Form
+	// GET always returns Form
 	assert.Equal(t, "form", Default(http.MethodGet, "").Name())
 	assert.Equal(t, "form", Default(http.MethodGet, MIMEJSON).Name())
 
-	// 按 Content-Type 匹配
+	// Matched by Content-Type
 	assert.Equal(t, "json", Default(http.MethodPost, MIMEJSON).Name())
 	assert.Equal(t, "xml", Default(http.MethodPost, MIMEXML).Name())
 	assert.Equal(t, "xml", Default(http.MethodPost, MIMEXML2).Name())
@@ -60,12 +60,12 @@ func TestDefault_Selector(t *testing.T) {
 }
 
 func TestDefault_ContentTypeEdge(t *testing.T) {
-	// 带参数（; charset=utf-8）
+	// With parameters (; charset=utf-8)
 	assert.Equal(t, "json", Default(http.MethodPost, "application/json; charset=utf-8").Name())
 	assert.Equal(t, "xml", Default(http.MethodPost, "application/xml; charset=utf-8").Name())
-	// 大小写不敏感
+	// Case-insensitive
 	assert.Equal(t, "json", Default(http.MethodPost, "Application/JSON").Name())
-	// 无法解析 / 未知类型 → Form
+	// Unparseable / unknown type → Form
 	assert.Equal(t, "form", Default(http.MethodPost, "not-a-valid-mime;;").Name())
 	assert.Equal(t, "form", Default(http.MethodPost, "application/unknown").Name())
 	assert.Equal(t, "form", Default(http.MethodPost, "").Name())

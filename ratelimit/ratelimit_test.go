@@ -10,40 +10,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- 令牌桶测试 ---
+// --- Token bucket tests ---
 
 func TestTokenBucket_Allow(t *testing.T) {
 	// 100 tokens/sec, burst 10
 	tb := NewTokenBucket(100, 10)
 
-	// 突发：前 10 个请求应该通过
+	// Burst: the first 10 requests should pass
 	for i := 0; i < 10; i++ {
 		assert.True(t, tb.Allow(), "request %d should be allowed", i)
 	}
 
-	// 第 11 个请求应该被限流
+	// The 11th request must be rate limited
 	assert.False(t, tb.Allow(), "request 11 should be rejected")
 }
 
 func TestTokenBucket_Refill(t *testing.T) {
 	tb := NewTokenBucket(1000, 5) // 1000/sec, burst 5
 
-	// 消耗完所有令牌
+	// Consume every token
 	for i := 0; i < 5; i++ {
 		tb.Allow()
 	}
 	assert.False(t, tb.Allow())
 
-	// 等待令牌补充
+	// Wait for tokens to be replenished
 	time.Sleep(10 * time.Millisecond)
 
-	// 应该有新令牌了
+	// A new token should be available now
 	assert.True(t, tb.Allow())
 }
 
 func TestTokenBucket_Concurrent(t *testing.T) {
-	// rate 为 0 时不补充令牌，结果与执行时序无关，避免 -race 下 goroutine
-	// 变慢导致高 rate 补充令牌使测试偶发失败（flaky）。
+	// A rate of 0 replenishes no tokens, so the result is independent of execution timing:
+	// this avoids flaky failures under -race, where slow goroutines would let a high rate
+	// replenish tokens.
 	tb := NewTokenBucket(0, 100)
 
 	var allowed, rejected int64
@@ -67,9 +68,9 @@ func TestTokenBucket_Concurrent(t *testing.T) {
 	}
 	wg.Wait()
 
-	// 总数 = allowed + rejected = 200
+	// total = allowed + rejected = 200
 	assert.Equal(t, int64(200), allowed+rejected)
-	// 并发下恰好消费桶容量 100 个令牌，不超发
+	// Under concurrency exactly the bucket capacity of 100 tokens is consumed, never more
 	assert.Equal(t, int64(100), allowed)
 	assert.Equal(t, int64(100), rejected)
 }
@@ -89,7 +90,7 @@ func TestTokenBucket_Tokens(t *testing.T) {
 	assert.InDelta(t, 9, tb.Tokens(), 0.1)
 }
 
-// --- 滑动窗口测试 ---
+// --- Sliding window tests ---
 
 func TestSlidingWindow_Allow(t *testing.T) {
 	sw := NewSlidingWindow(5, 100*time.Millisecond)
@@ -104,16 +105,16 @@ func TestSlidingWindow_Allow(t *testing.T) {
 func TestSlidingWindow_Expire(t *testing.T) {
 	sw := NewSlidingWindow(3, 50*time.Millisecond)
 
-	// 消耗 3 个
+	// Consume 3
 	for i := 0; i < 3; i++ {
 		sw.Allow()
 	}
 	assert.False(t, sw.Allow())
 
-	// 等待窗口过期
+	// Wait for the window to expire
 	time.Sleep(60 * time.Millisecond)
 
-	// 窗口已重置
+	// The window has been reset
 	assert.True(t, sw.Allow())
 }
 
@@ -133,7 +134,7 @@ func TestSlidingWindow_AllowContext(t *testing.T) {
 	assert.True(t, ok)
 }
 
-// --- 并发数限流器测试 ---
+// --- Concurrency limiter tests ---
 
 func TestConcurrency_Allow(t *testing.T) {
 	c := NewConcurrency(3)
@@ -141,7 +142,7 @@ func TestConcurrency_Allow(t *testing.T) {
 	assert.True(t, c.Allow())
 	assert.True(t, c.Allow())
 	assert.True(t, c.Allow())
-	assert.False(t, c.Allow()) // 第 4 个被拒
+	assert.False(t, c.Allow()) // the 4th is rejected
 }
 
 func TestConcurrency_Release(t *testing.T) {
@@ -193,7 +194,7 @@ func TestConcurrency_Concurrent(t *testing.T) {
 	assert.Equal(t, int64(40), rejected)
 }
 
-// --- 组合限流器测试 ---
+// --- Composite limiter tests ---
 
 func TestChain_All(t *testing.T) {
 	tb := NewTokenBucket(100, 10)
@@ -201,11 +202,11 @@ func TestChain_All(t *testing.T) {
 
 	chain := NewChain(tb, sw)
 
-	// 滑动窗口限制 5 个
+	// The sliding window allows 5
 	for i := 0; i < 5; i++ {
 		assert.True(t, chain.Allow())
 	}
-	// 第 6 个被滑动窗口拒绝
+	// The 6th is rejected by the sliding window
 	assert.False(t, chain.Allow())
 }
 
@@ -215,10 +216,10 @@ func TestChain_FirstReject(t *testing.T) {
 
 	chain := NewChain(tb, sw)
 
-	// 令牌桶限制 2 个
+	// The token bucket allows 2
 	assert.True(t, chain.Allow())
 	assert.True(t, chain.Allow())
-	// 第 3 个被令牌桶拒绝
+	// The 3rd is rejected by the token bucket
 	assert.False(t, chain.Allow())
 }
 
@@ -245,7 +246,7 @@ func TestChain_AllowContext_Cancelled(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- 错误常量测试 ---
+// --- Error constant tests ---
 
 func TestErrorConstants(t *testing.T) {
 	assert.Equal(t, "ratelimit: limit exceeded", ErrLimitExceeded.Error())

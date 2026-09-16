@@ -1,68 +1,68 @@
 # httpx/x
 
-`httpx` 的通用 HTTP 小工具集合，位于 `httpx/x` 子包，供 `httpx/middleware` 各中间件及业务侧复用。与中间件本体无关的零散工具按需收敛于此包，避免为单一函数各自建包。
+A collection of general-purpose HTTP utilities for `httpx`, living in the `httpx/x` subpackage and reused by the `httpx/middleware` middlewares and by business code. Miscellaneous helpers unrelated to the middlewares themselves are consolidated here on demand, avoiding a dedicated package for every single function.
 
-当前包含：
+Currently contains:
 
-- **路径匹配器 `PathMatcher`**：中间件 skip / ignore 规则（`WithLogger` / `WithCryption` / `WithRateLimit` / `WithTracing`）的统一实现；
-- **客户端 IP 解析 `ClientIP` / `IPChecker`**：获取经反向代理转发后的真实客户端 IP。
+- **Path matcher `PathMatcher`**: the shared implementation behind the middleware skip / ignore rules (`WithLogger` / `WithCryption` / `WithRateLimit` / `WithTracing`);
+- **Client IP resolution `ClientIP` / `IPChecker`**: obtain the real client IP after reverse-proxy forwarding.
 
 ```go
 import "github.com/chihqiang/infra-go/httpx/x"
 ```
 
-## PathMatcher 路径匹配
+## PathMatcher path matching
 
 ```go
 m := x.NewPathMatcher([]string{"/health", "/health*", "/api/*/x"})
 m.Match("/healthz") // true
 ```
 
-### 规则语义
+### Rule semantics
 
-每条规则支持三种形式：
+Each rule supports three forms:
 
-| 形式 | 示例 | 说明 |
+| Form | Example | Description |
 |------|------|------|
-| 精确匹配 | `/health` | 仅命中该路径 |
-| 前缀通配 | `/health*` | 以 `*` 结尾，命中以该前缀开头的路径（**可跨目录**，`/health/live` 也命中） |
-| glob 通配 | `/api/*/x`、`/v[0-9]/info` | 基于 `path.Match`，`*` **不跨目录**，支持 `?`、`[...]` |
+| Exact match | `/health` | Matches that path only |
+| Prefix wildcard | `/health*` | Ends with `*`; matches any path starting with that prefix (**may cross directories** — `/health/live` matches too) |
+| glob wildcard | `/api/*/x`, `/v[0-9]/info` | Based on `path.Match`; `*` does **not** cross directories; supports `?` and `[...]` |
 
-> **注意**：以 `*` 结尾的规则按「前缀」匹配（可跨目录），因此 `/metrics/*` 也会命中 `/metrics/a/b`；若只需匹配一级子路径，请使用不含尾 `*` 的 glob 规则，如 `/metrics/?` 或 `/*/foo`。
+> **Note**: rules ending in `*` match by "prefix" (and may cross directories), so `/metrics/*` also matches `/metrics/a/b`; if you only want to match one level of sub-path, use a glob rule without the trailing `*`, such as `/metrics/?` or `/*/foo`.
 
-空字符串规则会被忽略；未传规则时不命中任何路径。
+Empty-string rules are ignored; passing no rules matches no path.
 
-`httpx.With*` 中间件入口通常已接受 `...string` 路径参数并在内部调用 `x.NewPathMatcher`，业务侧无需直接使用本包；如需自定义匹配规则（如网关鉴权白名单）可 `NewPathMatcher` + `Match` 直接使用。
+`httpx.With*` middleware entry points already accept `...string` path arguments and call `x.NewPathMatcher` internally, so business code never needs this package directly; to define custom matching rules (e.g. a gateway auth whitelist), use `NewPathMatcher` + `Match` directly.
 
-## ClientIP 客户端 IP 解析
+## ClientIP client IP resolution
 
-面向「部署于可信反向代理之后」的服务，获取真实客户端 IP（纯 IP，不含端口），常见代理场景（Nginx / CDN / 云 LB）可直接使用。
+Targeted at services "deployed behind a trusted reverse proxy"; obtains the real client IP (plain IP, no port), and works out of the box for common proxy setups (Nginx / CDN / cloud LB).
 
-**主包便捷入口（推荐，业务最常用）**：`httpx` 主包已在 `httpx/request.go` 转发，直接 `httpx.ClientIP(r)` 即可，无需额外 import 子包：
+**Main package convenience entry (recommended, most common in business code)**: the `httpx` main package re-exports it in `httpx/request.go`, so simply call `httpx.ClientIP(r)` without importing the subpackage:
 
 ```go
 import "github.com/chihqiang/infra-go/httpx"
 
-ip := httpx.ClientIP(r)                          // 默认：回环/私网视为可信代理
-ip := httpx.ClientIPWithTrustedProxies(r, "100.64.0.0/10") // 追加可信网段（云 LB/CGNAT）
+ip := httpx.ClientIP(r)                          // default: loopback/private ranges treated as trusted proxies
+ip := httpx.ClientIPWithTrustedProxies(r, "100.64.0.0/10") // add trusted CIDRs (cloud LB/CGNAT)
 ```
 
-子包入口（`x.ClientIP` / `x.NewIPChecker`，middleware 内部即用它）供需要复用解析器或直接引用子包的场景：
+Subpackage entry (`x.ClientIP` / `x.NewIPChecker`, which middleware uses internally) for cases that need to reuse the resolver or import the subpackage directly:
 
 ```go
-ip := x.ClientIP(r) // 便捷：默认回环/私网视为可信代理
+ip := x.ClientIP(r) // convenience: loopback/private ranges treated as trusted proxies by default
 ```
 
-安全解析思路：先看直连对端 `RemoteAddr`——不可信（公网直连客户端）则代理头一律忽略，只返回对端；可信（回环/私网/网关）才解析代理头。代理头顺序：厂商头 → `X-Forwarded-For`（从右往左跳过可信代理，防伪造前缀）→ `Forwarded`（RFC 7239）→ `X-Real-IP` → 回退 `RemoteAddr`。
+Secure resolution strategy: look at the direct peer `RemoteAddr` first — if untrusted (a client connecting directly over the public internet), proxy headers are ignored entirely and only the peer is returned; only when trusted (loopback/private/gateway) are proxy headers parsed. Proxy header order: vendor headers → `X-Forwarded-For` (walk from right to left skipping trusted proxies, preventing forged prefixes) → `Forwarded` (RFC 7239) → `X-Real-IP` → fall back to `RemoteAddr`.
 
-需要自定义（流量经公网 CDN/WAF 回源、启用 Cloudflare 等厂商头）时用可复用解析器：
+When customisation is needed (traffic returns through a public CDN/WAF, or vendor headers such as Cloudflare are enabled), use a reusable resolver:
 
 ```go
 ipc := x.NewIPChecker(
-    x.WithTrustedProxies("100.64.0.0/10"),     // 追加可信代理网段
-    x.WithVendorHeaders(x.HeaderCFConnectingIP), // 启用 Cloudflare 头
+    x.WithTrustedProxies("100.64.0.0/10"),     // add trusted proxy CIDRs
+    x.WithVendorHeaders(x.HeaderCFConnectingIP), // enable the Cloudflare header
 )
 ip := ipc.ClientIP(r)
 ```
 
-常用头常量：`HeaderXForwardedFor`、`HeaderXRealIP`、`HeaderForwarded`、`HeaderCFConnectingIP`、`HeaderTrueClientIP`。详见 `x` 包源码注释（解析优先级与信任模型）。
+Common header constants: `HeaderXForwardedFor`, `HeaderXRealIP`, `HeaderForwarded`, `HeaderCFConnectingIP`, `HeaderTrueClientIP`. See the `x` package source comments for details (resolution priority and trust model).

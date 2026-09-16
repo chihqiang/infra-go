@@ -11,11 +11,12 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// 对应 rate_limit.go：HTTP 限流中间件。
-// 原 ratelimit.HTTPRateLimit 迁移至此，接口类型 RateLimiter 与 ratelimit.Limiter
-// 方法集一致，ratelimit 的各类限流器（TokenBucket/SlidingWindow/Redis）均可直接传入。
+// Covers rate_limit.go: the HTTP rate limiting middleware.
+// Originally ratelimit.HTTPRateLimit, now migrated here. The RateLimiter interface has the
+// same method set as ratelimit.Limiter, so every ratelimit limiter (TokenBucket,
+// SlidingWindow, Redis) can be passed in directly.
 
-// stubLimiter 是 RateLimiter 的测试桩，返回固定结果，保证测试确定性。
+// stubLimiter is a RateLimiter test stub returning fixed results to keep tests deterministic.
 type stubLimiter struct {
 	allowed bool
 	err     error
@@ -46,7 +47,7 @@ func TestRateLimit_RejectsOverLimit(t *testing.T) {
 func TestRateLimit_FailOpenOnLimiterError(t *testing.T) {
 	silenceLogger(t)
 	ok := func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) }
-	// 限流组件异常时放行（fail-open），请求正常处理
+	// the limiter erroring out fails open: the request is handled normally
 	rec := perform(NewRateLimit(&stubLimiter{err: errors.New("redis down")}).Middleware(), ok,
 		httptest.NewRequest(http.MethodGet, "/ok", nil))
 
@@ -57,7 +58,7 @@ func TestRateLimit_FailOpenOnLimiterError(t *testing.T) {
 func TestRateLimit_NilLimiterDisabled(t *testing.T) {
 	silenceLogger(t)
 	ok := func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) }
-	// limiter 为 nil 时降级为不限流：请求照常放行，不 panic
+	// a nil limiter degrades to no limiting: requests pass through as usual, no panic
 	mw := NewRateLimit(nil).Middleware()
 	for i := 0; i < 5; i++ {
 		rec := perform(mw, ok, httptest.NewRequest(http.MethodGet, "/ok", nil))
@@ -69,15 +70,15 @@ func TestRateLimit_NilLimiterDisabled(t *testing.T) {
 func TestRateLimit_SkipsConfiguredPaths(t *testing.T) {
 	silenceLogger(t)
 	ok := func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) }
-	// 限流器恒拒绝，用于验证跳过路径不受影响
+	// the limiter always denies, which shows skipped paths are unaffected
 	mw := NewRateLimit(&stubLimiter{allowed: false}, "/healthz").Middleware()
 
-	// 跳过路径不参与限流
+	// skipped paths are not rate limited
 	recHealth := perform(mw, ok, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	assert.Equal(t, http.StatusOK, recHealth.Code)
 	assert.Contains(t, recHealth.Body.String(), "ok")
 
-	// 非跳过路径被限流
+	// non-skipped paths are rate limited
 	recAPI := perform(mw, ok, httptest.NewRequest(http.MethodGet, "/api", nil))
 	assert.Equal(t, http.StatusTooManyRequests, recAPI.Code)
 }
@@ -85,7 +86,8 @@ func TestRateLimit_SkipsConfiguredPaths(t *testing.T) {
 func TestRateLimit_TokenBucketIntegration(t *testing.T) {
 	silenceLogger(t)
 	ok := func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) }
-	// 真实内存令牌桶联动：rate=0（不补充令牌）、容量 1，仅首个请求能通过
+	// real in-memory token bucket: rate=0 (no refill), capacity 1, so only the first request
+	// passes
 	mw := NewRateLimit(ratelimit.NewTokenBucket(0, 1)).Middleware()
 
 	rec1 := perform(mw, ok, httptest.NewRequest(http.MethodGet, "/ok", nil))

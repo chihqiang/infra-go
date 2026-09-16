@@ -9,49 +9,50 @@ import (
 	"github.com/chihqiang/infra-go/logger"
 )
 
-// 集群消息类型常量。
+// Cluster message type constants.
 const (
 	clusterChannelPattern       = "%scluster"
 	clusterMessageTypeBroadcast = "broadcast"
 	clusterMessageTypeRoom      = "room"
 )
 
-// clusterMessage 集群内部广播消息。
-// 通过 Redis Pub/Sub 在实例间传递，实现跨实例广播。
+// clusterMessage is an internal cluster broadcast message.
+// It travels between instances over Redis Pub/Sub to implement cross-instance broadcast.
 type clusterMessage struct {
-	Type        string   `json:"type"`            // broadcast（广播全部）或 room（定向房间）
-	MessageType int      `json:"mt"`              // WebSocket 消息类型（TextMessage 等）
-	Data        []byte   `json:"data"`            // 消息内容
-	Rooms       []string `json:"rooms,omitempty"` // 目标房间（仅 Type=room 时有效）
+	Type        string   `json:"type"`            // broadcast (all) or room (targeted)
+	MessageType int      `json:"mt"`              // WebSocket message type (TextMessage, etc.)
+	Data        []byte   `json:"data"`            // message payload
+	Rooms       []string `json:"rooms,omitempty"` // target rooms (only used when Type=room)
 }
 
-// ClusterHandler 集群广播处理器。
-// 在 Redis 房间模式下，负责通过 Redis Pub/Sub 实现跨实例消息投递。
+// ClusterHandler handles cluster broadcasts.
+// In Redis room mode it delivers messages across instances over Redis Pub/Sub.
 //
-// 工作原理：
-//  1. 本实例调用 To("room1").PushText("hello") 时
-//  2. Broadcaster 先将消息通过 Redis PUBLISH 发送到集群频道
-//  3. 所有实例（包括自身）的 ClusterHandler 收到消息后
-//  4. 根据 type 字段分发到本实例的本地连接
+// How it works:
+//  1. When this instance calls To("room1").PushText("hello")
+//  2. Broadcaster publishes the message to the cluster channel with Redis PUBLISH
+//  3. The ClusterHandler of every instance (including this one) receives the message
+//  4. It dispatches the message to the local connections based on the type field
 type ClusterHandler struct {
 	server *Server
 	nodeID uint16
 	pubsub PubSub
 	done   chan struct{}
-	cancel func() // 取消订阅
+	cancel func() // cancels the subscription
 	wg     sync.WaitGroup
 }
 
-// PubSub 定义 Pub/Sub 所需的最小接口。
-// 由 redisClusterBridge 实现，桥接 go-redis 的 PubSub。
+// PubSub defines the minimal interface required by Pub/Sub.
+// It is implemented by redisClusterBridge, which bridges the go-redis PubSub.
 type PubSub interface {
-	// Publish 发布消息到指定频道。
+	// Publish publishes a message to the given channel.
 	Publish(ctx context.Context, channel string, message []byte) error
-	// Subscribe 订阅频道，返回消息通道，channel 在订阅就绪后关闭。
+	// Subscribe subscribes to the channel and returns the message channel; channel is
+	// closed once the subscription is released.
 	Subscribe(ctx context.Context, channel string) (<-chan []byte, func(), error)
 }
 
-// NewClusterHandler 创建集群处理器。
+// NewClusterHandler creates a cluster handler.
 func NewClusterHandler(server *Server, nodeID uint16, pubsub PubSub) *ClusterHandler {
 	return &ClusterHandler{
 		server: server,
@@ -61,12 +62,12 @@ func NewClusterHandler(server *Server, nodeID uint16, pubsub PubSub) *ClusterHan
 	}
 }
 
-// channel 返回集群频道名称。
+// channel returns the cluster channel name.
 func (h *ClusterHandler) channel() string {
 	return fmt.Sprintf(clusterChannelPattern, h.server.cfg.RoomPrefix)
 }
 
-// Start 启动集群监听。
+// Start starts listening on the cluster.
 func (h *ClusterHandler) Start() error {
 	ctx := context.Background()
 	ch, cancel, err := h.pubsub.Subscribe(ctx, h.channel())
@@ -94,7 +95,7 @@ func (h *ClusterHandler) Start() error {
 	return nil
 }
 
-// Stop 停止集群监听。
+// Stop stops listening on the cluster.
 func (h *ClusterHandler) Stop() {
 	select {
 	case <-h.done:
@@ -107,8 +108,9 @@ func (h *ClusterHandler) Stop() {
 	h.wg.Wait()
 }
 
-// Publish 广播消息到集群。
-// 调用后所有实例（包括本实例）都会收到消息并分发给本地连接。
+// Publish broadcasts a message to the cluster.
+// After it returns, every instance (including this one) receives the message and
+// dispatches it to its local connections.
 func (h *ClusterHandler) Publish(ctx context.Context, msg clusterMessage) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -117,7 +119,8 @@ func (h *ClusterHandler) Publish(ctx context.Context, msg clusterMessage) error 
 	return h.pubsub.Publish(ctx, h.channel(), data)
 }
 
-// handleMessage 处理收到的集群消息，分发给本实例的本地连接。
+// handleMessage handles a received cluster message and dispatches it to the local
+// connections of this instance.
 func (h *ClusterHandler) handleMessage(data []byte) {
 	var msg clusterMessage
 	if err := json.Unmarshal(data, &msg); err != nil {
@@ -129,7 +132,7 @@ func (h *ClusterHandler) handleMessage(data []byte) {
 
 	switch msg.Type {
 	case clusterMessageTypeBroadcast:
-		// 广播到本实例的所有连接
+		// Broadcast to all connections of this instance
 		h.server.conns.Range(func(_, v any) bool {
 			conn := v.(*Conn)
 			_ = conn.WriteMessage(msg.MessageType, msg.Data)
@@ -137,7 +140,7 @@ func (h *ClusterHandler) handleMessage(data []byte) {
 		})
 
 	case clusterMessageTypeRoom:
-		// 定向推送到本实例在目标房间内的连接
+		// Deliver to this instance's connections in the target rooms
 		fdSet := make(map[ConnID]struct{})
 		for _, room := range msg.Rooms {
 			for _, fd := range h.server.room.GetClients(room) {

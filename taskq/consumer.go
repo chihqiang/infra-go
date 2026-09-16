@@ -9,7 +9,7 @@ import (
 	"github.com/hibiken/asynq"
 )
 
-// Consumer 消费者，封装 asynq.Server，负责拉取任务并分发给 Handler。
+// Consumer wraps asynq.Server; it pulls tasks and dispatches them to Handlers.
 type Consumer struct {
 	server  *asynq.Server
 	mux     *asynq.ServeMux
@@ -18,9 +18,9 @@ type Consumer struct {
 	started bool
 }
 
-// NewConsumer 创建消费者。
-// log 传 nil 使用 asynq 默认日志器。
-// opts 用于表达 Config 结构体无法表达的显式零值，见 Option。
+// NewConsumer creates a consumer.
+// Passing nil for log uses the default asynq logger.
+// opts expresses explicit zero values that the Config struct cannot represent, see Option.
 func NewConsumer(cfg Config, log logger.ILogger, opts ...Option) *Consumer {
 	c := fillDefault(cfg, opts...)
 	la := newLogAdapter(log)
@@ -31,22 +31,22 @@ func NewConsumer(cfg Config, log logger.ILogger, opts ...Option) *Consumer {
 	}
 }
 
-// Handle 注册任务处理器。
+// Handle registers a task handler.
 func (c *Consumer) Handle(pattern string, handler asynq.Handler) {
 	c.mux.Handle(pattern, handler)
 }
 
-// HandleFunc 注册任务处理函数。
+// HandleFunc registers a task handler function.
 func (c *Consumer) HandleFunc(pattern string, handler func(context.Context, *asynq.Task) error) {
 	c.mux.HandleFunc(pattern, handler)
 }
 
-// Use 添加中间件。
+// Use adds middleware.
 func (c *Consumer) Use(mws ...asynq.MiddlewareFunc) {
 	c.mux.Use(mws...)
 }
 
-// Start 启动消费者（非阻塞），Shutdown 优雅关闭。
+// Start starts the consumer without blocking; use Shutdown for a graceful stop.
 func (c *Consumer) Start() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -60,7 +60,7 @@ func (c *Consumer) Start() error {
 	return nil
 }
 
-// Run 启动并阻塞，收到 OS 信号后优雅关闭。
+// Run starts the consumer and blocks until an OS signal triggers a graceful stop.
 func (c *Consumer) Run() error {
 	c.mu.Lock()
 	c.started = true
@@ -71,7 +71,7 @@ func (c *Consumer) Run() error {
 	return nil
 }
 
-// Shutdown 优雅关闭。
+// Shutdown performs a graceful shutdown.
 func (c *Consumer) Shutdown() {
 	c.mu.Lock()
 	defer c.mu.Unlock()

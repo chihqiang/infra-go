@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- utils 工具函数测试 ---
+// --- utils helper function tests ---
 
 func TestDeref(t *testing.T) {
 	assert.Equal(t, "int", Deref(reflect.TypeOf(int(1))).Kind().String())
@@ -63,7 +63,7 @@ func TestConvertTypeFromString_MoreKinds(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "x", v)
 
-	// 不支持的类型
+	// Unsupported type
 	_, err = convertTypeFromString(reflect.Slice, "x")
 	assert.Error(t, err)
 }
@@ -87,7 +87,7 @@ func TestStructValueRequired(t *testing.T) {
 
 func TestStructValueRequired_Nested(t *testing.T) {
 	type Inner struct {
-		Name string `json:"name"` // 必填
+		Name string `json:"name"` // required
 	}
 	type Outer struct {
 		Inner Inner `json:"inner"`
@@ -95,7 +95,7 @@ func TestStructValueRequired_Nested(t *testing.T) {
 	assert.True(t, structValueRequired("json", reflect.TypeOf(Outer{})))
 }
 
-// --- lookupKeyCanonical：大小写不敏感键查找 ---
+// --- lookupKeyCanonical: case-insensitive key lookup ---
 
 func TestLookupKeyCanonical(t *testing.T) {
 	lower := strings.ToLower
@@ -169,7 +169,8 @@ func TestLookupKeyCanonical(t *testing.T) {
 	})
 }
 
-// TestDescribeKeys_Sorted 验证错误信息中的键顺序稳定（便于测试与排障）。
+// TestDescribeKeys_Sorted verifies that the key order in error messages is stable
+// (easier testing and troubleshooting).
 func TestDescribeKeys_Sorted(t *testing.T) {
 	assert.Equal(t, "B, a, c", describeKeys(map[string]any{"c": 1, "a": 2, "B": 3}))
 }

@@ -12,13 +12,13 @@ import (
 	"gorm.io/gorm/schema"
 )
 
-// New 根据配置创建并返回一个 *gorm.DB 实例。
-// 根据 Config.Driver 自动选择对应的数据库驱动。
-// 零值字段会自动填充默认值（通过 default 标签定义）。
+// New creates and returns a *gorm.DB from the configuration.
+// The database driver is selected automatically from Config.Driver.
+// Zero-valued fields are filled in with their defaults (declared with the default tag).
 func New(cfg Config) (*gorm.DB, error) {
 	c := fillDefault(cfg)
 
-	// 端口未设置时使用驱动默认端口
+	// Use the driver default port when no port is set
 	if c.Port == 0 {
 		c.Port = defaultPort(c.Driver)
 	}
@@ -35,7 +35,7 @@ func New(cfg Config) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// 配置连接池
+	// Configure the connection pool
 	sqlDB, err := db.DB()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get underlying sql.DB: %w", err)
@@ -49,7 +49,7 @@ func New(cfg Config) (*gorm.DB, error) {
 	return db, nil
 }
 
-// MustNew 根据配置创建并返回一个 *gorm.DB 实例，出错时 panic。
+// MustNew creates and returns a *gorm.DB from the configuration and panics on error.
 func MustNew(cfg Config) *gorm.DB {
 	db, err := New(cfg)
 	if err != nil {
@@ -58,14 +58,14 @@ func MustNew(cfg Config) *gorm.DB {
 	return db
 }
 
-// NewMySQL 创建一个 MySQL 数据库连接。
-// 忽略 Config.Driver 字段，强制使用 MySQL 驱动。
+// NewMySQL creates a MySQL database connection.
+// The Config.Driver field is ignored and the MySQL driver is forced.
 func NewMySQL(cfg Config) (*gorm.DB, error) {
 	cfg.Driver = DriverMySQL
 	return New(cfg)
 }
 
-// MustNewMySQL 创建一个 MySQL 数据库连接，出错时 panic。
+// MustNewMySQL creates a MySQL database connection and panics on error.
 func MustNewMySQL(cfg Config) *gorm.DB {
 	db, err := NewMySQL(cfg)
 	if err != nil {
@@ -74,14 +74,14 @@ func MustNewMySQL(cfg Config) *gorm.DB {
 	return db
 }
 
-// NewPostgres 创建一个 PostgreSQL 数据库连接。
-// 忽略 Config.Driver 字段，强制使用 PostgreSQL 驱动。
+// NewPostgres creates a PostgreSQL database connection.
+// The Config.Driver field is ignored and the PostgreSQL driver is forced.
 func NewPostgres(cfg Config) (*gorm.DB, error) {
 	cfg.Driver = DriverPostgres
 	return New(cfg)
 }
 
-// MustNewPostgres 创建一个 PostgreSQL 数据库连接，出错时 panic。
+// MustNewPostgres creates a PostgreSQL database connection and panics on error.
 func MustNewPostgres(cfg Config) *gorm.DB {
 	db, err := NewPostgres(cfg)
 	if err != nil {
@@ -90,15 +90,16 @@ func MustNewPostgres(cfg Config) *gorm.DB {
 	return db
 }
 
-// NewSQLite 创建一个 SQLite 数据库连接。
-// 忽略 Config.Driver 字段，强制使用 SQLite 驱动。
-// Config.Database 为数据库文件路径，设为 ":memory:" 使用内存数据库。
+// NewSQLite creates a SQLite database connection.
+// The Config.Driver field is ignored and the SQLite driver is forced.
+// Config.Database is the database file path; set it to ":memory:" to use an in-memory
+// database.
 func NewSQLite(cfg Config) (*gorm.DB, error) {
 	cfg.Driver = DriverSQLite
 	return New(cfg)
 }
 
-// MustNewSQLite 创建一个 SQLite 数据库连接，出错时 panic。
+// MustNewSQLite creates a SQLite database connection and panics on error.
 func MustNewSQLite(cfg Config) *gorm.DB {
 	db, err := NewSQLite(cfg)
 	if err != nil {
@@ -107,7 +108,7 @@ func MustNewSQLite(cfg Config) *gorm.DB {
 	return db
 }
 
-// Ping 测试数据库连接是否正常。
+// Ping tests whether the database connection is healthy.
 func Ping(db *gorm.DB) error {
 	sqlDB, err := db.DB()
 	if err != nil {
@@ -119,7 +120,7 @@ func Ping(db *gorm.DB) error {
 	return nil
 }
 
-// Close 关闭数据库连接。
+// Close closes the database connection.
 func Close(db *gorm.DB) error {
 	sqlDB, err := db.DB()
 	if err != nil {
@@ -131,11 +132,11 @@ func Close(db *gorm.DB) error {
 	return nil
 }
 
-// --- 内部函数 ---
+// --- Internal functions ---
 
-// buildDialector 根据配置构建对应驱动的 Dialector。
+// buildDialector builds the Dialector of the matching driver from the configuration.
 func buildDialector(c Config) (gorm.Dialector, error) {
-	// 优先使用 DSN
+	// Prefer the DSN
 	if c.DSN != "" {
 		return dialectorFromDSN(c.Driver, c.DSN)
 	}
@@ -152,8 +153,9 @@ func buildDialector(c Config) (gorm.Dialector, error) {
 	}
 }
 
-// dialectorFromDSN 根据 DSN 创建对应驱动的 Dialector。
-// 非法 Driver 返回错误，避免静默降级为其他驱动导致难以排查的问题。
+// dialectorFromDSN creates the Dialector of the matching driver from a DSN.
+// An invalid Driver returns an error, avoiding a silent downgrade to another driver that
+// would be hard to diagnose.
 func dialectorFromDSN(driver Driver, dsn string) (gorm.Dialector, error) {
 	switch driver {
 	case DriverMySQL:
@@ -167,17 +169,17 @@ func dialectorFromDSN(driver Driver, dsn string) (gorm.Dialector, error) {
 	}
 }
 
-// buildMySQLDSN 构建 MySQL 连接字符串。
-// 格式: username:password@tcp(host:port)/database?charset=utf8mb4&parseTime=true&loc=Local
+// buildMySQLDSN builds the MySQL connection string.
+// Format: username:password@tcp(host:port)/database?charset=utf8mb4&parseTime=true&loc=Local
 func buildMySQLDSN(c Config) string {
 	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&loc=Local",
 		c.Username, c.Password, c.Host, c.Port, c.Database)
 }
 
-// buildPostgresDSN 构建 PostgreSQL 连接字符串。
-// 格式: host=127.0.0.1 user=postgres password=secret dbname=mydb port=5432 sslmode=disable TimeZone=Asia/Shanghai
-// SSLMode 为空时回退到 "disable"，TimeZone 为空时回退到 "Asia/Shanghai"，
-// 保证未经过 fillDefault 直接构造的 Config 也能得到合法 DSN。
+// buildPostgresDSN builds the PostgreSQL connection string, in the format
+// host=127.0.0.1 user=postgres password=secret dbname=mydb port=5432 sslmode=disable TimeZone=Asia/Shanghai
+// An empty SSLMode falls back to "disable" and an empty TimeZone falls back to
+// "Asia/Shanghai", so a Config built directly without fillDefault still yields a valid DSN.
 func buildPostgresDSN(c Config) string {
 	sslMode := c.SSLMode
 	if sslMode == "" {
@@ -191,21 +193,25 @@ func buildPostgresDSN(c Config) string {
 		c.Host, c.Username, c.Password, c.Database, c.Port, sslMode, timeZone)
 }
 
-// sqliteMemCounter 为内存数据库实例生成唯一序号。
+// sqliteMemCounter generates a unique sequence number for each in-memory database instance.
 var sqliteMemCounter atomic.Uint64
 
-// buildSQLiteDSN 构建 SQLite 连接字符串。
-// Config.Database 为文件路径；为空时使用**本实例独占**的内存数据库。
+// buildSQLiteDSN builds the SQLite connection string.
+// Config.Database is the file path; when it is empty an in-memory database **exclusive to
+// this instance** is used.
 //
-// 独占性很重要：旧实现固定返回 "file::memory:?cache=shared"，
-// 而带 cache=shared 的同名 DSN 在**整个进程内共享同一个数据库**，
-// 因此两次 New 会拿到同一个库 —— 一个组件建的表/写入的数据会被另一个看到，
-// 且进程退出即丢数据（容易被误认为"数据莫名消失"）。
+// Exclusivity matters: the old implementation always returned "file::memory:?cache=shared",
+// and a DSN with that name plus cache=shared shares **one single database across the whole
+// process**, so two calls to New returned the same database - a table created or data
+// written by one component was visible to the other, and everything was lost as soon as the
+// process exited (easily mistaken for "data mysteriously disappearing").
 //
-// 这里为每次调用生成唯一的库名，既保留"零配置即可用内存库"的便利
-// （测试场景常用），又保证实例之间互不干扰。
-// 注意仍保留 cache=shared：匿名内存库（:memory:）会让连接池中每个连接各拿到
-// 一个独立的库，导致建表后其他连接看不到，那才是更常见的坑。
+// A unique database name is therefore generated on every call, which keeps the convenience
+// of "an in-memory database with zero configuration" (common in tests) while guaranteeing
+// that instances never interfere with each other.
+// Note that cache=shared is still kept: an anonymous in-memory database (:memory:) gives
+// every pooled connection its own separate database, so other connections cannot see a
+// table that was just created - that is the more common pitfall.
 func buildSQLiteDSN(c Config) string {
 	if c.Database == "" {
 		return fmt.Sprintf("file:orm_mem_%d_%d?mode=memory&cache=shared",
@@ -214,7 +220,7 @@ func buildSQLiteDSN(c Config) string {
 	return c.Database
 }
 
-// buildGormConfig 构建 gorm.Config。
+// buildGormConfig builds the gorm.Config.
 func buildGormConfig(c Config) gorm.Config {
 	return gorm.Config{
 		SkipDefaultTransaction: c.SkipDefaultTransaction,

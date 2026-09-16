@@ -5,70 +5,80 @@ import (
 	"reflect"
 )
 
-// OverridePolicy 定义字段覆盖策略。
+// OverridePolicy defines the field override policy.
 type OverridePolicy int
 
 const (
-	// OverrideNonZero 零值视为"未设置"，不覆盖默认值（当前各模块的默认行为）。
-	// 对于需要显式设零值的字段，请在 overrides 中使用指针类型（如 *int、*time.Duration），
-	// 指针非 nil 即视为"已设置"，指针指向零值也会覆盖。
+	// OverrideNonZero treats a zero value as "unset" and does not override the
+	// default (the current default behaviour of every module).
+	// For fields that need an explicit zero value, use a pointer type in the
+	// overrides (such as *int or *time.Duration): a non-nil pointer counts as
+	// "set", and a pointer to a zero value overrides as well.
 	OverrideNonZero OverridePolicy = iota
 )
 
-// overrideField 标记哪些字段始终使用 overrides 的值（即使为零值）。
-// 各模块在 fillDefault 中对 Password、DSN 等字段做了"空字符串也是有效值"的处理，
-// 这些字段在此集合中声明，实现统一的"始终覆盖"语义。
+// overrideField marks which fields always take the value from overrides (even
+// when it is a zero value).
+// Various modules' fillDefault treat fields such as Password and DSN as "an empty
+// string is also a valid value"; those fields are declared in this set to provide
+// a unified "always override" semantics.
 //
-// 通过 analyzeAlwaysOverrideFields 在运行时分析 overrides 结构体的标签，
-// 字段标签中含 optional 且无 default 的 string/slice 类型视为"始终使用用户值"。
-// 这是启发式策略，覆盖了各模块当前的手写逻辑。
+// analyzeAlwaysOverrideFields inspects the tags of the overrides struct at
+// runtime: string/slice fields whose tag carries optional without default are
+// treated as "always use the user value".
+// This is a heuristic that covers the hand-written logic each module currently has.
 
-// FillAndOverride 先用标签默认值填充 defaults，再用 overrides 中的非零值覆盖。
+// FillAndOverride first fills defaults from the tag defaults, then overrides them
+// with the non-zero values of overrides.
 //
-// defaults 必须指向零值结构体（标签中的 default 才会生效）。
-// overrides 中的非零字段会覆盖到 defaults；零值字段保留默认值。
+// defaults must point at a zero-value struct (only then do the tag defaults take
+// effect). Non-zero fields in overrides override the defaults; zero-value fields
+// keep the default.
 //
-// 对于 string 和 slice 类型，空值（""/"nil）也视为"未设置"，不覆盖默认值。
-// 如果需要将 string 显式设为空，请在 overrides 中使用 *string 指针类型。
+// For string and slice types, empty values (""/nil) also count as "unset" and do
+// not override the default. To set a string explicitly to empty, use a *string
+// pointer type in overrides.
 //
-// overrides 为 nil（含类型化 nil 指针，如 (*Config)(nil)）时视为"不提供覆盖"，
-// 此时仅填充默认值，不会报错也不会 panic。
+// A nil overrides (including a typed nil pointer such as (*Config)(nil)) counts as
+// "no override provided": only defaults are filled, with no error and no panic.
 //
-// 此函数是各模块 fillDefault 的统一替代方案，消除重复的逐字段覆盖代码。
+// This function is the unified replacement for each module's fillDefault, removing
+// the duplicated field-by-field override code.
 //
-// 用法：
+// Usage:
 //
 //	var c Config
-//	mapping.FillAndOverride(&c, cfg) // c 先填充默认值，再用 cfg 的非零字段覆盖
+//	mapping.FillAndOverride(&c, cfg) // c gets defaults, then cfg's non-zero fields override them
 func FillAndOverride(defaults any, overrides any) error {
-	// 1. 填充默认值
+	// 1. Fill in the defaults
 	if err := FillDefault(defaults); err != nil {
 		return err
 	}
 
-	// 2. 用 overrides 的非零字段覆盖
+	// 2. Override with the non-zero fields of overrides
 	return overrideNonZeroFields(defaults, overrides)
 }
 
-// MustFillAndOverride 同 FillAndOverride，出错时 panic。
+// MustFillAndOverride is like FillAndOverride but panics on error.
 func MustFillAndOverride(defaults any, overrides any) {
 	if err := FillAndOverride(defaults, overrides); err != nil {
 		panic(err)
 	}
 }
 
-// overrideNonZeroFields 遍历 overrides 结构体的所有字段，
-// 将非零字段覆盖到 target（两者须为同一类型）。
+// overrideNonZeroFields walks all fields of the overrides struct and copies the
+// non-zero ones onto target (both must have the same type).
 //
-// overrides 为 nil（含类型化 nil 指针）时视为"无覆盖"，直接返回 nil。
+// A nil overrides (including a typed nil pointer) counts as "no override" and
+// returns nil immediately.
 func overrideNonZeroFields(target any, overrides any) error {
 	targetVal := reflect.ValueOf(target)
 	if err := ValidatePtr(targetVal); err != nil {
 		return err
 	}
 
-	// overrides 为 nil 时 reflect.ValueOf 返回无效值，
-	// 若直接取 Type() 会 panic（reflect: zero Value has no Type）。
+	// A nil overrides makes reflect.ValueOf return an invalid value; calling
+	// Type() on it panics (reflect: zero Value has no Type).
 	if overrides == nil {
 		return nil
 	}
@@ -77,8 +87,9 @@ func overrideNonZeroFields(target any, overrides any) error {
 
 	overrideVal := reflect.ValueOf(overrides)
 	if overrideVal.Kind() == reflect.Ptr {
-		// 类型化 nil 指针（如 (*Config)(nil)）视为"无覆盖"：
-		// 否则 Elem() 得到无效值，下面取 Type() 会 panic。
+		// A typed nil pointer (such as (*Config)(nil)) counts as "no override":
+		// otherwise Elem() yields an invalid value and the Type() call below
+		// panics.
 		if overrideVal.IsNil() {
 			return nil
 		}
@@ -94,11 +105,12 @@ func overrideNonZeroFields(target any, overrides any) error {
 	return overrideStructFields(targetVal, overrideVal, targetType)
 }
 
-// overrideStructFields 递归遍历结构体字段，用 overrides 的非零值覆盖 target。
+// overrideStructFields recursively walks struct fields, overriding target with
+// overrides' non-zero values.
 func overrideStructFields(target, overrides reflect.Value, structType reflect.Type) error {
-	// 防御性检查：target/overrides 必须是结构体值。
-	// 缺此检查时，若误传入指针值，Field(i) 会 panic
-	// （reflect: call of reflect.Value.Field on ptr Value）。
+	// Defensive check: target/overrides must be struct values. Without it, a
+	// pointer value passed by mistake makes Field(i) panic
+	// (reflect: call of reflect.Value.Field on ptr Value).
 	if target.Kind() != reflect.Struct || overrides.Kind() != reflect.Struct {
 		return fmt.Errorf("override: expects struct values, got target=%s, overrides=%s",
 			target.Kind(), overrides.Kind())
@@ -113,18 +125,18 @@ func overrideStructFields(target, overrides reflect.Value, structType reflect.Ty
 		targetField := target.Field(i)
 		overrideField := overrides.Field(i)
 
-		// 处理匿名嵌入字段
+		// Handle anonymous embedded fields
 		if field.Anonymous {
 			derefedType := Deref(field.Type)
 			if derefedType.Kind() != reflect.Struct {
 				continue
 			}
-			// 匿名嵌入指针（struct{ *Base }）需要先解引用：
-			// 否则下面的 Field(i) 会在 Ptr 值上 panic
-			// （reflect: call of reflect.Value.Field on ptr Value）。
+			// An anonymous embedded pointer (struct{ *Base }) must be dereferenced
+			// first: otherwise the Field(i) call below panics on a Ptr value
+			// (reflect: call of reflect.Value.Field on ptr Value).
 			if field.Type.Kind() == reflect.Ptr {
 				if overrideField.IsNil() {
-					// 没有覆盖来源，保持 target 现状（含"本就为 nil"）
+					// No override source: leave target as is (including "already nil")
 					continue
 				}
 				if err := ensureNonNilPtr(targetField); err != nil {
@@ -141,13 +153,14 @@ func overrideStructFields(target, overrides reflect.Value, structType reflect.Ty
 			continue
 		}
 
-		// 解析标签选项，判断是否为"始终覆盖"字段
+		// Parse the tag options to decide whether this is an "always override" field
 		_, opts, err := parseKeyAndOptions(jsonTagKey, field)
 		if err != nil {
 			continue
 		}
 
-		// 对非指针的嵌套结构体，递归覆盖子字段，保留默认值
+		// For a non-pointer nested struct, override the sub-fields recursively and
+		// keep the defaults
 		derefedType := Deref(field.Type)
 		if field.Type.Kind() != reflect.Ptr && derefedType.Kind() == reflect.Struct {
 			if !overrideField.IsZero() {
@@ -165,9 +178,11 @@ func overrideStructFields(target, overrides reflect.Value, structType reflect.Ty
 	return nil
 }
 
-// ensureNonNilPtr 保证 v 指向一个已分配的值；v 为 nil 时按元素类型分配。
-// 用于匿名嵌入指针字段（struct{ *Base }）的递归覆盖，
-// 使默认值能被完整保留而不是整体替换指针。
+// ensureNonNilPtr makes sure v points at an allocated value, allocating one from
+// the element type when v is nil.
+// It is used for the recursive override of anonymous embedded pointer fields
+// (struct{ *Base }) so that defaults are preserved instead of the pointer being
+// replaced wholesale.
 func ensureNonNilPtr(v reflect.Value) error {
 	if !v.CanSet() {
 		return fmt.Errorf("override: cannot set embedded pointer field of type %s", v.Type())
@@ -178,32 +193,35 @@ func ensureNonNilPtr(v reflect.Value) error {
 	return nil
 }
 
-// shouldOverride 判断是否应该用 override 值覆盖 target 值。
+// shouldOverride decides whether the target value should be overridden by the
+// override value.
 //
-// 覆盖规则：
-//   - 指针类型：非 nil 即覆盖（支持 *int=0、*string="" 等显式零值）
-//   - 布尔类型：true 覆盖（false 视为未设置，需用 *bool 显式设 false）
-//   - string 类型：非空覆盖（空字符串视为未设置；标签标为 optional 且无 default 的 string 始终覆盖）
-//   - slice/map 类型：非 nil 且非空覆盖
-//   - 其他类型：非零值覆盖
+// Override rules:
+//   - pointer types: override when non-nil (supports explicit zero values such as
+//     *int=0 or *string="")
+//   - bool: override when true (false counts as unset; use *bool to set false)
+//   - string: override when non-empty (an empty string counts as unset; a string
+//     tagged optional without default always overrides)
+//   - slice/map: override when non-nil and non-empty
+//   - other types: override when non-zero
 func shouldOverride(target, override reflect.Value, opts *fieldOptions) bool {
 	if !override.CanInterface() {
 		return false
 	}
 
-	// 指针类型：非 nil 即覆盖
+	// Pointer types: a non-nil value overrides
 	if override.Kind() == reflect.Ptr {
 		return !override.IsNil()
 	}
 
 	switch override.Kind() {
 	case reflect.Bool:
-		// 布尔类型：true 覆盖
+		// Bool: true overrides
 		return override.Bool()
 
 	case reflect.String:
-		// string 类型：非空覆盖
-		// 标签标为 optional 且无 default 的 string 视为"始终使用用户值"
+		// String: a non-empty value overrides
+		// A string tagged optional without default always uses the user value
 		if opts != nil && opts.isOptional() {
 			if _, hasDefault := opts.hasDefault(); !hasDefault {
 				return true
@@ -212,14 +230,14 @@ func shouldOverride(target, override reflect.Value, opts *fieldOptions) bool {
 		return override.String() != ""
 
 	case reflect.Slice, reflect.Map:
-		// slice/map：非 nil 且非空覆盖
+		// slice/map: override when non-nil and non-empty
 		if override.IsNil() {
 			return false
 		}
 		return override.Len() > 0
 
 	default:
-		// 其他类型：非零值覆盖
+		// Other types: override when non-zero
 		return !override.IsZero()
 	}
 }

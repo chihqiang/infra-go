@@ -5,13 +5,13 @@ import (
 	"time"
 )
 
-// --- 泛型转换 ---
+// --- Generic conversion ---
 
-// To 将 any 转换为目标类型 T。
-// T 可以是基本类型或其指针类型，转换失败返回零值。
-// 需要判断转换是否成功时，使用 ToE。
+// To converts any to the target type T.
+// T may be a basic type or a pointer to one; a failed conversion returns the zero value.
+// Use ToE when you need to know whether the conversion succeeded.
 //
-// 用法：
+// Usage:
 //
 //	n := cast.To[int]("123")       // 123
 //	s := cast.To[string](456)      // "456"
@@ -22,9 +22,10 @@ func To[T any](v any) T {
 	return val
 }
 
-// narrowInt64E 将 v 转为 int64，并校验其能无损放入 bitSize 位的有符号整数。
-// 供 ToE 的 int8/int16/int32 分支使用：直接用 int8(n) 这类窄化转换会静默回绕
-// （如 int8(200) == -56），必须在转换前判断范围。
+// narrowInt64E converts v to int64 and verifies that it fits losslessly into a signed
+// integer of bitSize bits.
+// Used by the int8/int16/int32 branches of ToE: a narrowing conversion such as int8(n)
+// wraps around silently (e.g. int8(200) == -56), so the range must be checked first.
 func narrowInt64E(v any, bitSize int, name string) (int64, error) {
 	n, err := ToInt64E(v)
 	if err != nil {
@@ -36,7 +37,8 @@ func narrowInt64E(v any, bitSize int, name string) (int64, error) {
 	return n, nil
 }
 
-// narrowUint64E 将 v 转为 uint64，并校验其能无损放入 bitSize 位的无符号整数。
+// narrowUint64E converts v to uint64 and verifies that it fits losslessly into an
+// unsigned integer of bitSize bits.
 func narrowUint64E(v any, bitSize int, name string) (uint64, error) {
 	n, err := ToUint64E(v)
 	if err != nil {
@@ -48,8 +50,8 @@ func narrowUint64E(v any, bitSize int, name string) (uint64, error) {
 	return n, nil
 }
 
-// ToE 将 any 转换为目标类型 T，返回转换结果与错误。
-// 与 To 相比保留错误信息，便于调用方判断是否成功并回退默认值。
+// ToE converts any to the target type T and returns the result along with an error.
+// Unlike To it preserves the error, so callers can detect a failure and fall back to a default.
 func ToE[T any](v any) (T, error) {
 	var zero T
 	switch any(zero).(type) {
@@ -150,7 +152,7 @@ func ToE[T any](v any) (T, error) {
 		}
 		return any(t).(T), nil
 	default:
-		// 尝试 JSON 序列化/反序列化
+		// fall back to JSON marshal/unmarshal
 		if v == nil {
 			return zero, nil
 		}

@@ -1,24 +1,26 @@
 # retry
 
-重试工具包，支持指数退避、固定间隔、线性增长等延迟策略，支持自定义重试判定和回调。
+A retry utility supporting exponential backoff, fixed interval, linear growth, and other delay
+strategies, plus custom retry conditions and callbacks.
 
-## 特性
+## Features
 
-- **多种延迟策略**：指数退避（默认）、固定间隔、线性增长、自定义函数
-- **随机抖动**：避免惊群效应
-- **自定义重试判定**：RetryIf 函数决定哪些错误需要重试
-- **重试回调**：每次重试前执行回调，方便日志记录
-- **Context 支持**：支持超时和取消
-- **最大延迟限制**：防止延迟过大
-- **统一错误**：提供 `ErrMaxRetries`、`ErrNoRetry` 语义化错误
+- **Multiple delay strategies**: exponential backoff (default), fixed interval, linear growth,
+  custom functions
+- **Random jitter**: avoids the thundering herd effect
+- **Custom retry condition**: a RetryIf function decides which errors deserve a retry
+- **Retry callback**: a callback runs before each retry, handy for logging
+- **Context support**: timeouts and cancellation
+- **Max delay cap**: keeps delays from growing out of hand
+- **Unified errors**: semantic `ErrMaxRetries` and `ErrNoRetry` errors
 
-## 安装
+## Installation
 
 ```bash
 go get github.com/chihqiang/infra-go/retry
 ```
 
-## 快速开始
+## Quick start
 
 ```go
 package main
@@ -34,7 +36,7 @@ import (
 func main() {
     var count int
 
-    // 使用默认配置重试
+    // retry with the default config
     err := retry.Do(context.Background(), func(ctx context.Context) error {
         count++
         if count < 3 {
@@ -48,71 +50,71 @@ func main() {
 
 ## API
 
-### 基本用法
+### Basic usage
 
 ```go
-// 使用默认配置（3 次重试，100ms 初始延迟，指数退避）
+// use the default config (3 retries, 100ms initial delay, exponential backoff)
 err := retry.Do(ctx, func(ctx context.Context) error {
     return callRemoteService()
 })
 ```
 
-### 自定义配置
+### Custom config
 
 ```go
-// 使用 Option 配置
+// configure with Options
 err := retry.DoWithConfig(ctx, func(ctx context.Context) error {
     return callRemoteService()
 }, 
-    retry.WithMaxRetries(5),           // 最多重试 5 次
-    retry.WithDelay(200*time.Millisecond), // 初始延迟 200ms
-    retry.WithMaxDelay(5*time.Second),     // 最大延迟 5s
-    retry.WithJitter(),                    // 启用随机抖动
+    retry.WithMaxRetries(5),           // at most 5 retries
+    retry.WithDelay(200*time.Millisecond), // 200ms initial delay
+    retry.WithMaxDelay(5*time.Second),     // 5s max delay
+    retry.WithJitter(),                    // enable random jitter
     retry.WithOnRetry(func(attempt int, err error) {
         log.Printf("retry attempt %d: %v", attempt, err)
     }),
 )
 ```
 
-### 自定义重试判定
+### Custom retry condition
 
 ```go
-// 仅对网络错误重试
+// retry network errors only
 err := retry.DoWithConfig(ctx, func(ctx context.Context) error {
     return callRemoteService()
 },
     retry.WithMaxRetries(5),
     retry.WithRetryIf(func(err error) bool {
         var netErr net.Error
-        return errors.As(err, &netErr) // 仅网络错误重试
+        return errors.As(err, &netErr) // retry network errors only
     }),
 )
 ```
 
-### 延迟策略
+### Delay strategies
 
 ```go
-// 指数退避（默认）
+// exponential backoff (default)
 retry.WithDelay(100*time.Millisecond)
-// 延迟序列：100ms, 200ms, 400ms, 800ms...
+// delay sequence: 100ms, 200ms, 400ms, 800ms...
 
-// 固定间隔
+// fixed interval
 retry.WithDelayFunc(retry.FixedDelay(500*time.Millisecond))
-// 延迟序列：500ms, 500ms, 500ms...
+// delay sequence: 500ms, 500ms, 500ms...
 
-// 线性增长
+// linear growth
 retry.WithDelayFunc(retry.LinearDelay(100*time.Millisecond, 100*time.Millisecond))
-// 延迟序列：100ms, 200ms, 300ms, 400ms...
+// delay sequence: 100ms, 200ms, 300ms, 400ms...
 
-// 自定义指数退避
+// custom exponential backoff
 retry.WithDelayFunc(retry.ExponentialBackoff(10*time.Millisecond, 3))
-// 延迟序列：10ms, 30ms, 90ms, 270ms...
+// delay sequence: 10ms, 30ms, 90ms, 270ms...
 ```
 
-### Context 超时
+### Context timeout
 
 ```go
-// 设置总体超时
+// set an overall timeout
 ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 defer cancel()
 
@@ -121,7 +123,7 @@ err := retry.Do(ctx, func(ctx context.Context) error {
 })
 ```
 
-### 重试回调
+### Retry callback
 
 ```go
 err := retry.DoWithConfig(ctx, func(ctx context.Context) error {
@@ -137,39 +139,40 @@ err := retry.DoWithConfig(ctx, func(ctx context.Context) error {
 )
 ```
 
-## 配置选项
+## Configuration options
 
-| 选项 | 说明 | 默认值 |
+| Option | Description | Default |
 | ------ | ------ | -------- |
-| `WithMaxRetries(n)` | 最大重试次数 | 3 |
-| `WithDelay(d)` | 初始延迟 | 100ms |
-| `WithMaxDelay(d)` | 最大延迟 | 10s |
-| `WithDelayFunc(fn)` | 自定义延迟函数 | 指数退避 |
-| `WithRetryIf(fn)` | 重试判定函数 | 所有 error 都重试 |
-| `WithOnRetry(fn)` | 重试回调 | 无 |
-| `WithJitter()` | 启用随机抖动 | false |
+| `WithMaxRetries(n)` | Maximum number of retries | 3 |
+| `WithDelay(d)` | Initial delay | 100ms |
+| `WithMaxDelay(d)` | Maximum delay | 10s |
+| `WithDelayFunc(fn)` | Custom delay function | Exponential backoff |
+| `WithRetryIf(fn)` | Retry condition function | Retry on every error |
+| `WithOnRetry(fn)` | Retry callback | None |
+| `WithJitter()` | Enable random jitter | false |
 
-### 显式零值：不重试 / 重试不等待
+### Explicit zero values: no retry / retry without waiting
 
-`Config` 结构体采用「字段 == 0 视为未设置」的规则，因此**无法用字段表达 0**。
-需要这些语义时把 Option 传给 `DoWithRetryConfig`（Option 在默认值填充之后应用）：
+The `Config` struct follows the "field == 0 means unset" rule, so **a field cannot express 0**.
+When you need those semantics, pass Options to `DoWithRetryConfig` (Options are applied after
+the defaults have been filled in):
 
 ```go
-// 不重试，只执行一次（Config{MaxRetries: 0} 会被填成默认 3 次）
+// no retry, run once (Config{MaxRetries: 0} would be filled in with the default of 3)
 err := retry.DoWithRetryConfig(ctx, fn, retry.Config{}, retry.WithMaxRetries(0))
 
-// 立即重试，不等待默认的 100ms 初始延迟
+// retry immediately, skipping the default 100ms initial delay
 err = retry.DoWithRetryConfig(ctx, fn, retry.Config{}, retry.WithDelay(0))
 
-// 不限制延迟上限（Config{MaxDelay: 0} 会被填成默认 10s）
+// no delay cap (Config{MaxDelay: 0} would be filled in with the default 10s)
 err = retry.DoWithRetryConfig(ctx, fn, retry.Config{}, retry.WithMaxDelay(0))
 ```
 
-> `Attempts(c, opts...)` 接受同一组 opts，用于预先得知总执行次数；
-> `retry.Attempts(c, retry.WithMaxRetries(0))` 返回 `1`。
-> `WithMaxDelay(0)` 的语义是「不限制上限」，而不是「把延迟截断为 0」。
+> `Attempts(c, opts...)` accepts the same set of opts and tells you the total number of runs up
+> front; `retry.Attempts(c, retry.WithMaxRetries(0))` returns `1`.
+> `WithMaxDelay(0)` means "no cap", not "truncate the delay to 0".
 
-## 错误处理
+## Error handling
 
 ```go
 err := retry.Do(ctx, func(ctx context.Context) error {
@@ -178,20 +181,20 @@ err := retry.Do(ctx, func(ctx context.Context) error {
 
 switch {
 case err == nil:
-    // 成功
+    // success
 case retry.IsMaxRetries(err):
-    // 超过最大重试次数
+    // exceeded the maximum number of retries
     log.Println("max retries exceeded:", err)
 case retry.IsNoRetry(err):
-    // 不再重试（RetryIf 返回 false）
+    // no more retries (RetryIf returned false)
     log.Println("no retry:", err)
 default:
-    // context 取消等
+    // context cancellation, etc.
     log.Println("error:", err)
 }
 ```
 
-| 错误 | 说明 |
+| Error | Description |
 | ------ | ------ |
-| `ErrMaxRetries` | 超过最大重试次数 |
-| `ErrNoRetry` | 不再重试（RetryIf 返回 false） |
+| `ErrMaxRetries` | Exceeded the maximum number of retries |
+| `ErrNoRetry` | No more retries (RetryIf returned false) |

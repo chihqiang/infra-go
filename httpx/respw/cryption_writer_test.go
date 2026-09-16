@@ -15,7 +15,7 @@ func TestCryptionWriter_WriteBuffers(t *testing.T) {
 	n, err := cw.Write([]byte("secret data"))
 	assert.NoError(t, err)
 	assert.Equal(t, 11, n)
-	// 写入缓冲而非直接写到底层（待加密）
+	// Written to the buffer rather than the underlying writer (awaiting encryption)
 	assert.Equal(t, "secret data", string(cw.Buffered()))
 	assert.Empty(t, w.Body.String())
 }
@@ -38,22 +38,23 @@ func TestCryptionWriter_HeaderDelegates(t *testing.T) {
 
 func TestCryptionWriter_Overflow(t *testing.T) {
 	w := httptest.NewRecorder()
-	cw := NewCryptionWriter(w, 4) // 缓冲上限 4 字节
+	cw := NewCryptionWriter(w, 4) // buffer limit of 4 bytes
 
 	_, err := cw.Write([]byte("abc"))
 	assert.NoError(t, err)
 	assert.False(t, cw.Overflowed())
-	assert.Empty(t, w.Body.String(), "缓冲模式不应写到底层")
+	assert.Empty(t, w.Body.String(), "buffered mode must not write to the underlying writer")
 
-	// 超出上限：切换为明文透传，已缓冲内容 + 本次内容都应原样写到底层
+	// Over the limit: it switches to plaintext passthrough, so both the buffered
+	// content and this write must reach the underlying writer as-is
 	n, err := cw.Write([]byte("def"))
 	assert.NoError(t, err)
 	assert.Equal(t, 3, n)
 	assert.True(t, cw.Overflowed())
-	assert.Equal(t, "abcdef", w.Body.String(), "已缓冲内容与后续内容都必须完整输出，不得截断")
+	assert.Equal(t, "abcdef", w.Body.String(), "buffered and subsequent content must all be written out")
 	assert.Empty(t, cw.Buffered())
 
-	// 进入透传模式后继续写入仍完整输出
+	// After switching to passthrough mode, further writes are still written out in full
 	_, err = cw.Write([]byte("ghi"))
 	assert.NoError(t, err)
 	assert.Equal(t, "abcdefghi", w.Body.String())
@@ -65,19 +66,20 @@ func TestCryptionWriter_OverflowWritesStatusCode(t *testing.T) {
 
 	cw.WriteHeader(http.StatusCreated)
 	_, _ = cw.Write([]byte("ab"))
-	_, _ = cw.Write([]byte("cd")) // 触发透传
+	_, _ = cw.Write([]byte("cd")) // triggers passthrough
 
 	assert.Equal(t, http.StatusCreated, w.Code)
 	assert.Equal(t, "abcd", w.Body.String())
 }
 
 func TestCryptionWriter_OverflowFlushes(t *testing.T) {
-	// 透传模式下 Flush 应到达底层（保证大响应可流式输出）
+	// In passthrough mode Flush must reach the underlying writer (so large responses
+	// can be streamed)
 	underlying := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
 	cw := NewCryptionWriter(underlying, 2)
 
 	_, _ = cw.Write([]byte("ab"))
-	_, _ = cw.Write([]byte("cd")) // 触发透传
+	_, _ = cw.Write([]byte("cd")) // triggers passthrough
 	cw.Flush()
 
 	assert.True(t, underlying.flushed)
@@ -85,7 +87,8 @@ func TestCryptionWriter_OverflowFlushes(t *testing.T) {
 }
 
 func TestCryptionWriter_FlushIsNoop(t *testing.T) {
-	// 加密需整体缓冲后输出，Flush 不应向底层透传（避免"半发送"空响应）
+	// Encryption needs the whole body buffered first, so Flush must not reach the
+	// underlying writer (that would send a "half sent" empty response)
 	underlying := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
 	cw := &CryptionWriter{ResponseWriter: underlying}
 
@@ -96,7 +99,7 @@ func TestCryptionWriter_FlushIsNoop(t *testing.T) {
 	assert.Empty(t, underlying.Body.String())
 }
 
-// flushRecorder 记录是否收到 Flush 调用的测试 writer。
+// flushRecorder is a test writer that records whether Flush was called.
 type flushRecorder struct {
 	*httptest.ResponseRecorder
 	flushed bool

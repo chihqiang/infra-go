@@ -7,13 +7,15 @@ import (
 	"math"
 )
 
-// hashSeed 全局 maphash 种子，在进程生命周期内固定。
-// maphash 需要固定种子来保证 hash 结果的一致性（但不同次运行间不同）。
+// hashSeed is a global maphash seed, fixed for the lifetime of the process.
+// maphash needs a fixed seed so hash results stay consistent (they still differ
+// between runs).
 var hashSeed = maphash.MakeSeed()
 
-// hashKey 对任意 comparable 类型计算 hash 值。
-// 对常见类型（string、int 系列、uint 系列、float 系列）使用高效路径，
-// 避免 fmt.Sprint 的反射开销；其他类型回退到 fmt.Sprint。
+// hashKey computes a hash value for any comparable type.
+// Common types (string, the int family, the uint family, the float family) take
+// a fast path that avoids the reflection overhead of fmt.Sprint; every other
+// type falls back to fmt.Sprint.
 func hashKey[K comparable](key K) uint64 {
 	var h maphash.Hash
 	h.SetSeed(hashSeed)
@@ -76,7 +78,8 @@ func hashKey[K comparable](key K) uint64 {
 			h.WriteByte(0)
 		}
 	default:
-		// 通过 any 类型断言，支持 comparable 结构体等复杂类型
+		// Going through an any type assertion supports complex comparable types
+		// such as structs.
 		h.WriteString(fmt.Sprint(v))
 	}
 

@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 对应 header.go：HeaderBinding（含 headerSource.TrySet 的 Canonical key 转换）。
+// Covers header.go: HeaderBinding (including the canonical key conversion of headerSource.TrySet).
 
 type headerReq struct {
 	Token   string `header:"X-Token" binding:"required"`
@@ -27,11 +27,11 @@ func TestHeader_Bind(t *testing.T) {
 	var h headerReq
 	require.NoError(t, Header.Bind(newHeaderReq(map[string]string{"X-Token": "abc"}), &h))
 	assert.Equal(t, "abc", h.Token)
-	assert.Equal(t, "v1", h.Version) // 缺省取 default
+	assert.Equal(t, "v1", h.Version) // falls back to default when absent
 }
 
 func TestHeader_CaseInsensitive(t *testing.T) {
-	// headerSource.TrySet 会把 key 转 Canonical MIME 格式，键命中应大小写不敏感
+	// headerSource.TrySet converts the key to canonical MIME form, so lookups are case-insensitive
 	var h headerReq
 	require.NoError(t, Header.Bind(newHeaderReq(map[string]string{"x-token": "abc"}), &h))
 	assert.Equal(t, "abc", h.Token)
@@ -39,5 +39,5 @@ func TestHeader_CaseInsensitive(t *testing.T) {
 
 func TestHeader_ValidationError(t *testing.T) {
 	var h headerReq
-	require.Error(t, Header.Bind(newHeaderReq(nil), &h)) // 缺 X-Token
+	require.Error(t, Header.Bind(newHeaderReq(nil), &h)) // X-Token is missing
 }

@@ -8,15 +8,15 @@ import (
 	"net/http"
 )
 
-// JSONBinding 基于 JSON body 的绑定器。
+// JSONBinding is a binder based on the JSON body.
 type JSONBinding struct{}
 
-// Name 返回绑定器名称。
+// Name returns the binder name.
 func (JSONBinding) Name() string {
 	return "json"
 }
 
-// Bind 将请求 JSON body 绑定到 obj，并校验。
+// Bind binds the request JSON body into obj and validates it.
 func (JSONBinding) Bind(req *http.Request, obj any) error {
 	if req == nil || req.Body == nil {
 		return errors.New("invalid request")
@@ -24,12 +24,12 @@ func (JSONBinding) Bind(req *http.Request, obj any) error {
 	return decodeJSON(req.Body, obj)
 }
 
-// BindBody 从字节数组绑定 JSON 到 obj，并校验。
+// BindBody binds JSON from a byte slice into obj and validates it.
 func (JSONBinding) BindBody(body []byte, obj any) error {
 	return decodeJSON(bytes.NewReader(body), obj)
 }
 
-// decodeJSON 从 reader 解码 JSON 到 obj，并校验。
+// decodeJSON decodes JSON from the reader into obj and validates it.
 func decodeJSON(r io.Reader, obj any) error {
 	decoder := json.NewDecoder(r)
 	if err := decoder.Decode(obj); err != nil {

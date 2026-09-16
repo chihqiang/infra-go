@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- parseKeyAndOptions 测试 ---
+// --- parseKeyAndOptions tests ---
 
 func TestParseKeyAndOptions_NoTag(t *testing.T) {
 	type S struct {
@@ -121,7 +121,7 @@ func TestParseKeyAndOptions_StringOption(t *testing.T) {
 	assert.True(t, opts.FromString)
 }
 
-// --- parseNumberRange 测试 ---
+// --- parseNumberRange tests ---
 
 func TestParseNumberRange(t *testing.T) {
 	tests := []struct {
@@ -153,7 +153,7 @@ func TestParseNumberRange(t *testing.T) {
 	}
 }
 
-// --- isInRange 测试 ---
+// --- isInRange tests ---
 
 func TestIsInRange(t *testing.T) {
 	opts := &fieldOptions{Range: &numberRange{left: 0, leftInclude: true, right: 100, rightInclude: false}}
@@ -171,16 +171,16 @@ func TestIsInRange(t *testing.T) {
 	assert.True(t, opts3.isInRange(100))
 }
 
-// --- 补充：边界与错误分支 ---
+// --- Additional coverage: boundary and error branches ---
 
 func TestIsInRange_RightExceeded(t *testing.T) {
-	// 右闭区间越界（覆盖 isInRange 的 right 越界分支）
+	// Right-closed bound exceeded (covers the right out-of-range branch of isInRange)
 	opts := &fieldOptions{Range: &numberRange{left: 0, leftInclude: true, right: 100, rightInclude: true}}
 	assert.False(t, opts.isInRange(101))
 }
 
 func TestParseKeyAndOptions_InvalidOption(t *testing.T) {
-	// 任一 option 解析失败应返回错误
+	// A failure to parse any option must return an error
 	type S struct {
 		X string `json:"x,range=bad"`
 	}
@@ -188,11 +188,13 @@ func TestParseKeyAndOptions_InvalidOption(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestParseKeyAndOptions_Inherit 验证 inherit 被明确拒绝。
+// TestParseKeyAndOptions_Inherit verifies that inherit is rejected explicitly.
 //
-// 历史行为：inherit 被解析并写入 fieldOptions.Inherit，但 unmarshaler 从未读取它 ——
-// 文档承诺"从父级继承值"，实际什么都没做。本设计中没有"父级"概念，
-// 因此改为报错，而不是继续静默忽略。
+// Historic behaviour: inherit was parsed and stored into fieldOptions.Inherit,
+// but the unmarshaler never read it — the documentation promised "inherit the
+// value from the parent" while nothing actually happened. This design has no
+// notion of a "parent", so it now reports an error instead of continuing to
+// ignore it silently.
 func TestParseKeyAndOptions_Inherit(t *testing.T) {
 	type S struct {
 		X string `json:"x,inherit"`
@@ -227,7 +229,7 @@ func TestParseKeyAndOptions_OptionalDepNegated(t *testing.T) {
 	assert.True(t, opts.OptionalDepNegate)
 }
 
-// TestParseKeyAndOptions_OptionalNegatedEmpty 验证 `optional=!` 被拒绝。
+// TestParseKeyAndOptions_OptionalNegatedEmpty verifies that `optional=!` is rejected.
 func TestParseKeyAndOptions_OptionalNegatedEmpty(t *testing.T) {
 	type S struct {
 		X string `json:"x,optional=!"`
@@ -236,11 +238,13 @@ func TestParseKeyAndOptions_OptionalNegatedEmpty(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestParseKeyAndOptions_UnknownOption 回归测试：未知选项必须报错。
+// TestParseKeyAndOptions_UnknownOption is a regression test: unknown options must
+// report an error.
 //
-// 历史缺陷：parseOption 用 strings.HasPrefix 逐个匹配且无 default 分支，
-// 拼写错误（如 optinal）被静默忽略 —— 字段按必填处理，
-// 直到运行期才以 "field not set" 暴露，且错误信息不指向真实原因。
+// Historic defect: parseOption matched each prefix with strings.HasPrefix and had
+// no default branch, so typos (such as optinal) were silently ignored — the field
+// was treated as required and only surfaced at runtime as "field not set", with
+// an error message that did not point at the real cause.
 func TestParseKeyAndOptions_UnknownOption(t *testing.T) {
 	cases := []struct {
 		name string
@@ -279,9 +283,11 @@ func TestParseKeyAndOptions_UnknownOption(t *testing.T) {
 	}
 }
 
-// TestParseKeyAndOptions_PrefixMustNotMatch 回归测试：前缀不得误匹配。
+// TestParseKeyAndOptions_PrefixMustNotMatch is a regression test: prefixes must
+// not match incorrectly.
 //
-// 历史缺陷：`defaultFoo=bar` 会因 HasPrefix("default") 而生效为 Default="bar"。
+// Historic defect: `defaultFoo=bar` took effect as Default="bar" because of
+// HasPrefix("default").
 func TestParseKeyAndOptions_PrefixMustNotMatch(t *testing.T) {
 	type S struct {
 		X string `json:"x,defaultFoo=bar"`
@@ -292,7 +298,7 @@ func TestParseKeyAndOptions_PrefixMustNotMatch(t *testing.T) {
 }
 
 func TestParseKeyAndOptions_OptionalInvalid(t *testing.T) {
-	// optional=a=b 多等号报错
+	// optional=a=b with a second equals sign must error
 	type S struct {
 		X string `json:"x,optional=a=b"`
 	}
@@ -301,7 +307,7 @@ func TestParseKeyAndOptions_OptionalInvalid(t *testing.T) {
 }
 
 func TestParseKeyAndOptions_OptionDoubleEqual(t *testing.T) {
-	// default=foo=bar 值内含多个等号报错
+	// default=foo=bar with several equals signs inside the value must error
 	type S struct {
 		X string `json:"x,default=foo=bar"`
 	}
@@ -310,7 +316,7 @@ func TestParseKeyAndOptions_OptionDoubleEqual(t *testing.T) {
 }
 
 func TestParseOptionsValue_Pipe(t *testing.T) {
-	// 管道分隔
+	// Pipe separated
 	type S struct {
 		X string `json:"x,options=a|b|c"`
 	}
@@ -333,7 +339,7 @@ func TestIsRightInclude_Invalid(t *testing.T) {
 }
 
 func TestParseSegments_EscapedComma(t *testing.T) {
-	// 转义逗号不分割
+	// An escaped comma does not split
 	segs := parseSegments(`default=a\,b,c`)
 	assert.Equal(t, []string{"default=a,b", "c"}, segs)
 }

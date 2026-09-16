@@ -8,17 +8,17 @@ import (
 	"time"
 )
 
-// --- 时间类型转换 ---
+// --- Time type conversion ---
 
-// ToDuration 将 any 转换为 time.Duration，转换失败返回零值。
-// 支持数值类型（纳秒）和字符串（如 "5s"、"100ms"）。
+// ToDuration converts any to time.Duration, returning the zero value if the conversion fails.
+// Supports numeric types (nanoseconds) and strings (such as "5s" or "100ms").
 func ToDuration(v any) time.Duration {
 	val, _ := ToDurationE(v)
 	return val
 }
 
-// ToDurationE 将 any 转换为 time.Duration，返回转换结果和错误。
-// 数值类型按纳秒处理，字符串按 time.ParseDuration 解析。
+// ToDurationE converts any to time.Duration and returns the result along with an error.
+// Numeric types are treated as nanoseconds; strings are parsed with time.ParseDuration.
 func ToDurationE(v any) (time.Duration, error) {
 	switch val := v.(type) {
 	case nil:
@@ -66,18 +66,18 @@ func ToDurationE(v any) (time.Duration, error) {
 	}
 }
 
-// --- 时间转换（time.Time） ---
+// --- Time conversion (time.Time) ---
 
-// ToTime 将 any 转换为 time.Time，转换失败返回零值。
-// 支持字符串（RFC3339、Unix 时间戳）和数值（Unix 时间戳）。
+// ToTime converts any to time.Time, returning the zero value if the conversion fails.
+// Supports strings (RFC3339 or a Unix timestamp) and numeric types (Unix timestamp).
 func ToTime(v any) time.Time {
 	val, _ := ToTimeE(v)
 	return val
 }
 
-// ToTimeE 将 any 转换为 time.Time，返回转换结果和错误。
-// 字符串优先按 RFC3339 解析，失败后尝试按 Unix 时间戳解析。
-// 数值类型按 Unix 时间戳（秒）处理。
+// ToTimeE converts any to time.Time and returns the result along with an error.
+// Strings are parsed as RFC3339 first and then as a Unix timestamp.
+// Numeric types are treated as Unix timestamps (seconds).
 func ToTimeE(v any) (time.Time, error) {
 	switch val := v.(type) {
 	case nil:
@@ -86,12 +86,12 @@ func ToTimeE(v any) (time.Time, error) {
 		return val, nil
 	case string:
 		s := strings.TrimSpace(val)
-		// 尝试 RFC3339
+		// try RFC3339
 		t, err := time.Parse(time.RFC3339, s)
 		if err == nil {
 			return t, nil
 		}
-		// 尝试 Unix 时间戳
+		// try a Unix timestamp
 		if n, err := strconv.ParseInt(s, 10, 64); err == nil {
 			return time.Unix(n, 0), nil
 		}

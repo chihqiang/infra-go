@@ -16,7 +16,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-// resetResources 重置全局资源属性，避免用例之间互相影响（仅测试使用）。
+// resetResources resets the global resource attributes so test cases do not affect
+// each other (tests only).
 func resetResources() {
 	attrResourcesLk.Lock()
 	attrResources = make([]attribute.KeyValue, 0)
@@ -56,29 +57,32 @@ func TestFillDefault_UserOverrides(t *testing.T) {
 }
 
 func TestStartAgent_Disabled(t *testing.T) {
-	// Disabled 为 true 时不应初始化任何东西
+	// Nothing should be initialised when Disabled is true
 	assert.NotPanics(t, func() {
 		StartAgent(Config{Disabled: true})
 	})
 }
 
-// TestFillDefault_SamplerZeroViaOption 验证 Sampler=0（根 span 不采样、
-// 仅跟随上游采样）可通过 Option 表达，不被默认值 1.0 覆盖。
+// TestFillDefault_SamplerZeroViaOption verifies that Sampler=0 (the root span is not
+// sampled, only upstream sampling is followed) can be expressed through an Option and
+// is not overwritten by the default 1.0.
 func TestFillDefault_SamplerZeroViaOption(t *testing.T) {
 	c := fillDefault(Config{}, WithSampler(0))
 	assert.InDelta(t, 0.0, c.Sampler, 0.001)
 }
 
-// TestFillDefault_SamplerZeroWithoutOption 锁定已知局限：直接写 Config.Sampler = 0
-// 仍被当作未设置并回落默认 1.0，需要显式 0 时必须用 WithSampler(0)。
+// TestFillDefault_SamplerZeroWithoutOption pins down a known limitation: writing
+// Config.Sampler = 0 directly is still treated as unset and falls back to the default
+// 1.0, so an explicit 0 requires WithSampler(0).
 func TestFillDefault_SamplerZeroWithoutOption(t *testing.T) {
 	c := fillDefault(Config{Sampler: 0})
 	assert.InDelta(t, 1.0, c.Sampler, 0.001)
 }
 
-// TestStartAgent_SamplerZeroViaOption 验证 WithSampler(0) 真正生效：
-// TracerProvider 仍被创建，但根 span 不被采样、不会被导出。
-// 这正是它与 Disabled 的区别（后者根本不创建 provider）。
+// TestStartAgent_SamplerZeroViaOption verifies that WithSampler(0) really takes effect:
+// the TracerProvider is still created, but the root span is not sampled and is not
+// exported.
+// This is exactly how it differs from Disabled (which creates no provider at all).
 func TestStartAgent_SamplerZeroViaOption(t *testing.T) {
 	tmpDir := t.TempDir()
 	logFile := tmpDir + "/trace.log"
@@ -97,7 +101,8 @@ func TestStartAgent_SamplerZeroViaOption(t *testing.T) {
 	tracer := otel.Tracer(TraceName)
 	ctx, span := tracer.Start(context.Background(), "root-operation")
 	span.End()
-	assert.False(t, span.SpanContext().IsSampled(), "WithSampler(0) 下根 span 不应被采样")
+	assert.False(t, span.SpanContext().IsSampled(),
+		"the root span must not be sampled with WithSampler(0)")
 
 	require.NoError(t, span.TracerProvider().(interface {
 		ForceFlush(context.Context) error
@@ -105,14 +110,14 @@ func TestStartAgent_SamplerZeroViaOption(t *testing.T) {
 
 	data, err := readFile(logFile)
 	require.NoError(t, err)
-	assert.Empty(t, data, "未采样的 span 不应被导出")
+	assert.Empty(t, data, "an unsampled span must not be exported")
 }
 
 func TestStartAgent_FileExporter(t *testing.T) {
 	tmpDir := t.TempDir()
 	logFile := tmpDir + "/trace.log"
 
-	// 重置 once 以便重复测试
+	// Reset the state so the test can be repeated
 	resetOnce()
 
 	StartAgent(Config{
@@ -126,24 +131,25 @@ func TestStartAgent_FileExporter(t *testing.T) {
 		resetOnce()
 	}()
 
-	// 创建 span 验证导出器工作
+	// Create a span to verify the exporter works
 	tracer := otel.Tracer(TraceName)
 	ctx, span := tracer.Start(context.Background(), "test-operation")
 	span.End()
 
-	// 确保刷新
+	// Make sure everything is flushed
 	require.NoError(t, span.TracerProvider().(interface {
 		ForceFlush(context.Context) error
 	}).ForceFlush(ctx))
 
-	// 验证文件有内容
+	// Verify the file has content
 	data, err := readFile(logFile)
 	require.NoError(t, err)
 	assert.NotEmpty(t, data)
 }
 
 func TestStartAgent_NoEndpoint(t *testing.T) {
-	// 不设置 Endpoint 时，不创建导出器但 tracer provider 仍然初始化
+	// Without an Endpoint no exporter is created, but the tracer provider is still
+	// initialised
 	resetOnce()
 
 	StartAgent(Config{
@@ -155,14 +161,14 @@ func TestStartAgent_NoEndpoint(t *testing.T) {
 		resetOnce()
 	}()
 
-	// 创建 span 不应 panic
+	// Creating a span must not panic
 	tracer := otel.Tracer(TraceName)
 	_, span := tracer.Start(context.Background(), "test-no-export")
 	span.End()
 }
 
 func TestStopAgent_MultipleCalls(t *testing.T) {
-	// 多次调用 StopAgent 不应 panic
+	// Calling StopAgent multiple times must not panic
 	assert.NotPanics(t, func() {
 		StopAgent()
 		StopAgent()
@@ -189,7 +195,8 @@ func TestCreateExporter_FileError(t *testing.T) {
 	assert.Contains(t, err.Error(), "file exporter endpoint error")
 }
 
-// file 导出器会打开文件句柄，必须把关闭函数交回调用方，否则 StopAgent 无法释放。
+// The file exporter opens a file handle; the close function must be handed back to the
+// caller, otherwise StopAgent cannot release it.
 func TestCreateExporterWithClosers_FileReturnsCloser(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "trace.log")
 
@@ -198,7 +205,8 @@ func TestCreateExporterWithClosers_FileReturnsCloser(t *testing.T) {
 		Endpoint: path,
 	})
 	require.NoError(t, err)
-	require.Len(t, closers, 1, "file 导出器必须返回关闭函数，否则文件句柄会泄漏")
+	require.Len(t, closers, 1,
+		"the file exporter must return a close function, otherwise the file handle leaks")
 	assert.NoError(t, closers[0]())
 }
 
@@ -215,7 +223,7 @@ func TestAddResources(t *testing.T) {
 }
 
 func TestTraceIDFromContext_Empty(t *testing.T) {
-	// 没有 span 的 context 应返回空字符串
+	// A context without a span should yield an empty string
 	ctx := context.Background()
 	assert.Equal(t, "", TraceIDFromContext(ctx))
 }
@@ -226,7 +234,7 @@ func TestSpanIDFromContext_Empty(t *testing.T) {
 }
 
 func TestTracerFromContext_Global(t *testing.T) {
-	// 没有 span 的 context 应返回全局 tracer
+	// A context without a span should yield the global tracer
 	tracer := TracerFromContext(context.Background())
 	assert.NotNil(t, tracer)
 }
@@ -247,7 +255,7 @@ func TestStartSpan(t *testing.T) {
 	ctx, span := StartSpan(ctx, "test-operation")
 	defer span.End()
 
-	// 启动 span 后 context 中应有 trace id
+	// After starting a span the context should hold a trace id
 	traceID := TraceIDFromContext(ctx)
 	assert.NotEmpty(t, traceID)
 
@@ -267,19 +275,19 @@ func TestInjectExtract_GRPC(t *testing.T) {
 		Sampler: 1.0,
 	})
 
-	// 创建一个 span
+	// Create a span
 	ctx, span := StartSpan(context.Background(), "parent-op")
 	defer span.End()
 
-	// 注入到 gRPC metadata
+	// Inject into gRPC metadata
 	md := newGRPCMetadata()
 	Inject(ctx, &md)
 
-	// 从 metadata 中提取
+	// Extract from the metadata
 	extractedCtx, sc := Extract(context.Background(), &md)
 	assert.True(t, sc.IsValid())
 
-	// 提取后的 trace id 应与原始一致
+	// The extracted trace id should match the original one
 	extractedTraceID := TraceIDFromContext(extractedCtx)
 	originalTraceID := TraceIDFromContext(ctx)
 	assert.Equal(t, originalTraceID, extractedTraceID)
@@ -297,26 +305,27 @@ func TestInjectExtract_HTTP(t *testing.T) {
 		Sampler: 1.0,
 	})
 
-	// 创建一个 span
+	// Create a span
 	ctx, span := StartSpan(context.Background(), "parent-http-op")
 	defer span.End()
 
-	// 注入到 HTTP header
+	// Inject into the HTTP header
 	header := http.Header{}
 	InjectHeader(ctx, header)
 
-	// 从 header 中提取
+	// Extract from the header
 	extractedCtx, sc := ExtractHeader(context.Background(), header)
 	assert.True(t, sc.IsValid())
 
-	// 提取后的 trace id 应与原始一致
+	// The extracted trace id should match the original one
 	extractedTraceID := TraceIDFromContext(extractedCtx)
 	originalTraceID := TraceIDFromContext(ctx)
 	assert.Equal(t, originalTraceID, extractedTraceID)
 }
 
 func TestInjectExtract_NoSpan(t *testing.T) {
-	// 没有 span 的 context 注入后提取应无有效 span context
+	// Injecting a context without a span and extracting again must yield no valid span
+	// context
 	md := newGRPCMetadata()
 	Inject(context.Background(), &md)
 
@@ -399,18 +408,18 @@ func TestStartSpan_WithAttributes(t *testing.T) {
 	)
 	defer span.End()
 
-	// span 应正常创建
+	// The span should be created normally
 	assert.NotNil(t, span)
 	traceID := TraceIDFromContext(ctx)
 	assert.NotEmpty(t, traceID)
 }
 
-// --- 辅助函数 ---
+// --- Helper functions ---
 
-// resetOnce 重置 agent 生命周期状态（仅用于测试）。
+// resetOnce resets the agent lifecycle state (tests only).
 //
-// 现在 StartAgent/StopAgent 通过锁 + currentAgent 管理生命周期，
-// 不再依赖 sync.Once，因此测试只需把状态清空即可重复启动。
+// StartAgent/StopAgent now manage the lifecycle with a lock plus currentAgent and no
+// longer rely on sync.Once, so tests only have to clear the state to start again.
 func resetOnce() {
 	StopAgent()
 	agentLk.Lock()
@@ -418,12 +427,14 @@ func resetOnce() {
 	agentLk.Unlock()
 }
 
-// --- 并发安全（回归）---
+// --- Concurrency safety (regressions) ---
 
-// TestAddResources_Concurrent 回归测试：并发 AddResources 与读取不得竞争。
+// TestAddResources_Concurrent is a regression test: concurrent AddResources and reads
+// must not race.
 //
-// 历史缺陷：attrResources 是无锁的包级切片，AddResources 直接 append，
-// startAgent 直接读取，-race 可检出数据竞争。
+// Historical defect: attrResources was an unlocked package-level slice, AddResources
+// appended to it directly and startAgent read it directly, so -race detected a data
+// race.
 func TestAddResources_Concurrent(t *testing.T) {
 	resetResources()
 	t.Cleanup(resetResources)
@@ -432,7 +443,7 @@ func TestAddResources_Concurrent(t *testing.T) {
 	const iterations = 100
 
 	var wg sync.WaitGroup
-	// 并发写入
+	// Concurrent writers
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
@@ -442,8 +453,9 @@ func TestAddResources_Concurrent(t *testing.T) {
 			}
 		}()
 	}
-	// 并发读取（模拟 startAgent 构造 Resource）。
-	// 此处不断言长度：读取与写入并发，长度只保证单调递增，不保证等于最终值。
+	// Concurrent readers (simulating startAgent building the Resource).
+	// The length is not asserted here: reads run concurrently with writes, so the length
+	// is only guaranteed to grow monotonically, not to equal the final value.
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
@@ -459,8 +471,8 @@ func TestAddResources_Concurrent(t *testing.T) {
 	assert.Len(t, resourceAttrs(), workers*iterations)
 }
 
-// TestAddResources_SnapshotIsACopy 验证 resourceAttrs 返回副本，
-// 调用方修改不会影响内部状态。
+// TestAddResources_SnapshotIsACopy verifies that resourceAttrs returns a copy, so a
+// caller mutating it does not affect the internal state.
 func TestAddResources_SnapshotIsACopy(t *testing.T) {
 	resetResources()
 	defer resetResources()
@@ -473,18 +485,19 @@ func TestAddResources_SnapshotIsACopy(t *testing.T) {
 	assert.Equal(t, "env", string(resourceAttrs()[0].Key))
 }
 
-// TestStartAgent_RestartAfterStop 回归测试：StopAgent 之后必须能重新启动。
+// TestStartAgent_RestartAfterStop is a regression test: the agent must be startable
+// again after StopAgent.
 //
-// 历史缺陷：StartAgent 使用 sync.Once，StopAgent 之后 once 仍为已执行状态，
-// 再次 StartAgent 无效，而 otel 全局 provider 仍指向已 Shutdown 的实例，
-// 导致后续 span 被静默丢弃。
+// Historical defect: StartAgent used sync.Once, so once StopAgent had run the once was
+// still marked as done, another StartAgent did nothing, and the otel global provider
+// still pointed at a shut-down instance, so later spans were silently dropped.
 func TestStartAgent_RestartAfterStop(t *testing.T) {
 	resetOnce()
 	t.Cleanup(resetOnce)
 
 	dir := t.TempDir()
 
-	// 第一次启动
+	// First start
 	StartAgent(Config{
 		Name:     "first",
 		Endpoint: dir + "/first.log",
@@ -497,7 +510,7 @@ func TestStartAgent_RestartAfterStop(t *testing.T) {
 	StopAgent()
 	assert.Nil(t, currentAgent, "StopAgent should clear the agent state")
 
-	// 再次启动：应建立新的 agent，而不是被忽略
+	// Start again: a new agent should be established instead of the call being ignored
 	StartAgent(Config{
 		Name:     "second",
 		Endpoint: dir + "/second.log",
@@ -508,7 +521,8 @@ func TestStartAgent_RestartAfterStop(t *testing.T) {
 	assert.NotSame(t, first, currentAgent, "a new agent state must be created")
 }
 
-// TestStartAgent_AlreadyRunningIsIgnored 验证运行期间重复 StartAgent 被忽略并记录警告。
+// TestStartAgent_AlreadyRunningIsIgnored verifies that a repeated StartAgent while one
+// is running is ignored and logs a warning.
 func TestStartAgent_AlreadyRunningIsIgnored(t *testing.T) {
 	resetOnce()
 	t.Cleanup(resetOnce)
@@ -518,12 +532,12 @@ func TestStartAgent_AlreadyRunningIsIgnored(t *testing.T) {
 	first := currentAgent
 	require.NotNil(t, first)
 
-	// 第二次调用（未 Stop）：应保持原 agent
+	// Second call (without Stop): the original agent must be kept
 	StartAgent(Config{Name: "other", Endpoint: dir + "/b.log", Batcher: BatcherFile})
 	assert.Same(t, first, currentAgent, "a second StartAgent must not replace the running agent")
 }
 
-// TestStopAgent_Idempotent 验证 StopAgent 可重复调用。
+// TestStopAgent_Idempotent verifies that StopAgent can be called repeatedly.
 func TestStopAgent_Idempotent(t *testing.T) {
 	resetOnce()
 
@@ -538,11 +552,13 @@ func TestStopAgent_Idempotent(t *testing.T) {
 	assert.Nil(t, currentAgent)
 }
 
-// TestStopAgent_ClosesFileExporter 回归测试：StopAgent 必须调用注册的 closers
-// 释放 file 导出器的文件句柄。
+// TestStopAgent_ClosesFileExporter is a regression test: StopAgent must invoke the
+// registered closers to release the file handle of the file exporter.
 //
-// 历史缺陷：closer 存在包级变量 fileCloser 中，StopAgent 从不调用它，
-// 文件句柄在进程生命周期内不释放（且重复启动会覆盖变量，先前句柄彻底丢失）。
+// Historical defect: the closer lived in the package-level variable fileCloser, which
+// StopAgent never called, so the file handle was never released for the lifetime of the
+// process (and repeated starts overwrote the variable, losing the earlier handle for
+// good).
 func TestStopAgent_ClosesFileExporter(t *testing.T) {
 	resetOnce()
 	t.Cleanup(resetOnce)
@@ -554,7 +570,7 @@ func TestStopAgent_ClosesFileExporter(t *testing.T) {
 	require.NotNil(t, currentAgent)
 	require.Len(t, currentAgent.closers, 1, "file exporter must register a closer")
 
-	// 用哨兵替换 closer，验证 StopAgent 确实调用了它
+	// Replace the closer with a sentinel to verify StopAgent really calls it
 	called := atomic.Int32{}
 	currentAgent.closers[0] = func() error {
 		called.Add(1)
@@ -568,8 +584,9 @@ func TestStopAgent_ClosesFileExporter(t *testing.T) {
 	assert.Nil(t, currentAgent)
 }
 
-// TestStopAgent_ClosesRealFileHandle 验证 file 导出器的句柄被真正释放：
-// 关闭后再次以同一路径启动仍可正常工作（不会因句柄泄漏而失败）。
+// TestStopAgent_ClosesRealFileHandle verifies that the file exporter handle is really
+// released: starting again with the same path after closing still works (it does not
+// fail because of a leaked handle).
 func TestStopAgent_ClosesRealFileHandle(t *testing.T) {
 	resetOnce()
 	t.Cleanup(resetOnce)
@@ -577,7 +594,8 @@ func TestStopAgent_ClosesRealFileHandle(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/trace.log"
 
-	// 反复启动/停止，模拟配置重载；若有句柄泄漏，此处能暴露资源累积
+	// Start/stop repeatedly to simulate a config reload; a handle leak would show up as
+	// accumulating resources here
 	for i := 0; i < 20; i++ {
 		StartAgent(Config{Name: "s", Endpoint: path, Batcher: BatcherFile, Sampler: 1.0})
 		require.NotNil(t, currentAgent, "iteration %d", i)
@@ -585,12 +603,13 @@ func TestStopAgent_ClosesRealFileHandle(t *testing.T) {
 		require.Nil(t, currentAgent, "iteration %d", i)
 	}
 
-	// 文件应存在且可读
+	// The file should exist and be readable
 	_, err := os.Stat(path)
 	require.NoError(t, err)
 }
 
-// TestStartAgent_Concurrent 验证并发 StartAgent/StopAgent 不产生竞争或 panic。
+// TestStartAgent_Concurrent verifies that concurrent StartAgent/StopAgent calls do not
+// race or panic.
 func TestStartAgent_Concurrent(t *testing.T) {
 	resetOnce()
 	t.Cleanup(resetOnce)
@@ -621,12 +640,12 @@ func TestStartAgent_Concurrent(t *testing.T) {
 	StopAgent()
 }
 
-// newGRPCMetadata 创建一个空的 gRPC metadata。
+// newGRPCMetadata creates an empty gRPC metadata.
 func newGRPCMetadata() metadata.MD {
 	return metadata.MD{}
 }
 
-// readFile 读取文件内容。
+// readFile reads the file contents.
 func readFile(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

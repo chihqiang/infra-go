@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// dialWs 连接到测试服务器并返回 WebSocket 连接。
+// dialWs connects to the test server and returns the WebSocket connection.
 func dialWs(t *testing.T, url string) *gws.Conn {
 	t.Helper()
 	dialer := gws.Dialer{HandshakeTimeout: 5 * time.Second}
@@ -22,7 +22,7 @@ func dialWs(t *testing.T, url string) *gws.Conn {
 	return ws
 }
 
-// echoHandler 回声处理器，将收到的消息原样返回。
+// echoHandler is an echo handler that writes received messages back unchanged.
 type echoHandler struct{}
 
 func (h *echoHandler) HandleOpen(conn *Conn) {}
@@ -32,7 +32,7 @@ func (h *echoHandler) HandleMessage(conn *Conn, messageType int, data []byte) {
 func (h *echoHandler) HandleClose(conn *Conn, err error) {}
 func (h *echoHandler) HandleError(conn *Conn, err error) {}
 
-// 确保 echoHandler 实现了 Handler 接口
+// Ensure that echoHandler implements the Handler interface
 var _ Handler = (*echoHandler)(nil)
 
 func newTestServer(handler Handler) *Server {
@@ -42,13 +42,14 @@ func newTestServer(handler Handler) *Server {
 	}, handler)
 }
 
-// wsURL 返回测试服务器的 WebSocket 地址。
+// wsURL returns the WebSocket URL of the test server.
 func wsURL(ts *httptest.Server) string {
 	return "ws" + ts.URL[len("http"):]
 }
 
-// waitForOpens 等待服务端完成 n 个连接注册（HandleOpen 在 conns.Store 之后调用），
-// 避免测试因"广播早于注册"而偶发失败。
+// waitForOpens waits until the server has registered n connections (HandleOpen is called
+// after conns.Store), so that a test does not fail intermittently when a broadcast happens
+// before registration.
 func waitForOpens(t *testing.T, opened <-chan struct{}, n int) {
 	t.Helper()
 	for i := 0; i < n; i++ {
@@ -60,10 +61,10 @@ func waitForOpens(t *testing.T, opened <-chan struct{}, n int) {
 	}
 }
 
-// --- Server 端到端测试 ---
+// --- Server end-to-end tests ---
 
 func TestServer_EchoHandler(t *testing.T) {
-	// 使用自定义 Handler 实现 echo
+	// Use a custom Handler to implement echo
 	handler := &echoHandler{}
 
 	srv := newTestServer(handler)
@@ -77,10 +78,10 @@ func TestServer_EchoHandler(t *testing.T) {
 	ws := dialWs(t, url)
 	defer ws.Close()
 
-	// 发送消息
+	// Send a message
 	require.NoError(t, ws.WriteMessage(gws.TextMessage, []byte("hello")))
 
-	// 读取回声
+	// Read the echo back
 	_, data, err := ws.ReadMessage()
 	require.NoError(t, err)
 	assert.Equal(t, "hello", string(data))
@@ -89,7 +90,7 @@ func TestServer_EchoHandler(t *testing.T) {
 func TestServer_RoomBroadcast(t *testing.T) {
 	handler := NewEventHandler()
 
-	// 当收到 "join" 事件时，将连接加入房间
+	// When the "join" event arrives, add the connection to the room
 	handler.Handle("join", func(conn *Conn, data json.RawMessage) {
 		var room string
 		_ = json.Unmarshal(data, &room)
@@ -105,24 +106,24 @@ func TestServer_RoomBroadcast(t *testing.T) {
 
 	url := wsURL(ts)
 
-	// 客户端 1 加入 room1
+	// Client 1 joins room1
 	ws1 := dialWs(t, url)
 	defer ws1.Close()
 	ws1.WriteJSON(MustNewEvent("join", "room1"))
 
-	// 等待确认
+	// Wait for the confirmation
 	_, _, _ = ws1.ReadMessage()
 
-	// 客户端 2 加入 room1
+	// Client 2 joins room1
 	ws2 := dialWs(t, url)
 	defer ws2.Close()
 	ws2.WriteJSON(MustNewEvent("join", "room1"))
 	_, _, _ = ws2.ReadMessage()
 
-	// 广播消息到 room1
+	// Broadcast a message to room1
 	require.NoError(t, srv.To("room1").PushText("broadcast msg"))
 
-	// 两个客户端都应收到消息
+	// Both clients must receive the message
 	ws1.SetReadDeadline(time.Now().Add(2 * time.Second))
 	_, data1, err := ws1.ReadMessage()
 	require.NoError(t, err)
@@ -172,9 +173,10 @@ func TestServer_Emit(t *testing.T) {
 func TestServer_BroadcastToAll(t *testing.T) {
 	handler := NewEventHandler()
 
-	// 客户端握手完成不代表服务端已把连接注册进 conns：
-	// ServeHTTP 在 HandleOpen 之前才 Store，因此用 OnOpen 作为注册完成的信号，
-	// 否则广播可能早于注册发生，导致连接漏收（测试偶发超时）。
+	// A completed client handshake does not mean the server has registered the connection
+	// in conns: ServeHTTP stores it before HandleOpen, so OnOpen is used as the signal
+	// that registration is done; otherwise the broadcast could happen before registration
+	// and the connection would miss the message (an intermittent test timeout).
 	opened := make(chan struct{}, 2)
 	handler.OnOpen(func(conn *Conn) { opened <- struct{}{} })
 
@@ -194,7 +196,7 @@ func TestServer_BroadcastToAll(t *testing.T) {
 
 	waitForOpens(t, opened, 2)
 
-	// 广播到所有连接
+	// Broadcast to all connections
 	srv.BroadcastText("hello all")
 
 	ws1.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -296,7 +298,7 @@ func TestServer_WithRedisRoom(t *testing.T) {
 	ws2.WriteJSON(MustNewEvent("join", "lobby"))
 	_, _, _ = ws2.ReadMessage()
 
-	// 广播到 lobby 房间
+	// Broadcast to the lobby room
 	require.NoError(t, srv.To("lobby").PushText("redis broadcast"))
 
 	ws1.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -314,7 +316,7 @@ func TestServer_ConcurrentWrite(t *testing.T) {
 	handler := NewEventHandler()
 
 	handler.Handle("start", func(conn *Conn, data json.RawMessage) {
-		// 并发写入
+		// Concurrent writes
 		var wg sync.WaitGroup
 		for i := 0; i < 10; i++ {
 			wg.Add(1)
@@ -355,18 +357,19 @@ func TestServer_Context(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 确保可以传入 context 来控制生命周期（未来扩展）
+	// Verify that a context can be passed in to control the lifecycle (future extension)
 	assert.NotNil(t, ctx)
 }
 
-// --- 集群 ID 唯一性测试 ---
+// --- Cluster ID uniqueness tests ---
 
-// nodeIDFromConnID 从连接 ID 中提取节点 ID，供断言 nextConnID 的编码方式。
+// nodeIDFromConnID extracts the node ID from a connection ID, used to assert how
+// nextConnID encodes it.
 func nodeIDFromConnID(id ConnID) uint16 {
 	return uint16(id >> 32)
 }
 
-// localIDFromConnID 从连接 ID 中提取本地计数器部分。
+// localIDFromConnID extracts the local counter part from a connection ID.
 func localIDFromConnID(id ConnID) uint32 {
 	return uint32(id & 0xFFFFFFFF)
 }
@@ -381,40 +384,40 @@ func TestServer_ConnID_UniqueSingleNode(t *testing.T) {
 
 	assert.NotEqual(t, id1, id2)
 	assert.NotEqual(t, id2, id3)
-	assert.Equal(t, uint16(0), nodeIDFromConnID(id1)) // 默认 NodeID=0
+	assert.Equal(t, uint16(0), nodeIDFromConnID(id1)) // default NodeID=0
 	assert.Equal(t, uint32(1), localIDFromConnID(id1))
 	assert.Equal(t, uint32(2), localIDFromConnID(id2))
 	assert.Equal(t, uint32(3), localIDFromConnID(id3))
 }
 
 func TestServer_ConnID_ClusterUniqueness(t *testing.T) {
-	// 模拟两个节点
+	// Simulate two nodes
 	srv1 := MustNew(Config{NodeID: 1}, NewEventHandler())
 	defer srv1.Close()
 
 	srv2 := MustNew(Config{NodeID: 2}, NewEventHandler())
 	defer srv2.Close()
 
-	// 各自生成 ID
+	// Generate IDs on each node
 	id1a := srv1.nextConnID()
 	id1b := srv1.nextConnID()
 	id2a := srv2.nextConnID()
 	id2b := srv2.nextConnID()
 
-	// 节点 1 的 ID 高 32 位为 1
+	// The high 32 bits of node 1's IDs are 1
 	assert.Equal(t, uint16(1), nodeIDFromConnID(id1a))
 	assert.Equal(t, uint16(1), nodeIDFromConnID(id1b))
 
-	// 节点 2 的 ID 高 32 位为 2
+	// The high 32 bits of node 2's IDs are 2
 	assert.Equal(t, uint16(2), nodeIDFromConnID(id2a))
 	assert.Equal(t, uint16(2), nodeIDFromConnID(id2b))
 
-	// 全局唯一：不同节点的 ID 不重叠
+	// Globally unique: IDs of different nodes never overlap
 	assert.NotEqual(t, id1a, id2a)
 	assert.NotEqual(t, id1a, id2b)
 	assert.NotEqual(t, id1b, id2a)
 
-	// 同节点的 ID 局部递增
+	// IDs of the same node increase locally
 	assert.True(t, localIDFromConnID(id1b) > localIDFromConnID(id1a))
 	assert.True(t, localIDFromConnID(id2b) > localIDFromConnID(id2a))
 }

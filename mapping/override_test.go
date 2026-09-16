@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- FillAndOverride 测试 ---
+// --- FillAndOverride tests ---
 
 func TestFillAndOverride_Basic(t *testing.T) {
 	type Config struct {
@@ -23,8 +23,8 @@ func TestFillAndOverride_Basic(t *testing.T) {
 		Timeout: 10 * time.Second,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "127.0.0.1", c.Host) // 非零覆盖
-	assert.Equal(t, 8080, c.Port)        // 零值保留默认
+	assert.Equal(t, "127.0.0.1", c.Host) // non-zero overrides
+	assert.Equal(t, 8080, c.Port)        // a zero value keeps the default
 	assert.Equal(t, 10*time.Second, c.Timeout)
 }
 
@@ -34,7 +34,7 @@ func TestFillAndOverride_ZeroValueKeepsDefault(t *testing.T) {
 		Port int    `json:",default=8080"`
 	}
 
-	// overrides 全零值：应保留默认
+	// overrides is all zero values: defaults must be kept
 	var c Config
 	err := FillAndOverride(&c, Config{})
 	require.NoError(t, err)
@@ -47,7 +47,7 @@ func TestFillAndOverride_StringEmptyKeepsDefault(t *testing.T) {
 		Host string `json:",default=localhost"`
 	}
 
-	// string 空值视为未设置，不覆盖默认
+	// An empty string counts as unset and does not override the default
 	var c Config
 	err := FillAndOverride(&c, Config{Host: ""})
 	require.NoError(t, err)
@@ -59,7 +59,8 @@ func TestFillAndOverride_OptionalStringAlwaysOverrides(t *testing.T) {
 		Secret string `json:",optional"`
 	}
 
-	// optional 且无 default 的 string：空字符串也视为有效值（始终覆盖）
+	// A string that is optional without default: an empty string also counts as a
+	// valid value (always overrides)
 	var c Config
 	err := FillAndOverride(&c, Config{Secret: "s3cret"})
 	require.NoError(t, err)
@@ -88,7 +89,7 @@ func TestFillAndOverride_NestedStruct(t *testing.T) {
 		DB DB `json:"db"`
 	}
 
-	// 嵌套结构体仅覆盖非零子字段
+	// A nested struct only overrides its non-zero sub-fields
 	var c Config
 	err := FillAndOverride(&c, Config{DB: DB{Port: 5432}})
 	require.NoError(t, err)
@@ -122,11 +123,12 @@ func TestFillAndOverride_NotPointer(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- 回归：nil / 类型化 nil / 匿名嵌入指针（此前均 panic）---
+// --- Regression: nil / typed nil / anonymous embedded pointers (all used to panic) ---
 
-// TestFillAndOverride_NilOverrides 验证 overrides 为 nil 时仅填充默认值，不 panic。
-// 历史缺陷：reflect.ValueOf(nil) 得到无效值，取 Type() 时
-// panic "reflect: call of reflect.Value.Type on zero Value"。
+// TestFillAndOverride_NilOverrides verifies that a nil overrides only fills
+// defaults and does not panic.
+// Historic defect: reflect.ValueOf(nil) yields an invalid value, and Type()
+// panicked with "reflect: call of reflect.Value.Type on zero Value".
 func TestFillAndOverride_NilOverrides(t *testing.T) {
 	type Config struct {
 		Host string `json:",default=localhost"`
@@ -141,7 +143,8 @@ func TestFillAndOverride_NilOverrides(t *testing.T) {
 	assert.Equal(t, 8080, c.Port)
 }
 
-// TestFillAndOverride_TypedNilOverrides 验证类型化 nil 指针同样视为"无覆盖"。
+// TestFillAndOverride_TypedNilOverrides verifies that a typed nil pointer also
+// counts as "no override".
 func TestFillAndOverride_TypedNilOverrides(t *testing.T) {
 	type Config struct {
 		Host string `json:",default=localhost"`
@@ -157,10 +160,10 @@ func TestFillAndOverride_TypedNilOverrides(t *testing.T) {
 	assert.Equal(t, 8080, c.Port)
 }
 
-// TestFillAndOverride_AnonymousPtrField 验证匿名嵌入指针结构体可被递归覆盖，
-// 且默认值得以保留。
-// 历史缺陷：递归时未解引用，在 Ptr 值上调用 Field(i) 会
-// panic "reflect: call of reflect.Value.Field on ptr Value"。
+// TestFillAndOverride_AnonymousPtrField verifies that an anonymous embedded
+// pointer struct can be overridden recursively with its defaults preserved.
+// Historic defect: the recursion did not dereference, and calling Field(i) on a
+// Ptr value panicked with "reflect: call of reflect.Value.Field on ptr Value".
 func TestFillAndOverride_AnonymousPtrField(t *testing.T) {
 	type Base struct {
 		Host string `json:",default=0.0.0.0"`
@@ -190,7 +193,8 @@ func TestFillAndOverride_AnonymousPtrField(t *testing.T) {
 		require.NotPanics(t, func() {
 			require.NoError(t, FillAndOverride(&c, Server{Name: "api"}))
 		})
-		// 默认值来自 FillDefault（嵌入指针由 mapping 分配），override 为 nil 时不覆盖
+		// The default comes from FillDefault (mapping allocates the embedded
+		// pointer); a nil override does not override
 		assert.Equal(t, "api", c.Name)
 		if c.Base != nil {
 			assert.Equal(t, "0.0.0.0", c.Host)
@@ -198,8 +202,9 @@ func TestFillAndOverride_AnonymousPtrField(t *testing.T) {
 	})
 }
 
-// TestFillAndOverride_AnonymousPtrFieldNestedNonZero 验证匿名嵌入指针的
-// 非零子字段覆盖与默认值保留同时成立。
+// TestFillAndOverride_AnonymousPtrFieldNestedNonZero verifies that overriding a
+// non-zero sub-field of an anonymous embedded pointer and preserving defaults
+// both hold at the same time.
 func TestFillAndOverride_AnonymousPtrFieldNestedNonZero(t *testing.T) {
 	type Base struct {
 		Host string `json:",default=localhost"`
@@ -252,14 +257,14 @@ func TestMustFillAndOverride_Panic(t *testing.T) {
 	})
 }
 
-// --- 补充：覆盖语义分支 ---
+// --- Additional coverage: override semantics branches ---
 
 func TestFillAndOverride_OverridesPointer(t *testing.T) {
 	type Config struct {
 		Host string `json:",default=0.0.0.0"`
 	}
 	var c Config
-	// overrides 传指针也应正常解引用
+	// A pointer passed as overrides must be dereferenced properly
 	err := FillAndOverride(&c, &Config{Host: "1.1.1.1"})
 	assert.NoError(t, err)
 	assert.Equal(t, "1.1.1.1", c.Host)
@@ -270,12 +275,12 @@ func TestFillAndOverride_BoolField(t *testing.T) {
 		Verbose bool `json:",optional"`
 	}
 	var c Config
-	// true 覆盖
+	// true overrides
 	err := FillAndOverride(&c, Config{Verbose: true})
 	assert.NoError(t, err)
 	assert.True(t, c.Verbose)
 
-	// false 视为未设置 → 保留零值
+	// false counts as unset -> the zero value is kept
 	var c2 Config
 	err = FillAndOverride(&c2, Config{Verbose: false})
 	assert.NoError(t, err)
@@ -299,12 +304,12 @@ func TestFillAndOverride_SliceField(t *testing.T) {
 		Tags []string `json:",optional"`
 	}
 	var c Config
-	// 非空 slice 覆盖
+	// A non-empty slice overrides
 	err := FillAndOverride(&c, Config{Tags: []string{"a"}})
 	assert.NoError(t, err)
 	assert.Equal(t, []string{"a"}, c.Tags)
 
-	// 空 slice 视为未设置 → 不覆盖（保持 nil）
+	// An empty slice counts as unset -> no override (stays nil)
 	var c2 Config
 	err = FillAndOverride(&c2, Config{Tags: []string{}})
 	assert.NoError(t, err)
@@ -316,7 +321,7 @@ func TestFillAndOverride_MapField(t *testing.T) {
 		Labels map[string]string `json:",optional"`
 	}
 	var c Config
-	// 非空 map 覆盖
+	// A non-empty map overrides
 	err := FillAndOverride(&c, Config{Labels: map[string]string{"a": "1"}})
 	assert.NoError(t, err)
 	assert.Equal(t, "1", c.Labels["a"])
@@ -325,12 +330,12 @@ func TestFillAndOverride_MapField(t *testing.T) {
 func TestFillAndOverride_UnexportedField(t *testing.T) {
 	type Config struct {
 		Host   string `json:",default=0.0.0.0"`
-		hidden string // 未导出字段应被覆盖逻辑跳过
+		hidden string // unexported fields must be skipped by the override logic
 	}
 	var c Config
-	c.hidden = "keep-me" // 设置初始值：若误处理未导出字段，该值会被 src 覆盖
+	c.hidden = "keep-me" // initial value: src would overwrite it if unexported fields were mishandled
 	err := FillAndOverride(&c, Config{hidden: "drop-me"})
 	assert.NoError(t, err)
-	assert.Equal(t, "0.0.0.0", c.Host)   // 导出字段仍按 default 填充
-	assert.Equal(t, "keep-me", c.hidden) // 未导出字段保持原值，未被覆盖
+	assert.Equal(t, "0.0.0.0", c.Host)   // exported fields are still filled from the default
+	assert.Equal(t, "keep-me", c.hidden) // unexported fields keep their value, untouched
 }

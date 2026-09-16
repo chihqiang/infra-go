@@ -6,61 +6,68 @@ import (
 	"github.com/chihqiang/infra-go/mapping"
 )
 
-// --- 默认常量 ---
+// --- Default constants ---
 
 const (
-	// roomTypeRedis Redis 房间类型（用于 switch 判断）。
+	// roomTypeRedis is the Redis room type (used in switch statements).
 	roomTypeRedis = "redis"
 )
 
-// Config WebSocket 服务配置。
-// 默认值通过结构体标签 default 定义，遵循 conf 标准。
-// 零值字段在 New 时会自动填充默认值。
+// Config is the WebSocket server configuration.
+// Default values are defined by `default` struct tags, following the conf standard.
+// Zero-value fields are filled with defaults automatically in New.
 type Config struct {
-	// PingInterval 心跳检测间隔，默认 25 秒。
-	// 服务器每隔此间隔向客户端发送 Ping 帧，客户端需在 PingTimeout 内回复 Pong。
+	// PingInterval is the heartbeat interval, 25 seconds by default.
+	// The server sends a Ping frame to the client at this interval and the client must
+	// reply with a Pong within PingTimeout.
 	PingInterval time.Duration `json:",default=25s"`
-	// PingTimeout 心跳超时时间，默认 60 秒。
-	// 超过此时间未收到客户端消息或 Pong，则断开连接。
+	// PingTimeout is the heartbeat timeout, 60 seconds by default.
+	// The connection is closed when no client message or Pong arrives within this time.
 	PingTimeout time.Duration `json:",default=60s"`
-	// ReadBufferSize 读缓冲区大小（字节），默认 4096。
+	// ReadBufferSize is the read buffer size in bytes, 4096 by default.
 	ReadBufferSize int `json:",default=4096"`
-	// WriteBufferSize 写缓冲区大小（字节），默认 4096。
+	// WriteBufferSize is the write buffer size in bytes, 4096 by default.
 	WriteBufferSize int `json:",default=4096"`
-	// WriteTimeout 单次写操作的超时时间，默认 10 秒。
+	// WriteTimeout is the timeout of a single write operation, 10 seconds by default.
 	//
-	// 每次写入前会设置写截止时间。缺少该限制时，一个写缓冲区已满且不读数据的
-	// 客户端会让 WriteMessage 无限阻塞，且期间持有连接的写锁，
-	// 连带阻塞广播、Conn.Close、心跳 goroutine 与 Server.Close。
-	// 设为负值可禁用写超时（不推荐，仅用于兼容极端场景）。
+	// A write deadline is set before every write. Without this limit, a client whose
+	// write buffer is full and that does not read data would make WriteMessage block
+	// forever while holding the write lock of the connection, which in turn blocks
+	// broadcasts, Conn.Close, the heartbeat goroutine and Server.Close.
+	// A negative value disables the write timeout (not recommended, only for
+	// compatibility with extreme cases).
 	WriteTimeout time.Duration `json:",default=10s"`
-	// MaxMessageSize 单条消息最大大小（字节），默认 4096。
-	// 超过此大小的消息会被拒绝。
+	// MaxMessageSize is the maximum size of a single message in bytes, 4096 by default.
+	// Messages larger than this are rejected.
 	MaxMessageSize int64 `json:",default=4096"`
-	// NodeID 节点 ID，用于集群部署时区分不同实例，默认 0。
-	// 集群部署时每个实例必须设置不同的 NodeID（取值范围 0~65535），
-	// 连接 ID 编码为 nodeID<<32 | localCounter，保证全局唯一。
-	// 单机部署时保持默认值 0 即可。
+	// NodeID is the node ID, used to distinguish instances in a cluster deployment;
+	// 0 by default.
+	// In a cluster deployment every instance must use a different NodeID (0~65535);
+	// the connection ID is encoded as nodeID<<32 | localCounter to stay globally unique.
+	// Keep the default 0 for a standalone deployment.
 	NodeID uint16 `json:",optional"`
-	// RoomType 房间存储类型，支持 "memory" 和 "redis"，默认 "memory"。
-	// memory 适用于单机部署，redis 适用于多实例部署。
+	// RoomType is the room storage type; "memory" and "redis" are supported,
+	// "memory" by default.
+	// memory fits a standalone deployment, redis fits a multi-instance deployment.
 	RoomType string `json:",default=memory"`
-	// RoomPrefix Redis 房间键前缀，默认 "ws:room:"。
-	// 仅在 RoomType 为 "redis" 时生效。
+	// RoomPrefix is the Redis room key prefix, "ws:room:" by default.
+	// It only takes effect when RoomType is "redis".
 	RoomPrefix string `json:",default=ws:room:"`
-	// RedisAddr Redis 地址，默认 "127.0.0.1:6379"。
-	// 仅在 RoomType 为 "redis" 且未通过 WithRedisClient 传入客户端时使用。
+	// RedisAddr is the Redis address, "127.0.0.1:6379" by default.
+	// It is only used when RoomType is "redis" and no client is passed through
+	// WithRedisClient.
 	RedisAddr string `json:",default=127.0.0.1:6379"`
-	// RedisPassword Redis 密码，默认空。
+	// RedisPassword is the Redis password, empty by default.
 	RedisPassword string `json:",optional"`
-	// RedisDB Redis 数据库编号，默认 0。
+	// RedisDB is the Redis database number, 0 by default.
 	RedisDB int `json:",optional"`
 }
 
-// fillDefaultUnmarshaler 用于填充默认值的反序列化器。
+// fillDefaultUnmarshaler is the unmarshaler used to fill in default values.
 var fillDefaultUnmarshaler = mapping.NewDefaultUnmarshaler()
 
-// fillDefault 填充默认值，然后用用户配置中的非零字段覆盖。
+// fillDefault fills in the default values, then overrides them with the non-zero
+// fields from the user configuration.
 func fillDefault(cfg Config) Config {
 	var c Config
 	if err := fillDefaultUnmarshaler.Unmarshal(map[string]any{}, &c); err != nil {

@@ -7,17 +7,17 @@ import (
 	"strings"
 )
 
-// --- 布尔转换 ---
+// --- Boolean conversion ---
 
-// ToBool 将 any 转换为 bool，转换失败返回 false。
-// 支持 bool、string（"true"/"1"）、int（非零为 true）。
+// ToBool converts any to bool, returning false if the conversion fails.
+// Supports bool, string ("true"/"1") and int (non-zero is true).
 func ToBool(v any) bool {
 	val, _ := ToBoolE(v)
 	return val
 }
 
-// ToBoolE 将 any 转换为 bool，返回转换结果和错误。
-// 字符串支持：1/t/T/true/TRUE/True → true，0/f/F/false/FALSE/False → false。
+// ToBoolE converts any to bool and returns the result along with an error.
+// Supported strings: 1/t/T/true/TRUE/True → true, 0/f/F/false/FALSE/False → false.
 func ToBoolE(v any) (bool, error) {
 	switch val := v.(type) {
 	case nil:

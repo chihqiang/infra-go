@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// 对应 route_breaker.go：按路由隔离的熔断中间件。
+// Covers route_breaker.go: the middleware that isolates circuit breaking per route.
 
 func TestRouteBreaker_Allows(t *testing.T) {
 	silenceLogger(t)
@@ -20,7 +20,7 @@ func TestRouteBreaker_Allows(t *testing.T) {
 
 func TestRouteBreaker_Isolation(t *testing.T) {
 	silenceLogger(t)
-	// 同一中间件下：/fail 熔断不影响 /ok（按 METHOD:path 隔离）
+	// under one middleware instance: breaking /fail does not affect /ok (isolated by METHOD:path)
 	mw := NewRouteBreaker().Middleware()
 	fail := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusInternalServerError) }
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
@@ -32,9 +32,9 @@ func TestRouteBreaker_Isolation(t *testing.T) {
 			break
 		}
 	}
-	assert.True(t, rejected, "/fail 应最终被熔断")
+	assert.True(t, rejected, "/fail must eventually be circuit-broken")
 
-	// 隔离生效：/ok 仍可正常通过
+	// isolation works: /ok still goes through normally
 	rec := perform(mw, ok, httptest.NewRequest(http.MethodGet, "/ok", nil))
 	assert.Equal(t, http.StatusOK, rec.Code)
 }

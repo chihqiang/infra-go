@@ -8,43 +8,44 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// Field 日志字段，用于结构化日志的键值对传递。
-// 本类型是对底层实现的类型别名，用户无需关心其内部结构。
+// Field is a log field, used to pass key-value pairs into structured logging.
+// The type is an alias of the underlying implementation, so users need not care about
+// its internals.
 type Field = zap.Field
 
-// --- 字段构造函数 ---
+// --- Field constructors ---
 
-// String 创建一个 string 类型的日志字段。
+// String creates a log field of type string.
 func String(key, val string) Field { return zap.String(key, val) }
 
-// Int 创建一个 int 类型的日志字段。
+// Int creates a log field of type int.
 func Int(key string, val int) Field { return zap.Int(key, val) }
 
-// Int64 创建一个 int64 类型的日志字段。
+// Int64 creates a log field of type int64.
 func Int64(key string, val int64) Field { return zap.Int64(key, val) }
 
-// Float64 创建一个 float64 类型的日志字段。
+// Float64 creates a log field of type float64.
 func Float64(key string, val float64) Field { return zap.Float64(key, val) }
 
-// Bool 创建一个 bool 类型的日志字段。
+// Bool creates a log field of type bool.
 func Bool(key string, val bool) Field { return zap.Bool(key, val) }
 
-// Duration 创建一个 time.Duration 类型的日志字段。
+// Duration creates a log field of type time.Duration.
 func Duration(key string, val time.Duration) Field { return zap.Duration(key, val) }
 
-// Time 创建一个 time.Time 类型的日志字段。
+// Time creates a log field of type time.Time.
 func Time(key string, val time.Time) Field { return zap.Time(key, val) }
 
-// Any 创建一个任意类型的日志字段。
+// Any creates a log field holding a value of any type.
 func Any(key string, val any) Field { return zap.Any(key, val) }
 
-// Err 创建一个 error 类型的日志字段，固定键名为 "error"。
+// Err creates a log field of type error, with the fixed key name "error".
 func Err(err error) Field { return zap.Error(err) }
 
-// Level 日志级别类型。
+// Level is the log level type.
 type Level = zapcore.Level
 
-// 支持的日志级别。
+// Supported log levels.
 const (
 	DebugLevel  Level = zapcore.DebugLevel
 	InfoLevel   Level = zapcore.InfoLevel
@@ -55,8 +56,8 @@ const (
 	FatalLevel  Level = zapcore.FatalLevel
 )
 
-// Logger 定义日志记录器核心接口。
-// 所有实现必须提供基本的日志方法与级别检查能力。
+// ILogger defines the core logger interface.
+// Every implementation must provide the basic log methods and level checking.
 type ILogger interface {
 	Debug(msg string, fields ...Field)
 	Info(msg string, fields ...Field)

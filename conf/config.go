@@ -9,14 +9,15 @@ import (
 	"github.com/chihqiang/infra-go/mapping"
 )
 
-// FillDefault 为给定结构体填充默认值和环境变量。
-// 前提是结构体的所有字段必须为零值。
+// FillDefault fills default values and environment variables into the given struct.
+// It requires all fields of the struct to be zero values.
 func FillDefault(v any) error {
 	return mapping.FillDefault(v)
 }
 
-// Load 从文件加载配置到 v 中，支持 .json, .yaml, .yml 格式。
-// 可通过 opts 选项自定义加载行为，例如 UseEnv() 展开环境变量引用。
+// Load loads configuration from a file into v, supporting the .json, .yaml and .yml
+// formats. The loading behaviour can be customised through opts, e.g. UseEnv() to
+// expand environment variable references.
 func Load(file string, v any, opts ...Option) error {
 	content, err := os.ReadFile(file)
 	if err != nil {
@@ -37,8 +38,9 @@ func Load(file string, v any, opts ...Option) error {
 	return loadFromMap(m, v, opts...)
 }
 
-// loadFromMap 处理已解析的配置 map：按 opts 展开环境变量，再反序列化到 v 并校验。
-// 供 Load / LoadFromJSONBytes / LoadFromYAMLBytes 复用，保证各入口行为一致。
+// loadFromMap handles an already parsed config map: it expands environment variables
+// according to opts, then unmarshals into v and validates it. It is shared by Load /
+// LoadFromJSONBytes / LoadFromYAMLBytes so that every entry point behaves the same.
 func loadFromMap(m map[string]any, v any, opts ...Option) error {
 	var opt options
 	for _, o := range opts {
@@ -60,17 +62,21 @@ func loadFromMap(m map[string]any, v any, opts ...Option) error {
 	return validate(v)
 }
 
-// ExpandEnv 展开文本中的环境变量引用，支持：
-//   - ${VAR} / $VAR         未设置时展开为空字符串
-//   - ${VAR:-default}       当 VAR 未设置或为空时，展开为 default（字面值）
-//   - $$                    展开为字面量 $（转义）
+// ExpandEnv expands environment variable references in text. Supported forms:
+//   - ${VAR} / $VAR         expands to the empty string when unset
+//   - ${VAR:-default}       expands to default (a literal) when VAR is unset or empty
+//   - $$                    expands to a literal $ (escape)
 //
-// 供 conf 配合 UseEnv 内部调用；也可独立用于展开任意配置文本。
+// Used internally by conf together with UseEnv; it is also usable standalone
+// to expand arbitrary configuration text.
 //
-// 基于 os.Expand 实现：它已将 $VAR / ${VAR} 语法解析好，并把大括号内的整段内容
-// （如 "VAR:-default"）作为变量名传给回调，因此只需在回调中识别 :- 后缀即可。
-// os.Expand 把 "$" 当作单字符特殊变量，所以 "$$" 会以名字 "$" 回调，
-// 借此实现转义——否则配置中无法书写字面 $（如密码 "p$ssword" 会被吞成 "p"）。
+// Built on os.Expand: that already parses the $VAR / ${VAR} syntax and passes the
+// whole braced content (e.g. "VAR:-default") to the callback as the variable name,
+// so the callback only has to recognise the ":-" suffix.
+// os.Expand treats "$" as a single-character special variable, hence "$$" is passed
+// to the callback under the name "$". That is how escaping works -- otherwise a
+// literal $ could not be written in a config (a password "p$ssword" would be
+// swallowed down to "p").
 func ExpandEnv(s string) string {
 	return os.Expand(s, func(name string) string {
 		if name == expandDollarEscape {
@@ -87,24 +93,31 @@ func ExpandEnv(s string) string {
 	})
 }
 
-// expandDollarEscape 是 "$$" 在 os.Expand 回调中呈现的变量名。
+// expandDollarEscape is the variable name "$$" appears under in the os.Expand callback.
 const expandDollarEscape = "$"
 
-// expandEnvMap 递归展开配置树中所有字符串（含 map 的键）里的环境变量引用。
+// expandEnvMap recursively expands environment variable references in every string of
+// the config tree (including map keys).
 //
-// 为什么在解析之后展开，而不是解析前对原文做文本替换：
-// 解析前的文本替换会让环境变量的值参与语法解析，由此带来两类问题——
-//   - 配置中的字面 $ 被当成变量引用吞掉（"p$ssword" 变成 "p"）；
-//   - 环境变量的值能注入/改写配置结构（值中含 `","admin":true` 时新增一个键）。
+// Why expand after parsing instead of doing a textual replacement on the raw text
+// before parsing: a pre-parse textual replacement lets environment variable values
+// take part in syntax parsing, which causes two classes of problems --
+//   - a literal $ in the config is swallowed as a variable reference ("p$ssword" -> "p");
+//   - environment variable values can inject/rewrite the config structure (a value
+//     containing `","admin":true` adds a new key).
 //
-// 先解析、再改写字符串，环境变量的值只会落到某个字符串值或键名上，
-// 不会被重新解析，因此不存在上述问题。
+// Parsing first and rewriting the strings afterwards means environment variable values
+// only ever land in some string value or key name and are never re-parsed, so neither
+// problem can occur.
 //
-// 键同样会被展开（与旧行为保持一致）；由于不再重新解析，展开后的键只是一个
-// 普通键名，同样安全。若不同的键展开成同一个名字，返回错误而不是静默丢弃数据。
+// Keys are expanded as well (keeping the previous behaviour); because nothing is
+// re-parsed, an expanded key is just an ordinary key name and is equally safe. If two
+// different keys expand to the same name, an error is returned instead of silently
+// dropping data.
 //
-// 注意：环境变量的值一律作为字符串写入。若某个配置项需要数组或对象，
-// 请在配置文件中直接书写该结构，或在应用代码中自行解析这个字符串。
+// Note: environment variable values are always written as strings. If a config item
+// needs an array or an object, write that structure directly in the config file, or
+// parse this string yourself in application code.
 func expandEnvMap(m map[string]any) (map[string]any, error) {
 	if m == nil {
 		return nil, nil
@@ -124,7 +137,7 @@ func expandEnvMap(m map[string]any) (map[string]any, error) {
 	return result, nil
 }
 
-// expandEnvValue 展开单个配置值中的环境变量引用。
+// expandEnvValue expands environment variable references inside a single config value.
 func expandEnvValue(v any) (any, error) {
 	switch val := v.(type) {
 	case string:
@@ -146,14 +159,15 @@ func expandEnvValue(v any) (any, error) {
 	}
 }
 
-// MustLoad 从文件加载配置到 v 中，出错时直接 panic。
+// MustLoad loads configuration from a file into v and panics on error.
 func MustLoad(path string, v any, opts ...Option) {
 	if err := Load(path, v, opts...); err != nil {
 		panic(fmt.Errorf("failed to load config %s: %w", path, err))
 	}
 }
 
-// LoadFromJSONBytes 从 JSON 字节加载配置到 v 中，支持与 Load 相同的 opts（如 UseEnv）。
+// LoadFromJSONBytes loads configuration from JSON bytes into v. It supports the same
+// opts as Load (e.g. UseEnv).
 func LoadFromJSONBytes(content []byte, v any, opts ...Option) error {
 	m, err := loadFromJSONBytes(content)
 	if err != nil {
@@ -162,7 +176,8 @@ func LoadFromJSONBytes(content []byte, v any, opts ...Option) error {
 	return loadFromMap(m, v, opts...)
 }
 
-// LoadFromYAMLBytes 从 YAML 字节加载配置到 v 中，支持与 Load 相同的 opts（如 UseEnv）。
+// LoadFromYAMLBytes loads configuration from YAML bytes into v. It supports the same
+// opts as Load (e.g. UseEnv).
 func LoadFromYAMLBytes(content []byte, v any, opts ...Option) error {
 	m, err := loadFromYAMLBytes(content)
 	if err != nil {

@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- ToBool 测试 ---
+// --- ToBool tests ---
 
 func TestToBool(t *testing.T) {
 	tests := []struct {
@@ -42,7 +42,7 @@ func TestToBoolE_Error(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- 补充：ToBoolE 类型族与失败分支 ---
+// --- Additional coverage: ToBoolE type family and failure branches ---
 
 func TestToBoolE_TypeFamily(t *testing.T) {
 	cases := []struct {
@@ -78,12 +78,12 @@ func TestToBoolE_TypeFamily(t *testing.T) {
 }
 
 func TestToBoolE_Errors(t *testing.T) {
-	// json.Number 无法转 int64（含小数）→ 错误
+	// json.Number cannot be converted to int64 (has a fractional part) → error
 	_, err := ToBoolE(json.Number("1.5"))
 	assert.Error(t, err)
 	_, err = ToBoolE(json.Number("abc"))
 	assert.Error(t, err)
-	// 不支持的类型
+	// unsupported type
 	_, err = ToBoolE([]int{1})
 	assert.Error(t, err)
 }

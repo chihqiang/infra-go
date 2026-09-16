@@ -12,34 +12,38 @@ import (
 	"github.com/chihqiang/infra-go/syncx"
 )
 
-// 默认配置。
+// Default configuration.
 const (
-	// 默认过期时间：7 天，防止 Redis 中缓存无限堆积。
+	// Default expiry: 7 days, which keeps caches in Redis from piling up forever.
 	defaultRedisExpiry = time.Hour * 24 * 7
-	// 默认未命中占位符过期时间：1 分钟，避免热点不存在 key 反复穿透 DB。
+	// Default not-found placeholder expiry: 1 minute, so that a hot missing key does
+	// not penetrate to the DB over and over.
 	defaultRedisNotFoundExpiry = time.Minute
-	// 默认缓存名称，用于日志标识。
+	// Default cache name, used to identify the cache in logs.
 	defaultRedisCacheName = "redis_cache"
 )
 
-// notFoundPlaceholder 未命中占位符，用于防缓存穿透。
+// notFoundPlaceholder is the not-found placeholder used to prevent cache penetration.
 const notFoundPlaceholder = "*"
 
-// errPlaceholder 内部错误：命中未命中占位符。
-// 与 ErrNotFound 的区别在于：占位符表示"该 key 确认不存在"，
-// Take 命中占位符时不会再次穿透查询 DB。
+// errPlaceholder is an internal error: the not-found placeholder was hit.
+// It differs from ErrNotFound in that the placeholder means "this key is confirmed
+// absent", so Take will not penetrate to the DB again when it hits the placeholder.
 var errPlaceholder = errors.New("cache: placeholder")
 
-// RedisCache 是 Cache 接口的 Redis 实现。
+// RedisCache is the Redis implementation of the Cache interface.
 //
-// 特性：
-//   - 值以 JSON 序列化存储
-//   - 防缓存击穿：Take 通过 SingleFlight 合并相同 key 的并发请求
-//   - 防缓存穿透：查询无结果时写入短时占位符
-//   - 防缓存雪崩：过期时间带轻微抖动
-//   - 快速失败：Redis 故障时不穿透到 DB
+// Features:
+//   - Values are stored as JSON
+//   - Stampede protection: Take merges concurrent requests for the same key via
+//     SingleFlight
+//   - Penetration protection: a short-lived placeholder is written when a query
+//     returns nothing
+//   - Avalanche protection: expiries carry a slight jitter
+//   - Fail fast: a Redis failure does not penetrate to the DB
 //
-// 内存实现见 MemCache。两者均实现 Cache 接口，可在本地/分布式间切换。
+// See MemCache for the in-memory implementation. Both implement the Cache interface,
+// so you can switch between local and distributed caching.
 type RedisCache struct {
 	rds            *redisx.Client
 	expiry         time.Duration
@@ -49,36 +53,37 @@ type RedisCache struct {
 	name           string
 }
 
-// RedisCacheOption 用于自定义 Redis 缓存行为。
+// RedisCacheOption customizes the behaviour of the Redis cache.
 type RedisCacheOption func(*redisCacheOptions)
 
-// redisCacheOptions Redis 缓存内部选项。
+// redisCacheOptions holds the internal options of the Redis cache.
 type redisCacheOptions struct {
-	expiry         time.Duration // 默认过期时间
-	notFoundExpiry time.Duration // 未命中占位符过期时间
-	name           string        // 缓存名称，用于日志标识
+	expiry         time.Duration // default expiry
+	notFoundExpiry time.Duration // expiry of the not-found placeholder
+	name           string        // cache name, used to identify it in logs
 }
 
-// WithExpire 设置默认过期时间。
-// 未设置时默认 7 天。
+// WithExpire sets the default expiry.
+// It defaults to 7 days when unset.
 func WithExpire(d time.Duration) RedisCacheOption {
 	return func(o *redisCacheOptions) { o.expiry = d }
 }
 
-// WithNotFoundExpire 设置未命中占位符的过期时间。
-// 占位符用于防缓存穿透：查询无结果时短暂缓存"不存在"标记。
-// 未设置时默认 1 分钟。
+// WithNotFoundExpire sets the expiry of the not-found placeholder.
+// The placeholder prevents cache penetration: a query with no result briefly caches
+// a "not found" mark. It defaults to 1 minute when unset.
 func WithNotFoundExpire(d time.Duration) RedisCacheOption {
 	return func(o *redisCacheOptions) { o.notFoundExpiry = d }
 }
 
-// WithCacheName 设置缓存名称，用于日志标识。
+// WithCacheName sets the cache name, used to identify the cache in logs.
 func WithCacheName(name string) RedisCacheOption {
 	return func(o *redisCacheOptions) { o.name = name }
 }
 
-// NewRedisCache 创建并返回一个基于 Redis 的缓存实例。
-// rds 为 redisx 客户端；通过选项可定制默认过期时间、占位符过期时间、名称等。
+// NewRedisCache creates and returns a Redis-backed cache instance.
+// rds is the redisx client; the options customize the default expiry, the placeholder
+// expiry, the name, and so on.
 //
 //	var c cache.Cache = cache.NewRedisCache(rds, cache.WithExpire(time.Minute))
 func NewRedisCache(rds *redisx.Client, opts ...RedisCacheOption) *RedisCache {
@@ -106,7 +111,7 @@ func NewRedisCache(rds *redisx.Client, opts ...RedisCacheOption) *RedisCache {
 	}
 }
 
-// Get 返回指定 key 的值；未命中或命中占位符返回 ErrNotFound。
+// Get returns the value of key; a miss or a placeholder hit returns ErrNotFound.
 func (c *RedisCache) Get(ctx context.Context, key string) (any, error) {
 	v, err := c.doGet(ctx, key)
 	if errors.Is(err, errPlaceholder) {
@@ -115,12 +120,12 @@ func (c *RedisCache) Get(ctx context.Context, key string) (any, error) {
 	return v, err
 }
 
-// Set 将 value 写入缓存，使用默认过期时间。
+// Set writes value to the cache using the default expiry.
 func (c *RedisCache) Set(ctx context.Context, key string, value any) error {
 	return c.SetEx(ctx, key, value, c.expiry)
 }
 
-// SetEx 将 value 写入缓存并指定存活时间 ttl。
+// SetEx writes value to the cache with the given time to live ttl.
 func (c *RedisCache) SetEx(ctx context.Context, key string, value any, ttl time.Duration) error {
 	if ttl <= 0 {
 		ttl = c.expiry
@@ -132,7 +137,7 @@ func (c *RedisCache) SetEx(ctx context.Context, key string, value any, ttl time.
 	return c.rds.Set(ctx, key, string(data), c.aroundDuration(ttl))
 }
 
-// Delete 删除一个或多个 key。
+// Delete removes one or more keys.
 func (c *RedisCache) Delete(ctx context.Context, keys ...string) error {
 	if len(keys) == 0 {
 		return nil
@@ -141,30 +146,33 @@ func (c *RedisCache) Delete(ctx context.Context, keys ...string) error {
 	return err
 }
 
-// Take 返回 key 的值；未命中时调用 fetch 获取并写入缓存。
-// 防击穿：相同 key 并发只执行一次 fetch；
-// 防穿透：fetch 返回 ErrNotFound 时写入短时占位符；
-// 快速失败：Redis 故障时不穿透到 DB。
+// Take returns the value of key; on a miss it calls fetch and writes the result to
+// the cache.
+// Stampede protection: concurrent calls for the same key run fetch only once.
+// Penetration protection: when fetch returns ErrNotFound a short-lived placeholder is
+// written. Fail fast: a Redis failure does not penetrate to the DB.
 func (c *RedisCache) Take(ctx context.Context, key string, fetch func() (any, error)) (any, error) {
 	val, err := c.barrier.Do(key, func() (any, error) {
-		// 二次检查：等待期间可能已被其它并发请求写入
+		// Double check: another concurrent request may have written it while waiting
 		v, e := c.doGet(ctx, key)
 		if e == nil {
 			return v, nil
 		}
 		if errors.Is(e, errPlaceholder) {
-			// 命中占位符：该 key 确认不存在，直接返回未命中，不穿透 DB
+			// Placeholder hit: the key is confirmed absent, so return a miss and do not
+			// penetrate to the DB
 			return nil, ErrNotFound
 		}
 		if !errors.Is(e, ErrNotFound) {
-			// Redis 故障：快速失败，不把请求穿透到 DB
+			// Redis failure: fail fast instead of penetrating the request to the DB
 			return nil, e
 		}
 
 		v, e = fetch()
 		if e != nil {
 			if errors.Is(e, ErrNotFound) {
-				// DB 也无数据：写入短时占位符，防缓存穿透
+				// The DB has no data either: write a short-lived placeholder to prevent
+				// cache penetration
 				if err := c.setNotFound(ctx, key); err != nil {
 					logger.InfofCtx(ctx, "cache(%s): set not found placeholder failed, key: %s, error: %v",
 						c.name, key, err)
@@ -174,7 +182,8 @@ func (c *RedisCache) Take(ctx context.Context, key string, fetch func() (any, er
 			return nil, e
 		}
 
-		// 缓存写失败不影响主流程（与防击穿语义一致），仅记录日志
+		// A failed cache write does not affect the main flow (consistent with the
+		// stampede semantics), it is only logged
 		if err := c.SetEx(ctx, key, v, c.expiry); err != nil {
 			logger.InfofCtx(ctx, "cache(%s): set cache failed, key: %s, error: %v", c.name, key, err)
 		}
@@ -186,23 +195,26 @@ func (c *RedisCache) Take(ctx context.Context, key string, fetch func() (any, er
 	return val, nil
 }
 
-// Increment 将 key 对应的数值自增 delta；key 不存在时初始化为 delta。
-// 底层使用 Redis INCRBY，原子操作。
+// Increment adds delta to the numeric value of key; a missing key is initialized to
+// delta. It uses the atomic Redis INCRBY command underneath.
 func (c *RedisCache) Increment(ctx context.Context, key string, delta int64) error {
 	_, err := c.rds.IncrBy(ctx, key, delta)
 	return err
 }
 
-// Decrement 将 key 对应的数值自减 delta；key 不存在时初始化为 -delta。
-// 底层使用 Redis INCRBY 传负值，原子操作。
+// Decrement subtracts delta from the numeric value of key; a missing key is
+// initialized to -delta. It uses the atomic Redis INCRBY command with a negative
+// value underneath.
 func (c *RedisCache) Decrement(ctx context.Context, key string, delta int64) error {
 	_, err := c.rds.IncrBy(ctx, key, -delta)
 	return err
 }
 
-// Expire 为 key 设置存活时间 ttl，到期后自动失效。
-// ttl <= 0 时立即失效（删除该 key）；key 不存在返回 ErrNotFound。
-// 注意：Redis EXPIRE 精度为秒级，此处直接透传 ttl，不加抖动（避免被截断为 0 秒立即删除）。
+// Expire sets the time to live of key; the key expires automatically afterwards.
+// ttl <= 0 expires it immediately (the key is deleted); a missing key returns
+// ErrNotFound.
+// Note: Redis EXPIRE has second-level precision, so ttl is passed through without
+// jitter (which would be truncated to 0 seconds and delete the key immediately).
 func (c *RedisCache) Expire(ctx context.Context, key string, ttl time.Duration) error {
 	if ttl <= 0 {
 		_, err := c.rds.Del(ctx, key)
@@ -218,7 +230,8 @@ func (c *RedisCache) Expire(ctx context.Context, key string, ttl time.Duration) 
 	return nil
 }
 
-// doGet 内部读取：区分未命中（ErrNotFound）与占位符（errPlaceholder）。
+// doGet performs the internal read, distinguishing a miss (ErrNotFound) from a
+// placeholder hit (errPlaceholder).
 func (c *RedisCache) doGet(ctx context.Context, key string) (any, error) {
 	data, err := c.rds.Get(ctx, key)
 	if err != nil {
@@ -231,44 +244,52 @@ func (c *RedisCache) doGet(ctx context.Context, key string) (any, error) {
 		return nil, errPlaceholder
 	}
 
-	// 去泛型后无法在编译期知道目标类型，统一反序列化为 any。
-	// 解码启用 UseNumber（见 decodeUseNumber），JSON 数字保留为 json.Number
-	// 而非 float64，避免 int64 大整数（> 2^53）在 float64 往返中丢精度。
-	// 读取结构体/指针等复杂类型时需由调用方自行类型断言或转换（见 cache.md）。
+	// Without generics the target type is unknown at compile time, so everything is
+	// deserialized into any. Decoding enables UseNumber (see decodeUseNumber) so that
+	// JSON numbers stay json.Number instead of float64, keeping large int64 integers
+	// (> 2^53) from losing precision in a float64 round-trip. For complex types such as
+	// structs or pointers the caller has to type-assert or convert the result itself
+	// (see cache.md).
 	var v any
 	if err := decodeUseNumber(data, &v); err != nil {
-		// 反序列化失败：返回未命中让上层重新加载，但**不删除** key。
+		// Deserialization failed: return a miss so the caller reloads, but do NOT delete
+		// the key.
 		//
-		// 不能删：同一个 key 可能被其他组件以非 JSON 格式写入
-		// （如 redisx.Client.Set 存原始字符串）。自动删除会导致
-		// "对方刚写入就被本缓存删掉"的隐蔽故障，且难以定位。
-		// 真要处理脏数据，应由调用方判断后用 Delete 显式清理。
+		// It must not be deleted: the same key may have been written in a non-JSON format
+		// by another component (e.g. a raw string stored with redisx.Client.Set).
+		// Deleting it automatically would cause the subtle failure of "the other side
+		// just wrote it and this cache deleted it", which is hard to diagnose. If dirty
+		// data really needs to be cleaned up, the caller should decide and delete it
+		// explicitly with Delete.
 		logger.InfofCtx(ctx, "cache(%s): unmarshal cache failed, key: %s, error: %v", c.name, key, err)
 		return nil, ErrNotFound
 	}
 	return v, nil
 }
 
-// setNotFound 写入未命中占位符，带抖动过期时间。
+// setNotFound writes the not-found placeholder with a jittered expiry.
 func (c *RedisCache) setNotFound(ctx context.Context, key string) error {
 	_, err := c.rds.SetNX(ctx, key, notFoundPlaceholder, c.aroundDuration(c.notFoundExpiry))
 	return err
 }
 
-// aroundDuration 返回带抖动的过期时间，避免大量 key 同时过期（雪崩防护）。
+// aroundDuration returns a jittered expiry, preventing a large number of keys from
+// expiring at the same instant (avalanche protection).
 func (c *RedisCache) aroundDuration(d time.Duration) time.Duration {
 	return c.unstable.AroundDuration(d)
 }
 
-// decodeUseNumber 将 JSON 文本解码到 out，数字保留为 json.Number 而非 float64。
+// decodeUseNumber decodes JSON text into out, keeping numbers as json.Number instead
+// of float64.
 //
-// 为什么不直接用 json.Unmarshal：它把 JSON 数字统一解码为 float64。
-// float64 只有 53 位有效尾数，雪花 ID、纳秒时间戳等 int64 大整数（> 2^53）
-// 会在 Get 阶段就丢精度，且 GetAs 无法补救。
-// json.Number 是字符串别名，无损保留原始数字字面量，需要时可用 Int64/Float64
-// 转成具体数值类型；被 json.Marshal 编码时会原样写回（不加引号）。
+// Why not use json.Unmarshal directly: it decodes every JSON number into a float64.
+// A float64 has only a 53-bit significand, so large int64 integers (> 2^53) such as
+// snowflake IDs or nanosecond timestamps lose precision already at the Get stage,
+// which GetAs cannot repair. json.Number is a string alias that preserves the original
+// numeric literal losslessly; Int64/Float64 convert it to a concrete numeric type when
+// needed, and json.Marshal writes it back verbatim (without quotes).
 //
-// 严格性与 json.Unmarshal 保持一致：存在尾随垃圾内容时同样返回错误。
+// Strictness matches json.Unmarshal: trailing garbage content returns an error too.
 func decodeUseNumber(data string, out *any) error {
 	dec := json.NewDecoder(strings.NewReader(data))
 	dec.UseNumber()

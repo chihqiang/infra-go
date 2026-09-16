@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// jsonLogEntry 解析后的 JSON 日志条目。
+// jsonLogEntry is a parsed JSON log entry.
 type jsonLogEntry struct {
 	Level  string `json:"level"`
 	Msg    string `json:"msg"`
@@ -39,7 +39,7 @@ func readLogFile(t *testing.T, path string) string {
 	return string(data)
 }
 
-// closeLogger 类型断言后关闭 logger，用于测试中刷新文件输出。
+// closeLogger type-asserts and closes the logger, flushing file output in tests.
 func closeLogger(t *testing.T, l ILogger) {
 	t.Helper()
 	_ = l.(*Logger).Close()
@@ -68,7 +68,7 @@ func TestDefault(t *testing.T) {
 	require.NotNil(t, l)
 }
 
-// --- 输出目标 ---
+// --- Output targets ---
 
 func TestNew_FileOutput(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -124,7 +124,7 @@ func TestNew_DirectoryCreation(t *testing.T) {
 	assert.Contains(t, content, "deep path test")
 }
 
-// --- 级别过滤 ---
+// --- Level filtering ---
 
 func TestLogger_LevelFiltering(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -150,7 +150,7 @@ func TestLogger_LevelFiltering(t *testing.T) {
 	assert.Contains(t, lines[1], "should appear too")
 }
 
-// --- 结构化日志方法 ---
+// --- Structured logging methods ---
 
 func TestLogger_StructuredMethods(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -181,7 +181,7 @@ func TestLogger_StructuredMethods(t *testing.T) {
 	assert.Equal(t, "ERROR", parseJSONLog(t, lines[3]).Level)
 }
 
-// --- 格式化日志方法 ---
+// --- Formatted logging methods ---
 
 func TestLogger_FormatMethods(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -210,7 +210,7 @@ func TestLogger_FormatMethods(t *testing.T) {
 	assert.Contains(t, lines[3], "error 42")
 }
 
-// --- 带上下文的结构化日志 ---
+// --- Structured logging with context ---
 
 func TestLogger_ContextMethods(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -235,7 +235,7 @@ func TestLogger_ContextMethods(t *testing.T) {
 	assert.Contains(t, content, "ctx error")
 }
 
-// --- 带上下文的格式化日志 ---
+// --- Formatted logging with context ---
 
 func TestLogger_FormatContextMethods(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -258,7 +258,7 @@ func TestLogger_FormatContextMethods(t *testing.T) {
 	assert.Contains(t, content, "fctx warn msg")
 }
 
-// --- Console 编码 ---
+// --- Console encoding ---
 
 func TestLogger_ConsoleEncoding(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -327,7 +327,7 @@ func TestLogger_Sync(t *testing.T) {
 	_ = l.Sync()
 }
 
-// --- 全局 Logger ---
+// --- Global Logger ---
 
 func TestGlobal_Default(t *testing.T) {
 	g := GetGlobal()
@@ -410,7 +410,7 @@ func TestGlobal_Sync(t *testing.T) {
 	_ = Sync()
 }
 
-// --- 字段构造函数 ---
+// --- Field constructors ---
 
 func TestFieldConstructors(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -462,7 +462,7 @@ func TestFieldErr(t *testing.T) {
 	assert.Contains(t, content, assert.AnError.Error())
 }
 
-// --- 默认值填充 ---
+// --- Default value filling ---
 
 func TestFillDefault_AllDefaults(t *testing.T) {
 	c := fillDefault(Config{})
@@ -507,7 +507,7 @@ func TestFillDefault_UserOverrides(t *testing.T) {
 	assert.True(t, c.Rotation.LocalTime)
 }
 
-// --- 日志轮转 ---
+// --- Log rotation ---
 
 func TestRotation_FileSize(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -537,16 +537,17 @@ func TestRotation_FileSize(t *testing.T) {
 	assert.NotEmpty(t, matches, "should have backup log files after rotation")
 }
 
-// --- 接口合规性 ---
+// --- Interface compliance ---
 
 func TestILogger_Compliance(t *testing.T) {
 	var l ILogger = New(Config{})
 	assert.NotNil(t, l)
 }
 
-// --- 上下文字段提取器的注册与注销 ---
+// --- Registering and unregistering context field extractors ---
 
-// countFields 统计 extractContextFields 产出中指定 key 的出现次数。
+// countFields counts how many times the given key appears in the output of
+// extractContextFields.
 func countFields(t *testing.T, key string) int {
 	t.Helper()
 	n := 0
@@ -566,15 +567,16 @@ func TestRegisterContextExtractor_Unregister(t *testing.T) {
 	require.Equal(t, 1, countFields(t, key))
 
 	unregister()
-	assert.Equal(t, 0, countFields(t, key), "注销后不应再提取到该字段")
+	assert.Equal(t, 0, countFields(t, key), "the field must no longer be extracted after unregistering")
 
-	// 幂等：重复调用不应 panic，也不应影响其它提取器
+	// Idempotent: repeated calls must not panic and must not affect other extractors
 	assert.NotPanics(t, unregister)
 	assert.NotPanics(t, unregister)
 }
 
 func TestRegisterContextExtractor_UnregisterIsolated(t *testing.T) {
-	// 注销其中一个不应影响另一个（验证按条目标记而非按下标删除）
+	// Unregistering one must not affect the other (verifies per-entry flags rather than
+	// index-based deletion)
 	const keyA, keyB = "zz_test_iso_a", "zz_test_iso_b"
 	unregisterA := RegisterContextExtractor(func(context.Context) []Field {
 		return []Field{String(keyA, "v")}
@@ -586,19 +588,20 @@ func TestRegisterContextExtractor_UnregisterIsolated(t *testing.T) {
 
 	unregisterA()
 	assert.Equal(t, 0, countFields(t, keyA))
-	assert.Equal(t, 1, countFields(t, keyB), "注销 A 不应连带移除 B")
+	assert.Equal(t, 1, countFields(t, keyB), "unregistering A must not remove B")
 }
 
 func TestRegisterContextExtractor_Nil(t *testing.T) {
-	// nil 提取器不注册，返回的注销函数为空操作
+	// A nil extractor is not registered and the returned unregister function is a no-op
 	unregister := RegisterContextExtractor(nil)
 	require.NotNil(t, unregister)
 	assert.NotPanics(t, unregister)
 }
 
-// TestRegisterContextExtractor_DuplicateProducesDuplicateFields 锁定注册无法去重的
-// 事实：Go 中函数值不可比较，所以同一提取器注册两次会产生两份字段。
-// 这正是需要注销函数的原因。
+// TestRegisterContextExtractor_DuplicateProducesDuplicateFields pins down the fact that
+// registration cannot de-duplicate: function values are not comparable in Go, so
+// registering the same extractor twice produces two copies of its fields. That is exactly
+// why an unregister function is needed.
 func TestRegisterContextExtractor_DuplicateProducesDuplicateFields(t *testing.T) {
 	const key = "zz_test_dup"
 	extractor := func(context.Context) []Field { return []Field{String(key, "v")} }
@@ -607,14 +610,17 @@ func TestRegisterContextExtractor_DuplicateProducesDuplicateFields(t *testing.T)
 	unregister2 := RegisterContextExtractor(extractor)
 	t.Cleanup(func() { unregister1(); unregister2() })
 
-	assert.Equal(t, 2, countFields(t, key), "重复注册会产生重复字段，需用返回的注销函数撤销")
+	assert.Equal(t, 2, countFields(t, key),
+		"duplicate registration produces duplicate fields; the returned unregister function must undo it")
 
 	unregister1()
 	assert.Equal(t, 1, countFields(t, key))
 }
 
-// TestRegisterContextExtractor_Concurrent 验证注册/注销与提取并发时无数据竞争
-// （注销使用原子标记 + 整体替换切片头，不原地修改正在被遍历的底层数组）。
+// TestRegisterContextExtractor_Concurrent verifies there is no data race when
+// registering/unregistering runs concurrently with extraction (unregistering uses an
+// atomic flag plus wholesale slice header replacement, never modifying the backing array
+// that is being iterated).
 func TestRegisterContextExtractor_Concurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {

@@ -22,7 +22,7 @@ func newTestJWT(t *testing.T) *JWT {
 	return j
 }
 
-// --- fillDefault 测试 ---
+// --- fillDefault tests ---
 
 func TestFillDefault_AllDefaults(t *testing.T) {
 	c := fillDefault(Config{Secret: "key"})
@@ -53,7 +53,7 @@ func TestFillDefault_UserOverrides(t *testing.T) {
 	assert.Equal(t, AlgorithmHS512, c.Algorithm)
 }
 
-// --- signingMethod 测试 ---
+// --- signingMethod tests ---
 
 func TestSigningMethod(t *testing.T) {
 	tests := []struct {
@@ -78,7 +78,7 @@ func TestSigningMethod_Unsupported(t *testing.T) {
 	assert.ErrorIs(t, err, ErrUnsupportedAlgorithm)
 }
 
-// --- New / MustNew 测试 ---
+// --- New / MustNew tests ---
 
 func TestNew(t *testing.T) {
 	j, err := New(Config{Secret: "key"})
@@ -110,7 +110,7 @@ func TestMustNew_Panic(t *testing.T) {
 	})
 }
 
-// --- GenerateToken 测试 ---
+// --- GenerateToken tests ---
 
 func TestGenerateToken(t *testing.T) {
 	j := newTestJWT(t)
@@ -147,7 +147,7 @@ func TestGenerateToken_HS512(t *testing.T) {
 	assert.NotEmpty(t, token)
 }
 
-// --- GenerateAccessToken / GenerateRefreshToken 测试 ---
+// --- GenerateAccessToken / GenerateRefreshToken tests ---
 
 func TestGenerateAccessToken(t *testing.T) {
 	j := newTestJWT(t)
@@ -183,7 +183,7 @@ func TestGenerateRefreshToken(t *testing.T) {
 	assert.Equal(t, TokenTypeRefresh, claims[ClaimKeyTokenType])
 }
 
-// --- GenerateTokenPair 测试 ---
+// --- GenerateTokenPair tests ---
 
 func TestGenerateTokenPair(t *testing.T) {
 	j := newTestJWT(t)
@@ -200,7 +200,7 @@ func TestGenerateTokenPair(t *testing.T) {
 	assert.True(t, pair.ExpiresAt > time.Now().Unix())
 }
 
-// --- ParseToken 测试 ---
+// --- ParseToken tests ---
 
 func TestParseToken(t *testing.T) {
 	j := newTestJWT(t)
@@ -252,7 +252,7 @@ func TestParseToken_Expired(t *testing.T) {
 	assert.ErrorIs(t, err, ErrExpiredToken)
 }
 
-// --- ParseAccessToken 测试 ---
+// --- ParseAccessToken tests ---
 
 func TestParseAccessToken(t *testing.T) {
 	j := newTestJWT(t)
@@ -276,7 +276,7 @@ func TestParseAccessToken_WithRefreshToken(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidToken)
 }
 
-// --- ParseRefreshToken 测试 ---
+// --- ParseRefreshToken tests ---
 
 func TestParseRefreshToken(t *testing.T) {
 	j := newTestJWT(t)
@@ -300,7 +300,7 @@ func TestParseRefreshToken_WithAccessToken(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotRefreshToken)
 }
 
-// --- RefreshToken 测试 ---
+// --- RefreshToken tests ---
 
 func TestRefreshToken(t *testing.T) {
 	j := newTestJWT(t)
@@ -317,7 +317,7 @@ func TestRefreshToken(t *testing.T) {
 	assert.NotEmpty(t, newPair.AccessToken)
 	assert.NotEmpty(t, newPair.RefreshToken)
 
-	// 验证新令牌中的用户信息一致
+	// Verify the user information in the new token matches
 	claims, err := j.ParseAccessToken(newPair.AccessToken)
 	require.NoError(t, err)
 	assert.Equal(t, "user-123", claims[ClaimKeyUserID])
@@ -349,7 +349,7 @@ func TestRefreshToken_Expired(t *testing.T) {
 	require.Error(t, err)
 }
 
-// --- MapClaims 自由扩展测试 ---
+// --- MapClaims free-form extension tests ---
 
 func TestMapClaims_CustomFields(t *testing.T) {
 	j := newTestJWT(t)
@@ -372,7 +372,7 @@ func TestMapClaims_CustomFields(t *testing.T) {
 	assert.Equal(t, "engineering", meta["department"])
 }
 
-// --- 辅助函数测试 ---
+// --- Helper function tests ---
 
 func TestCopyClaims(t *testing.T) {
 	src := Claims{"a": 1, "b": "hello"}
@@ -380,7 +380,7 @@ func TestCopyClaims(t *testing.T) {
 
 	assert.Equal(t, src, dst)
 
-	// 修改 dst 不影响 src
+	// Mutating dst does not affect src
 	dst["a"] = 2
 	assert.Equal(t, 1, src["a"])
 }
@@ -409,7 +409,7 @@ func TestExtractBusinessClaims(t *testing.T) {
 	assert.NotContains(t, business, ClaimKeyTokenType)
 }
 
-// --- 错误常量测试 ---
+// --- Error constant tests ---
 
 func TestErrorConstants(t *testing.T) {
 	assert.Equal(t, "jwt: invalid token", ErrInvalidToken.Error())

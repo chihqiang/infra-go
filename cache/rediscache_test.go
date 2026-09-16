@@ -15,8 +15,10 @@ import (
 	"github.com/chihqiang/infra-go/redisx"
 )
 
-// newMiniRedis 创建一个内嵌 miniredis 实例并返回 redisx 客户端与 miniredis 实例。
-// 注意：miniredis 的时钟不依赖真实时间，需用 mr.FastForward() 推进以触发过期。
+// newMiniRedis creates an embedded miniredis instance and returns the redisx client
+// together with the miniredis instance.
+// Note: the miniredis clock does not follow real time, so mr.FastForward() must be
+// used to advance it and trigger expiries.
 func newMiniRedis(t *testing.T) (*redisx.Client, *miniredis.Miniredis) {
 	t.Helper()
 	mr, err := miniredis.Run()
@@ -29,14 +31,15 @@ func newMiniRedis(t *testing.T) (*redisx.Client, *miniredis.Miniredis) {
 	return rdb, mr
 }
 
-// newTestRedisCache 创建一个 Redis 缓存实例。
+// newTestRedisCache creates a Redis cache instance.
 func newTestRedisCache(t *testing.T, opts ...RedisCacheOption) *RedisCache {
 	t.Helper()
 	rds, _ := newMiniRedis(t)
 	return NewRedisCache(rds, opts...)
 }
 
-// TestRedisCacheInterface 编译期断言：RedisCache 实现 Cache 接口。
+// TestRedisCacheInterface is a compile-time assertion: RedisCache implements the Cache
+// interface.
 func TestRedisCacheInterface(t *testing.T) {
 	rds, _ := newMiniRedis(t)
 	var _ Cache = NewRedisCache(rds)
@@ -60,8 +63,10 @@ func TestRedisGetMiss(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
-// TestRedisSetStruct 去泛型后：结构体以 JSON 存入，Get 返回 map[string]any。
-// 若需取回具体结构体，可先 Set 后按 map 字段断言，或使用 json.Marshal/Unmarshal 还原。
+// TestRedisSetStruct, without generics: a struct is stored as JSON and Get returns a
+// map[string]any.
+// To get the concrete struct back, either assert on the map fields or restore it with
+// json.Marshal/Unmarshal.
 func TestRedisSetStruct(t *testing.T) {
 	ctx := context.Background()
 	type user struct {
@@ -76,13 +81,13 @@ func TestRedisSetStruct(t *testing.T) {
 	got, err := c.Get(ctx, "user:1")
 	assert.NoError(t, err)
 
-	// 无目标类型信息，反序列化为 map[string]any
+	// No target type information, so it is deserialized into map[string]any
 	m, ok := got.(map[string]any)
-	require.True(t, ok, "非泛型缓存读取结构体返回 map[string]any")
-	assert.Equal(t, json.Number("1"), m["id"]) // UseNumber：JSON 数字解码为 json.Number
+	require.True(t, ok, "reading a struct from a non-generic cache returns map[string]any")
+	assert.Equal(t, json.Number("1"), m["id"]) // UseNumber: JSON numbers decode to json.Number
 	assert.Equal(t, "chihqiang", m["name"])
 
-	// 借助 JSON 还原为具体结构体
+	// Restore the concrete struct through JSON
 	data, err := json.Marshal(got)
 	require.NoError(t, err)
 	var back user
@@ -99,26 +104,29 @@ func TestRedisSetEx(t *testing.T) {
 	_, err := c.Get(ctx, "k")
 	assert.NoError(t, err)
 
-	// miniredis 时钟需用 FastForward 推进（考虑 5% 抖动，多推一些）
+	// The miniredis clock must be advanced with FastForward (allowing for the 5%
+	// jitter, push a bit further)
 	mr.FastForward(120 * time.Millisecond)
 	_, err = c.Get(ctx, "k")
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
-// TestRedisGetLargeInt64Precision 验证 Get 对超过 2^53 的 int64 不丢精度。
-// doGet 用 json.Decoder.UseNumber() 解码，数字保留为 json.Number 而不是 float64，
-// 否则雪花 ID / 纳秒时间戳这类大整数在 float64 往返中会失真。
+// TestRedisGetLargeInt64Precision verifies that Get does not lose precision for an
+// int64 above 2^53.
+// doGet decodes with json.Decoder.UseNumber(), which keeps numbers as json.Number
+// rather than float64; otherwise large integers such as snowflake IDs or nanosecond
+// timestamps would be distorted in a float64 round-trip.
 func TestRedisGetLargeInt64Precision(t *testing.T) {
 	ctx := context.Background()
 	c := newTestRedisCache(t)
 
-	const big = int64(9007199254740993) // 2^53 + 1，float64 无法精确表示
+	const big = int64(9007199254740993) // 2^53 + 1, not exactly representable as a float64
 	require.NoError(t, c.Set(ctx, "big", big))
 
 	got, err := c.Get(ctx, "big")
 	require.NoError(t, err)
 	num, ok := got.(json.Number)
-	require.True(t, ok, "JSON 数字应解码为 json.Number，实际为 %T", got)
+	require.True(t, ok, "a JSON number must decode to json.Number, got %T", got)
 	assert.Equal(t, "9007199254740993", num.String())
 
 	n, err := num.Int64()
@@ -126,13 +134,15 @@ func TestRedisGetLargeInt64Precision(t *testing.T) {
 	assert.Equal(t, big, n)
 }
 
-// TestRedisGetTrailingGarbage 验证尾随垃圾内容仍被视为脏数据（与 json.Unmarshal 严格性一致）。
+// TestRedisGetTrailingGarbage verifies that trailing garbage is still treated as dirty
+// data (consistent with the strictness of json.Unmarshal).
 func TestRedisGetTrailingGarbage(t *testing.T) {
 	ctx := context.Background()
 	rds, mr := newMiniRedis(t)
 	c := NewRedisCache(rds)
 
-	// 绕过 Set，直接写入脏数据模拟外部组件写入
+	// Bypass Set and write dirty data directly to simulate a write by an external
+	// component
 	mr.Set("dirty", `{"a":1}garbage`)
 
 	_, err := c.Get(ctx, "dirty")
@@ -168,7 +178,7 @@ func TestRedisTake(t *testing.T) {
 	assert.Equal(t, "db-value", v)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&calls))
 
-	// 第二次命中缓存，不再调用 fetch
+	// The second call hits the cache and no longer calls fetch
 	v, err = c.Take(ctx, "k", fetch)
 	require.NoError(t, err)
 	assert.Equal(t, "db-value", v)
@@ -199,7 +209,7 @@ func TestRedisTakeConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 
-	// 并发 Take 只执行一次 fetch（防缓存击穿）
+	// Concurrent Take calls run fetch only once (stampede protection)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&calls))
 }
 
@@ -207,27 +217,28 @@ func TestRedisTakeNotFound(t *testing.T) {
 	ctx := context.Background()
 	c := newTestRedisCache(t)
 
-	// fetch 返回 ErrNotFound 表示数据不存在
+	// fetch returning ErrNotFound means the data does not exist
 	_, err := c.Take(ctx, "missing", func() (any, error) {
 		return nil, ErrNotFound
 	})
 	assert.ErrorIs(t, err, ErrNotFound)
 
-	// 占位符已写入：再次 Take 不应再次调用 fetch（防穿透）
+	// The placeholder has been written: a second Take must not call fetch again
+	// (penetration protection)
 	var calls int32
 	_, err = c.Take(ctx, "missing", func() (any, error) {
 		atomic.AddInt32(&calls, 1)
 		return nil, ErrNotFound
 	})
 	assert.ErrorIs(t, err, ErrNotFound)
-	assert.Equal(t, int32(0), atomic.LoadInt32(&calls), "命中占位符后不应再穿透查询")
+	assert.Equal(t, int32(0), atomic.LoadInt32(&calls), "a placeholder hit must not penetrate again")
 }
 
 func TestRedisTakeFetchError(t *testing.T) {
 	ctx := context.Background()
 	c := newTestRedisCache(t)
 
-	// 非未命名的错误原样返回
+	// Errors other than not-found are returned as they are
 	_, err := c.Take(ctx, "k", func() (any, error) {
 		return nil, assert.AnError
 	})
@@ -249,11 +260,11 @@ func TestRedisTakeAfterExpire(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "v", v)
 
-	mr.FastForward(120 * time.Millisecond) // 过期
+	mr.FastForward(120 * time.Millisecond) // expired
 	v, err = c.Take(ctx, "k", fetch)
 	require.NoError(t, err)
 	assert.Equal(t, "v", v)
-	assert.Equal(t, int32(2), atomic.LoadInt32(&calls), "过期后应重新拉取")
+	assert.Equal(t, int32(2), atomic.LoadInt32(&calls), "must fetch again after expiry")
 }
 
 func TestRedisInvalidCacheData(t *testing.T) {
@@ -261,39 +272,43 @@ func TestRedisInvalidCacheData(t *testing.T) {
 	rds, _ := newMiniRedis(t)
 	c := NewRedisCache(rds, WithCacheName("test"))
 
-	// 直接写入非法 JSON（模拟其他组件以非 JSON 格式写入了同一个 key）
+	// Write invalid JSON directly (simulating another component writing the same key in
+	// a non-JSON format)
 	assert.NoError(t, rds.Set(ctx, "bad", "not-json", 0))
 
-	// Get 应返回未命中，让上层重新加载
+	// Get must return a miss so the caller reloads
 	_, err := c.Get(ctx, "bad")
 	assert.ErrorIs(t, err, ErrNotFound)
 
-	// 但**不得**删除该 key：它可能属于其他以非 JSON 格式使用同一 key 的组件，
-	// 自动删除会造成"对方刚写入就被本缓存删掉"的隐蔽故障。
-	// 详见 TestRedisInvalidCacheData_MustNotDeleteKey。
+	// But the key must NOT be deleted: it may belong to another component that uses the
+	// same key in a non-JSON format, and deleting it automatically would cause the subtle
+	// failure of "the other side just wrote it and this cache deleted it".
+	// See TestRedisInvalidCacheData_MustNotDeleteKey for details.
 	exists, err := rds.Exists(ctx, "bad")
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), exists, "invalid data must be left alone, not deleted")
 }
 
-// TestRedisInvalidCacheData_MustNotDeleteKey 回归测试：反序列化失败不得删除 key。
+// TestRedisInvalidCacheData_MustNotDeleteKey is a regression test: a failed
+// deserialization must not delete the key.
 //
-// 历史缺陷：doGet 在 json.Unmarshal 失败时调用 Del(key)，
-// 导致与其他组件共用 key 时互相删数据 —— 表现为"写入即被删"的隐蔽故障。
+// Historical defect: doGet called Del(key) when json.Unmarshal failed, so components
+// sharing a key deleted each other's data - showing up as the subtle "written and
+// immediately deleted" failure.
 func TestRedisInvalidCacheData_MustNotDeleteKey(t *testing.T) {
 	ctx := context.Background()
 	rds, _ := newMiniRedis(t)
 	c := NewRedisCache(rds, WithCacheName("test"))
 
-	// 模拟另一个组件用 redisx 直接写入原始字符串
+	// Simulate another component writing a raw string directly with redisx
 	const raw = "some-plain-value"
 	require.NoError(t, rds.Set(ctx, "shared", raw, 0))
 
-	// 本缓存读取失败，返回未命中
+	// This cache fails to read it and returns a miss
 	_, err := c.Get(ctx, "shared")
 	require.ErrorIs(t, err, ErrNotFound)
 
-	// 原始数据必须原样保留
+	// The original data must be preserved as it is
 	got, err := rds.Get(ctx, "shared")
 	require.NoError(t, err)
 	assert.Equal(t, raw, got, "another component's data must not be deleted")
@@ -321,7 +336,7 @@ func TestRedisIncrement(t *testing.T) {
 	assert.NoError(t, c.Increment(ctx, "count", 5))
 	assert.NoError(t, c.Increment(ctx, "count", 3))
 
-	// 底层 INCRBY 直接存数字字符串
+	// The underlying INCRBY stores a numeric string directly
 	raw, err := rds.Get(ctx, "count")
 	assert.NoError(t, err)
 	assert.Equal(t, "8", raw)
@@ -346,16 +361,16 @@ func TestRedisExpire(t *testing.T) {
 	c := NewRedisCache(rds)
 
 	assert.NoError(t, c.Set(ctx, "k", "v"))
-	// Redis EXPIRE 精度为秒级，用 1 秒
+	// Redis EXPIRE has second-level precision, so use 1 second
 	assert.NoError(t, c.Expire(ctx, "k", time.Second))
 	_, err := c.Get(ctx, "k")
 	assert.NoError(t, err)
 
-	mr.FastForward(2 * time.Second) // 越过过期时间
+	mr.FastForward(2 * time.Second) // past the expiry
 	_, err = c.Get(ctx, "k")
 	assert.ErrorIs(t, err, ErrNotFound)
 
-	// key 不存在返回 ErrNotFound
+	// a missing key returns ErrNotFound
 	err = c.Expire(ctx, "missing", time.Minute)
 	assert.ErrorIs(t, err, ErrNotFound)
 }
@@ -366,7 +381,7 @@ func TestRedisExpireImmediate(t *testing.T) {
 	c := NewRedisCache(rds)
 
 	assert.NoError(t, c.Set(ctx, "k", "v"))
-	// ttl <= 0 立即失效
+	// ttl <= 0 expires immediately
 	assert.NoError(t, c.Expire(ctx, "k", 0))
 	_, err := c.Get(ctx, "k")
 	assert.ErrorIs(t, err, ErrNotFound)

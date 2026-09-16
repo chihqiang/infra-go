@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- 响应结构序列化测试 ---
+// --- Response struct serialization tests ---
 
 func TestResponse_Serialization(t *testing.T) {
 	resp := Response[string]{
@@ -35,7 +35,7 @@ func TestResponse_EmptyData(t *testing.T) {
 	}
 	data, err := json.Marshal(resp)
 	require.NoError(t, err)
-	// data 为零值时 omitempty 应跳过
+	// omitempty should skip data when it is the zero value
 	assert.NotContains(t, string(data), `"data"`)
 }
 
@@ -62,7 +62,7 @@ func TestResponse_WithSlice(t *testing.T) {
 	assert.Equal(t, "a", result.Data[0].Name)
 }
 
-// --- CodeError 测试 ---
+// --- CodeError tests ---
 
 func TestCodeError_Error(t *testing.T) {
 	err := NewCodeError(CodeBadRequest, "bad request")
@@ -82,7 +82,7 @@ func TestCodeError_Unwrap(t *testing.T) {
 	assert.True(t, errors.Is(err, cause))
 }
 
-// --- JSON 响应测试 ---
+// --- JSON response tests ---
 
 func TestWriteJSON(t *testing.T) {
 	w := httptest.NewRecorder()
@@ -185,7 +185,7 @@ func TestWriteHTTPError(t *testing.T) {
 	assert.Equal(t, "not found", resp.Msg)
 }
 
-// --- XML 响应测试 ---
+// --- XML response tests ---
 
 type xmlMessage struct {
 	XMLName xml.Name `xml:"data"`
@@ -240,7 +240,7 @@ func TestWriteXML_MarshalError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
-// --- HTML 响应测试 ---
+// --- HTML response tests ---
 
 func TestWriteHTML(t *testing.T) {
 	w := httptest.NewRecorder()
@@ -267,7 +267,7 @@ func TestOkHTMLCtx(t *testing.T) {
 	assert.Equal(t, html, w.Body.String())
 }
 
-// --- SSE 响应测试 ---
+// --- SSE response tests ---
 
 func TestSSEWriter_Headers(t *testing.T) {
 	w := httptest.NewRecorder()
@@ -285,7 +285,7 @@ func TestSSEWriter_Event(t *testing.T) {
 
 	err := sse.Event("message", "hello world")
 	require.NoError(t, err)
-	assert.True(t, w.Flushed, "write 后应自动 Flush")
+	assert.True(t, w.Flushed, "write should flush automatically")
 	assert.Equal(t, "event: message\ndata: hello world\n\n", w.Body.String())
 }
 
@@ -343,7 +343,7 @@ func TestSSEWriter_MultipleEvents(t *testing.T) {
 	assert.Equal(t, "event: a\ndata: 1\n\nevent: b\ndata: 2\n\n", w.Body.String())
 }
 
-// --- request_id 集成测试 ---
+// --- request_id integration tests ---
 
 func TestOkJSONCtx_WithRequestID(t *testing.T) {
 	ctx := ContextWithRequestID(context.Background(), "req-123")
@@ -401,7 +401,7 @@ func TestResponse_RequestIDSerialized(t *testing.T) {
 	assert.Contains(t, string(data), `"request_id":"req-123"`)
 }
 
-// --- 重定向测试 ---
+// --- Redirect tests ---
 
 func newRedirectRequest(t *testing.T) (*httptest.ResponseRecorder, *http.Request) {
 	w := httptest.NewRecorder()

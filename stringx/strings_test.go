@@ -67,7 +67,7 @@ func TestReverse(t *testing.T) {
 		{"hello", "olleh"},
 		{"", ""},
 		{"a", "a"},
-		{"你好世界", "界世好你"},
+		{"héllo wörld", "dlröw olléh"},
 	}
 	for _, tt := range tests {
 		if got := Reverse(tt.input); got != tt.want {
@@ -84,16 +84,16 @@ func TestCapitalize(t *testing.T) {
 		{"Hello", "Hello"},
 		{"", ""},
 		{"a", "A"},
-		// 多字节 UTF-8 字符：中文无大小写概念，应原样保留
-		{"你好世界", "你好世界"},
-		{"中文abc", "中文abc"},
-		// Emoji 等非字母字符应保留
+		// Multi-byte UTF-8 characters with no notion of case must be kept as-is
+		{"😀😀😀", "😀😀😀"},
+		{"🎈abc", "🎈abc"},
+		// Non-letter characters such as emoji must be preserved
 		{"😀abc", "😀abc"},
-		// 首字符是拉丁字母的混合内容
+		// Mixed content whose first character is a Latin letter
 		{"élan", "Élan"},
-		// 数字开头：ToUpper 对非字母无影响
+		// Leading digit: ToUpper has no effect on non-letters
 		{"123abc", "123abc"},
-		// 无效 UTF-8 编码应原样返回，不破坏字节
+		// Invalid UTF-8 must be returned unchanged, without damaging the bytes
 		{"\xff\xfe", "\xff\xfe"},
 	}
 	for _, tt := range tests {
@@ -113,14 +113,14 @@ func TestToSnakeCase(t *testing.T) {
 		{"", ""},
 		{"A", "a"},
 		{"ABC", "abc"},
-		// 末位大写前是单个小写字母 → 加分隔
+		// An upper-case letter preceded by a single lower-case letter → insert a separator
 		{"userID", "user_id"},
-		// 连续大写后接小写 → 在最后一个大写前分隔
+		// A run of upper-case letters followed by a lower-case letter → split before the last one
 		{"XMLHttpRequest", "xml_http_request"},
 		{"URLValue", "url_value"},
-		// 已含下划线且无大写 → 保持不变
+		// Already snake_case with no upper-case letters → unchanged
 		{"user_name", "user_name"},
-		// 数字不参与分隔判断
+		// Digits do not participate in the separator decision
 		{"apiV2", "api_v2"},
 	}
 	for _, tt := range tests {
@@ -141,10 +141,10 @@ func TestChunk(t *testing.T) {
 		{"abc", 5, []string{"abc"}},
 		{"", 3, nil},
 		{"abc", 0, nil},
-		// 负数 size 返回 nil
+		// A negative size returns nil
 		{"abc", -1, nil},
-		// 多字节按 rune 分割，不产生乱码
-		{"你好世界", 2, []string{"你好", "世界"}},
+		// Multi-byte input is chunked by rune, so no character is broken apart
+		{"привет", 2, []string{"пр", "ив", "ет"}},
 	}
 	for _, tt := range tests {
 		if got := Chunk(tt.input, tt.size); !reflect.DeepEqual(got, tt.want) {
@@ -163,7 +163,7 @@ func TestRepeat(t *testing.T) {
 		{"x", 0, ""},
 		{"", 5, ""},
 		{"a", 1, "a"},
-		// 负数 n 返回空串
+		// A negative n returns an empty string
 		{"ab", -1, ""},
 	}
 	for _, tt := range tests {
@@ -173,10 +173,12 @@ func TestRepeat(t *testing.T) {
 	}
 }
 
-// TestRepeat_OverflowDoesNotPanic 回归测试：溢出或超大结果返回空串而不是 panic。
-// 历史缺陷：len(s)*n 溢出为负会使 strings.Builder.Grow 抛出
-// "negative count"；巨大的 n 会触发 "makeslice: len out of range"。
-// 两者都是不可恢复的运行时 panic，n 来自外部输入时可终止进程。
+// TestRepeat_OverflowDoesNotPanic is a regression test: an overflow or an
+// oversized result yields an empty string instead of panicking.
+// Historical defect: an overflowing len(s)*n made strings.Builder.Grow throw
+// "negative count"; a huge n triggered "makeslice: len out of range".
+// Both are unrecoverable runtime panics and can terminate the process when n
+// comes from external input.
 func TestRepeat_OverflowDoesNotPanic(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -201,13 +203,14 @@ func TestRepeat_OverflowDoesNotPanic(t *testing.T) {
 	}
 }
 
-// TestRepeat_WithinCap 验证上限之内的正常用法不受影响。
+// TestRepeat_WithinCap verifies that normal usage within the cap is unaffected.
 func TestRepeat_WithinCap(t *testing.T) {
 	assert.Equal(t, "ababab", Repeat("ab", 3))
 	assert.Equal(t, strings.Repeat("xy", 1000), Repeat("xy", 1000))
 
-	// 边界判定：上限以内通过，超过上限返回空串。
-	// 注意此处只验证判定逻辑，不实际分配 1GiB。
+	// Boundary check: within the cap it passes, above the cap an empty string is
+	// returned. Note that only the condition logic is verified here; no 1GiB is
+	// actually allocated.
 	assert.LessOrEqual(t, len("ab")*3, maxRepeatBytes)
 	assert.Greater(t, len("a")*(maxRepeatBytes+1), maxRepeatBytes)
 }
@@ -224,15 +227,15 @@ func TestSubstr(t *testing.T) {
 		{"hello", 1, 1, ""},
 		{"hello", 5, 5, ""},
 		{"hello", 10, 5, ""},
-		// end 负数：从末尾倒数
+		// Negative end: count back from the end
 		{"hello", 0, -2, "hel"},
 		{"hello", 2, -1, "ll"},
-		// start 负数越界：截断到 0
+		// Negative start out of range: clamped to 0
 		{"hello", -10, 5, "hello"},
-		// end 越界：截断到 length
+		// End out of range: clamped to length
 		{"hello", 3, 10, "lo"},
-		// 中文按 rune 截取
-		{"你好世界", 1, 3, "好世"},
+		// Multi-byte input is sliced by rune
+		{"привет", 1, 3, "ри"},
 	}
 	for _, tt := range tests {
 		if got := Substr(tt.input, tt.start, tt.end); got != tt.want {
@@ -249,8 +252,8 @@ func TestIndexOf(t *testing.T) {
 		{"hello world", "world", 6},
 		{"hello", "xyz", -1},
 		{"hello", "", 0},
-		// 中文子串定位
-		{"你好世界你好", "世界", 6},
+		// Locating a multi-byte substring (the index is a byte offset)
+		{"héllo wörld", "wörld", 7},
 	}
 	for _, tt := range tests {
 		if got := IndexOf(tt.s, tt.substr); got != tt.want {
@@ -267,7 +270,7 @@ func TestCount(t *testing.T) {
 		{"hello", "l", 2},
 		{"hello", "o", 1},
 		{"hello", "xyz", 0},
-		// 空子串语义与 strings.Count 一致：len+1
+		// Empty-substring semantics match strings.Count: len+1
 		{"hello", "", 6},
 	}
 	for _, tt := range tests {
@@ -287,7 +290,7 @@ func TestJoin(t *testing.T) {
 		{'-', []string{"", "b", ""}, "b"},
 		{',', []string{}, ""},
 		{',', []string{"a"}, "a"},
-		// 全部为空元素 → 空串
+		// Every element empty → empty string
 		{',', []string{"", "", ""}, ""},
 	}
 	for _, tt := range tests {
@@ -323,11 +326,11 @@ func TestToCamelCase(t *testing.T) {
 		{"Hello", "hello"},
 		{"hello", "hello"},
 		{"", ""},
-		// 仅转首字母，其余保持不变
+		// Only the first character is converted, the rest stays as-is
 		{"ABC", "aBC"},
-		// 单个字符
+		// Single character
 		{"H", "h"},
-		// 非字母首字符保持不变
+		// A non-letter first character stays unchanged
 		{"123Abc", "123Abc"},
 	}
 	for _, tt := range tests {
@@ -337,29 +340,30 @@ func TestToCamelCase(t *testing.T) {
 	}
 }
 
-// TestToCamelCase_MultibyteFirstRune 回归测试：首字符为多字节 UTF-8 时
-// 必须正确处理，不能按字节截断。
-// 历史缺陷：实现用 s[i+1:] 拼接（i 恒为 0），首字符占多字节时
-// 会丢掉续字节，返回非法 UTF-8（如 "Äbc" → "ä\x84bc"）。
+// TestToCamelCase_MultibyteFirstRune is a regression test: a multi-byte UTF-8
+// first character must be handled correctly and never truncated by byte.
+// Historical defect: the implementation concatenated s[i+1:] (i was always 0),
+// so a multi-byte first character lost its continuation bytes and returned
+// invalid UTF-8 (e.g. "Äbc" → "ä\x84bc").
 func TestToCamelCase_MultibyteFirstRune(t *testing.T) {
 	tests := []struct {
 		input, want string
 	}{
-		// 拉丁文扩展：Ä 占 2 字节
+		// Latin-1 supplement: Ä occupies 2 bytes
 		{"Äbc", "äbc"},
 		{"École", "école"},
-		// 中文首字符（本身无大小写，应保持不变）
-		{"中文A", "中文A"},
-		// 中文 + 后续大写字母
-		{"中文ABC", "中文ABC"},
-		// 希腊文
+		// Emoji first character (it has no notion of case and must stay unchanged)
+		{"🎈A", "🎈A"},
+		// Emoji followed by upper-case ASCII letters
+		{"🎈ABC", "🎈ABC"},
+		// Greek
 		{"Σigma", "σigma"},
-		// 西里尔文
+		// Cyrillic
 		{"Дом", "дом"},
-		// Emoji 首字符（无大小写概念，应保持不变）
+		// Emoji first character (no notion of case, must stay unchanged)
 		{"😀Test", "😀Test"},
-		// 多字节首字符 + 多字节后续，验证整体完整
-		{"Ä中文", "ä中文"},
+		// Multi-byte first character + multi-byte remainder, verifying both survive
+		{"Ä😀😀", "ä😀😀"},
 	}
 	for _, tt := range tests {
 		got := ToCamelCase(tt.input)
@@ -371,8 +375,8 @@ func TestToCamelCase_MultibyteFirstRune(t *testing.T) {
 	}
 }
 
-// TestToCamelCase_InvalidUTF8 验证非法 UTF-8 输入原样返回，不被进一步破坏
-// （与 Capitalize 的行为一致）。
+// TestToCamelCase_InvalidUTF8 verifies that invalid UTF-8 input is returned
+// unchanged and not damaged any further (consistent with Capitalize).
 func TestToCamelCase_InvalidUTF8(t *testing.T) {
 	invalid := string([]byte{0xff, 0xfe, 'a'})
 	assert.Equal(t, invalid, ToCamelCase(invalid))

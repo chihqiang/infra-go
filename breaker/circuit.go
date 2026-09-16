@@ -11,36 +11,42 @@ import (
 	"github.com/chihqiang/infra-go/logger"
 )
 
-// numHistoryReasons 熔断打开时输出的最近失败原因数量。
+// numHistoryReasons is how many recent failure reasons are reported when the
+// breaker opens.
 const numHistoryReasons = 5
 
-// internalPromise 内部 Promise，无需上报原因（doReq 路径内部已记录）。
+// internalPromise is the internal Promise; it does not need to report a reason
+// (the doReq path records it internally).
 type internalPromise interface {
 	Accept()
 	Reject()
 }
 
-// internalThrottle 内部节流器，用于底层算法实现。
+// internalThrottle is the internal throttler used by the low-level algorithm
+// implementations.
 type internalThrottle interface {
 	allow() (internalPromise, error)
 	doReq(req func() error, fallback Fallback, acceptable Acceptable) error
 }
 
-// throttle 对 internalThrottle 的公开包装，Promise 需携带失败原因。
+// throttle is the public wrapper around internalThrottle; its Promise must carry
+// a failure reason.
 type throttle interface {
 	allow() (Promise, error)
 	doReq(req func() error, fallback Fallback, acceptable Acceptable) error
 }
 
-// circuitBreaker 熔断器的门面实现，组合底层算法与日志记录。
+// circuitBreaker is the facade implementation of the breaker, combining the
+// low-level algorithm with logging.
 type circuitBreaker struct {
 	name string
 	sre  sreConfig
 	throttle
 }
 
-// NewBreaker 创建熔断器，默认使用 Google SRE 算法。
-// 可通过 Option 自定义，如 WithName("payment-gateway")、WithSREDefaults()。
+// NewBreaker creates a breaker that uses the Google SRE algorithm by default.
+// It can be customised with Options such as WithName("payment-gateway") or
+// WithSREDefaults().
 func NewBreaker(opts ...Option) Breaker {
 	b := circuitBreaker{sre: defaultSREConfig()}
 	for _, opt := range opts {
@@ -53,7 +59,7 @@ func NewBreaker(opts ...Option) Breaker {
 	return &b
 }
 
-// Name 返回熔断器名称。
+// Name returns the breaker name.
 func (cb *circuitBreaker) Name() string {
 	return cb.name
 }
@@ -127,7 +133,8 @@ func (cb *circuitBreaker) DoWithFallbackAcceptableCtx(ctx context.Context, req f
 	}
 }
 
-// loggedThrottle 在底层算法之上记录最近失败原因，熔断打开时输出便于排查。
+// loggedThrottle records the recent failure reasons on top of the low-level
+// algorithm, so they can be logged when the breaker opens.
 type loggedThrottle struct {
 	name string
 	internalThrottle
@@ -142,12 +149,14 @@ func newLoggedThrottle(name string, t internalThrottle) *loggedThrottle {
 	}
 }
 
-// allow 判断请求是否允许通过，返回内部 Promise 用于上报结果。
+// allow decides whether the request may pass and returns an internal Promise for
+// reporting the outcome.
 //
-// 拒绝时底层返回 nil promise，此处必须同样返回 nil Promise：
-// 若包装成非 nil 的 promiseWithReason（内部 promise 为 nil），
-// 调用方忽略 err 直接使用返回值时会 nil 解引用 panic，
-// 也与 Breaker.Allow 的契约（"允许时返回 Promise"）不符。
+// On rejection the low-level implementation returns a nil promise, and this must
+// return a nil Promise too: wrapping it into a non-nil promiseWithReason (with a
+// nil inner promise) would panic with a nil dereference for callers that ignore
+// err and use the returned value directly, and it would also violate the
+// Breaker.Allow contract ("return a Promise when allowed").
 func (lt *loggedThrottle) allow() (Promise, error) {
 	promise, err := lt.internalThrottle.allow()
 	if err != nil {
@@ -169,7 +178,8 @@ func (lt *loggedThrottle) doReq(req func() error, fallback Fallback, acceptable 
 	}))
 }
 
-// logError 熔断打开时输出告警日志，包含最近失败原因。
+// logError logs a warning when the breaker is open, including the recent failure
+// reasons.
 func (lt *loggedThrottle) logError(err error) error {
 	if errors.Is(err, ErrServiceUnavailable) {
 		logger.Error("breaker: circuit breaker is open, requests dropped",
@@ -179,7 +189,7 @@ func (lt *loggedThrottle) logError(err error) error {
 	return err
 }
 
-// errorWindow 环形记录最近若干条失败原因。
+// errorWindow keeps the most recent failure reasons in a ring buffer.
 type errorWindow struct {
 	reasons [numHistoryReasons]string
 	index   int
@@ -201,10 +211,11 @@ func (ew *errorWindow) String() string {
 	ew.lock.Lock()
 	defer ew.lock.Unlock()
 
-	// 容量必须在锁内读取：count 由 add 在锁内更新，
-	// 在加锁之前读它来 make 切片会构成数据竞争。
+	// The capacity must be read while holding the lock: count is updated by add
+	// under the lock, so reading it before locking to make the slice would be a
+	// data race.
 	reasons := make([]string, 0, ew.count)
-	// 倒序输出：最近的失败原因在前
+	// Newest first: the most recent failure reason comes first
 	for i := ew.index - 1; i >= ew.index-ew.count; i-- {
 		reasons = append(reasons, ew.reasons[(i+numHistoryReasons)%numHistoryReasons])
 	}
@@ -212,7 +223,8 @@ func (ew *errorWindow) String() string {
 	return strings.Join(reasons, "\n")
 }
 
-// promiseWithReason 包装内部 Promise，Reject 时记录失败原因。
+// promiseWithReason wraps an internal Promise and records the failure reason on
+// Reject.
 type promiseWithReason struct {
 	promise internalPromise
 	errWin  *errorWindow

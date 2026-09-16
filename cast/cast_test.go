@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// --- ErrCastFailed 测试 ---
+// --- ErrCastFailed tests ---
 
 func TestErrCastFailed(t *testing.T) {
 	_, err := ToIntE("abc")

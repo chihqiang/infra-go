@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 对应 uri.go：URIBinding。
+// Covers uri.go: URIBinding.
 
 type uriReq struct {
 	ID   int    `uri:"id" binding:"required"`
@@ -25,7 +25,7 @@ func TestURI_Bind(t *testing.T) {
 }
 
 func TestURI_Bind_MapString(t *testing.T) {
-	// BindURI 风格：map[string]string → map[string][]string
+	// BindURI style: map[string]string → map[string][]string
 	m := make(map[string][]string, 1)
 	for k, v := range map[string]string{"id": "7"} {
 		m[k] = []string{v}
@@ -37,5 +37,5 @@ func TestURI_Bind_MapString(t *testing.T) {
 
 func TestURI_ValidationError(t *testing.T) {
 	var u uriReq
-	require.Error(t, Uri.BindUri(map[string][]string{"slug": {"x"}}, &u)) // 缺 id
+	require.Error(t, Uri.BindUri(map[string][]string{"slug": {"x"}}, &u)) // id is missing
 }

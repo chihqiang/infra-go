@@ -14,9 +14,9 @@ import (
 )
 
 const (
-	// ignoreKey 表示忽略该字段。
+	// ignoreKey means the field is ignored.
 	ignoreKey = "-"
-	// delimiter 用于连接嵌套字段的完整路径名。
+	// delimiter joins the full path name of nested fields.
 	delimiter = '.'
 )
 
@@ -27,14 +27,14 @@ var (
 	errUnsupportedType  = fmt.Errorf("unsupported field type")
 
 	durationType = reflect.TypeOf(time.Duration(0))
-	intSize      = 32 << (^uint(0) >> 63) // 32 或 64
+	intSize      = 32 << (^uint(0) >> 63) // 32 or 64
 
-	// structRequiredCache 缓存结构体是否包含必填字段。
+	// structRequiredCache caches whether a struct contains required fields.
 	structRequiredCache = make(map[reflect.Type]bool)
 	structCacheLock     sync.RWMutex
 )
 
-// Deref 解引用指针类型，返回其基础类型。
+// Deref dereferences pointer types and returns the underlying type.
 func Deref(t reflect.Type) reflect.Type {
 	for t.Kind() == reflect.Ptr {
 		t = t.Elem()
@@ -42,7 +42,7 @@ func Deref(t reflect.Type) reflect.Type {
 	return t
 }
 
-// ValidatePtr 验证 v 是否为有效的非 nil 指针。
+// ValidatePtr verifies that v is a valid, non-nil pointer.
 func ValidatePtr(v reflect.Value) error {
 	if !v.IsValid() || v.Kind() != reflect.Ptr || v.IsNil() {
 		return fmt.Errorf("not a valid pointer: %v", v)
@@ -50,12 +50,12 @@ func ValidatePtr(v reflect.Value) error {
 	return nil
 }
 
-// SetValue 设置目标值，自动处理指针类型。
+// SetValue sets the target value, handling pointer types automatically.
 func SetValue(tp reflect.Type, value, target reflect.Value) {
 	value.Set(convertTypeOfPtr(tp, target))
 }
 
-// convertTypeOfPtr 处理指针类型的转换。
+// convertTypeOfPtr handles the conversion of pointer types.
 func convertTypeOfPtr(tp reflect.Type, target reflect.Value) reflect.Value {
 	if tp.Kind() == reflect.Ptr && target.CanAddr() {
 		tp = tp.Elem()
@@ -72,14 +72,14 @@ func convertTypeOfPtr(tp reflect.Type, target reflect.Value) reflect.Value {
 	return target
 }
 
-// maybeNewValue 如果是指针类型且为 nil，则创建新值。
+// maybeNewValue allocates a new value when the type is a pointer and it is nil.
 func maybeNewValue(fieldType reflect.Type, value reflect.Value) {
 	if fieldType.Kind() == reflect.Ptr && value.IsNil() {
 		value.Set(reflect.New(value.Type().Elem()))
 	}
 }
 
-// ensureValue 确保嵌套成员不为 nil。
+// ensureValue makes sure nested members are not nil.
 func ensureValue(v reflect.Value) reflect.Value {
 	for {
 		if v.Kind() != reflect.Ptr {
@@ -93,7 +93,7 @@ func ensureValue(v reflect.Value) reflect.Value {
 	return v
 }
 
-// joinName 连接字段路径名。
+// joinName joins field path names.
 func joinName(parent, child string) string {
 	if len(parent) == 0 {
 		return child
@@ -104,7 +104,8 @@ func joinName(parent, child string) string {
 	return parent + string(delimiter) + child
 }
 
-// usingDifferentKeys 检查字段是否使用了与当前解析器不同的标签键。
+// usingDifferentKeys reports whether the field uses a tag key different from the
+// current parser's.
 func usingDifferentKeys(key string, field reflect.StructField) bool {
 	if len(field.Tag) > 0 {
 		if _, ok := field.Tag.Lookup(key); !ok {
@@ -114,7 +115,7 @@ func usingDifferentKeys(key string, field reflect.StructField) bool {
 	return false
 }
 
-// lookupKey 从 map 中查找指定键的值（支持点号分隔的嵌套键）。
+// lookupKey looks up a key in the map (dot-separated nested keys are supported).
 func lookupKey(m map[string]any, key string) (any, bool) {
 	if m == nil {
 		return nil, false
@@ -124,14 +125,14 @@ func lookupKey(m map[string]any, key string) (any, bool) {
 	return lookupWithChainedKeys(m, keys)
 }
 
-// readKeys 将键按点号分隔为多段。
+// readKeys splits the key on dots into segments.
 func readKeys(key string) []string {
 	return strings.FieldsFunc(key, func(c rune) bool {
 		return c == delimiter
 	})
 }
 
-// lookupWithChainedKeys 按链式键查找值。
+// lookupWithChainedKeys looks up a value following chained keys.
 func lookupWithChainedKeys(m map[string]any, keys []string) (any, bool) {
 	switch len(keys) {
 	case 0:
@@ -152,21 +153,25 @@ func lookupWithChainedKeys(m map[string]any, keys []string) (any, bool) {
 	}
 }
 
-// errAmbiguousKey 表示同一层级存在多个经 canonical 规范化后同名的候选键。
+// errAmbiguousKey means that several candidate keys at the same level share the
+// same canonical form.
 var errAmbiguousKey = errors.New("ambiguous key")
 
-// lookupKeyCanonical 按链式键查找值，未精确命中时按 canonical 形式做不敏感匹配。
+// lookupKeyCanonical looks up a value by chained key, falling back to canonical,
+// case-insensitive matching when there is no exact hit.
 //
-// 大小写不敏感匹配由此函数完成，而不是由调用方预先改写输入 map 的键：
-// map 的键同时也是 map 类型字段的数据，预先小写化会破坏用户数据
-// （例如 labels: {AppName: x} 会被静默写成 appname）。
+// The case-insensitive matching happens here rather than by the caller pre-rewriting
+// the input map keys: map keys are also the data of map-typed fields, and
+// lower-casing them in advance would corrupt user data
+// (e.g. labels: {AppName: x} would silently become appname).
 //
-// 逐层匹配规则：
-//  1. 键段的原始形式精确命中；
-//  2. 键段的 canonical 形式精确命中；
-//  3. 在候选键中查找满足 canonical(k) == canonical(段) 的键，唯一时返回；
-//  4. 多个候选键（仅大小写/形式不同）时返回 errAmbiguousKey，
-//     而不是依赖 map 遍历顺序任选其一。
+// Matching rules per level:
+//  1. the raw key segment matches exactly;
+//  2. the canonical form of the key segment matches exactly;
+//  3. a candidate key satisfying canonical(k) == canonical(segment) is looked up
+//     and returned when it is unique;
+//  4. several candidates (differing only in case/form) yield errAmbiguousKey,
+//     rather than picking one depending on map iteration order.
 func lookupKeyCanonical(m map[string]any, key string, canonical func(string) string) (any, bool, error) {
 	if m == nil {
 		return nil, false, nil
@@ -179,14 +184,15 @@ func lookupKeyCanonical(m map[string]any, key string, canonical func(string) str
 
 	current := m
 	for i, segment := range keys {
-		// 1. 原始键精确匹配（canonicalKey 不会改变键段语义时最常见）
+		// 1. Raw key exact match (the common case where canonicalKey preserves the
+		// segment's meaning)
 		v, ok := current[segment]
 		if !ok {
 			want := canonical(segment)
-			// 2. canonical 形式精确匹配
+			// 2. Canonical form exact match
 			v, ok = current[want]
 			if !ok {
-				// 3. 按 canonical 形式不敏感扫描
+				// 3. Case-insensitive scan by canonical form
 				matched := false
 				for k, cv := range current {
 					if canonical(k) != want {
@@ -217,7 +223,7 @@ func lookupKeyCanonical(m map[string]any, key string, canonical func(string) str
 	return nil, false, nil
 }
 
-// describeKeys 返回排序后的键列表，用于生成稳定的错误信息。
+// describeKeys returns the sorted key list, used to produce stable error messages.
 func describeKeys(m map[string]any) string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -227,9 +233,9 @@ func describeKeys(m map[string]any) string {
 	return strings.Join(keys, ", ")
 }
 
-// convertTypeFromString 将字符串转为指定类型的基本值。
-// 布尔类型使用 cast.ToBoolE，浮点类型使用 cast.ToFloat64E，
-// 整数类型保留 strconv 以支持位宽溢出检查。
+// convertTypeFromString converts a string into a basic value of the given type.
+// Bool uses cast.ToBoolE and floats use cast.ToFloat64E; integers keep strconv so
+// that bit-width overflow checks are preserved.
 func convertTypeFromString(kind reflect.Kind, str string) (any, error) {
 	switch kind {
 	case reflect.Bool:
@@ -263,7 +269,7 @@ func convertTypeFromString(kind reflect.Kind, str string) (any, error) {
 	}
 }
 
-// setMatchedPrimitiveValue 将已转换的值设置到 reflect.Value 上。
+// setMatchedPrimitiveValue sets an already-converted value onto a reflect.Value.
 func setMatchedPrimitiveValue(kind reflect.Kind, value reflect.Value, v any) error {
 	switch kind {
 	case reflect.Bool:
@@ -282,7 +288,7 @@ func setMatchedPrimitiveValue(kind reflect.Kind, value reflect.Value, v any) err
 	return nil
 }
 
-// setSameKindValue 设置同类型的值，必要时进行类型转换。
+// setSameKindValue sets a value of the same kind, converting it when necessary.
 func setSameKindValue(targetType reflect.Type, target reflect.Value, value any) {
 	if reflect.ValueOf(value).Type().AssignableTo(targetType) {
 		target.Set(reflect.ValueOf(value))
@@ -291,8 +297,8 @@ func setSameKindValue(targetType reflect.Type, target reflect.Value, value any) 
 	}
 }
 
-// validateOptions 验证值是否在允许的选项列表中。
-// 使用 cast.ToString 将值转为字符串进行比较。
+// validateOptions verifies that the value is in the allowed options list.
+// Values are converted to strings with cast.ToString for the comparison.
 func validateOptions(val any, options []string, fullName string) error {
 	if len(options) == 0 {
 		return nil
@@ -309,7 +315,7 @@ func validateOptions(val any, options []string, fullName string) error {
 	return fmt.Errorf(`value %q of field %q is not in allowed options %v`, checkValue, fullName, options)
 }
 
-// validateValueRange 验证数值是否在范围内。
+// validateValueRange verifies that the number lies within the range.
 func validateValueRange(mapValue any, opts *fieldOptions, fullName string) error {
 	if opts == nil || opts.Range == nil {
 		return nil
@@ -327,14 +333,16 @@ func validateValueRange(mapValue any, opts *fieldOptions, fullName string) error
 	return nil
 }
 
-// validateRangeForType 按目标类型校验值是否满足 range 约束。
+// validateRangeForType validates the value against the range for the target type.
 //
-// 相比 validateValueRange，它会先按目标类型归一化值：time.Duration 的
-// range 以纳秒为单位比较（与其底层 int64 表示一致），因此 "5s" 这类
-// duration 文本会先解析为 time.Duration 再比较。
+// Unlike validateValueRange it first normalizes the value by target type: a
+// time.Duration range is compared in nanoseconds (matching its underlying int64
+// representation), so a duration text such as "5s" is parsed into a
+// time.Duration before the comparison.
 //
-// 所有写入字段的路径都必须调用本函数（或 validateValueRange），
-// 否则 range 约束会因值的来源或表示形式不同而被静默绕过。
+// Every path that writes a field must call this function (or validateValueRange),
+// otherwise the range constraint is silently bypassed when the value comes from a
+// different source or is written in a different representation.
 func validateRangeForType(derefedType reflect.Type, mapValue any, opts *fieldOptions, fullName string) error {
 	if opts == nil || opts.Range == nil {
 		return nil
@@ -354,7 +362,7 @@ func validateRangeForType(derefedType reflect.Type, mapValue any, opts *fieldOpt
 	return validateValueRange(mapValue, opts, fullName)
 }
 
-// structValueRequired 检查结构体类型是否包含必填字段。
+// structValueRequired reports whether the struct type contains required fields.
 func structValueRequired(tag string, tp reflect.Type) bool {
 	structCacheLock.RLock()
 	required, ok := structRequiredCache[tp]
@@ -371,7 +379,8 @@ func structValueRequired(tag string, tp reflect.Type) bool {
 	return required
 }
 
-// implicitValueRequiredStruct 递归检查结构体是否包含必填字段。
+// implicitValueRequiredStruct recursively checks whether the struct contains
+// required fields.
 func implicitValueRequiredStruct(tag string, tp reflect.Type) bool {
 	tp = Deref(tp)
 	if tp.Kind() != reflect.Struct {

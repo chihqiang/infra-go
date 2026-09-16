@@ -11,32 +11,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 本文件补充剩余小分支的确定性覆盖：
-//   - Shutdown 未启动即调用（幂等）
-//   - NewConsumer 传入非 nil logger（toAsynqConfig 设置 Logger 分支）
-//   - fillDefault 剩余字段保留分支（RedisDB/ShutdownTimeout/DefaultTimeout/DefaultQueue）
-//   - MarshalPayload/UnmarshalPayload 的序列化/反序列化错误路径
+// This file adds deterministic coverage for the remaining small branches:
+//   - Shutdown called before start (idempotent)
+//   - NewConsumer with a non-nil logger (the branch in toAsynqConfig that sets Logger)
+//   - the remaining fillDefault branches that keep values
+//     (RedisDB/ShutdownTimeout/DefaultTimeout/DefaultQueue)
+//   - the marshal/unmarshal error paths of MarshalPayload/UnmarshalPayload
 
-// TestConsumer_ShutdownBeforeStart 覆盖未启动即 Shutdown（幂等、不 panic）。
+// TestConsumer_ShutdownBeforeStart covers Shutdown before start (idempotent, no panic).
 func TestConsumer_ShutdownBeforeStart(t *testing.T) {
 	addr, cleanup := newMiniRedis(t)
 	defer cleanup()
 
 	con := NewConsumer(testConfig(addr), nil)
 
-	// 未启动直接关闭，再关一次仍安全
+	// Shut down directly without starting, and shutting down again is still safe
 	con.Shutdown()
 	con.Shutdown()
 
-	// 关闭后仍可正常启动
+	// It can still be started normally after being shut down
 	require.NoError(t, con.Start())
 	assert.True(t, con.started)
 	con.Shutdown()
 	assert.False(t, con.started)
 }
 
-// TestNewConsumer_WithLogger 覆盖 NewConsumer 传入非 nil logger
-// （toAsynqConfig 中 la != nil 会设置 asynq Logger 的分支）。
+// TestNewConsumer_WithLogger covers NewConsumer with a non-nil logger
+// (the branch in toAsynqConfig where la != nil sets the asynq Logger).
 func TestNewConsumer_WithLogger(t *testing.T) {
 	addr, cleanup := newMiniRedis(t)
 	defer cleanup()
@@ -50,8 +51,9 @@ func TestNewConsumer_WithLogger(t *testing.T) {
 	assert.True(t, con.started)
 }
 
-// TestFillDefault_RemainingFields 覆盖 fillDefault 剩余字段的非零保留分支
-// （RedisDB/ShutdownTimeout/DefaultTimeout/DefaultQueue）。
+// TestFillDefault_RemainingFields covers the fillDefault branches that keep
+// non-zero values for the remaining fields
+// (RedisDB/ShutdownTimeout/DefaultTimeout/DefaultQueue).
 func TestFillDefault_RemainingFields(t *testing.T) {
 	c := fillDefault(Config{
 		RedisDB:         3,
@@ -65,8 +67,8 @@ func TestFillDefault_RemainingFields(t *testing.T) {
 	assert.Equal(t, "critical", c.DefaultQueue)
 }
 
-// TestProducer_EnqueuePayloadMarshalError 覆盖 EnqueuePayload / MarshalPayload
-// 的序列化失败分支（payload 含不可 JSON 序列化值）。
+// TestProducer_EnqueuePayloadMarshalError covers the marshal failure branch of
+// EnqueuePayload / MarshalPayload (a payload holding a value that JSON cannot marshal).
 func TestProducer_EnqueuePayloadMarshalError(t *testing.T) {
 	addr, cleanup := newMiniRedis(t)
 	defer cleanup()
@@ -79,7 +81,7 @@ func TestProducer_EnqueuePayloadMarshalError(t *testing.T) {
 	assert.Contains(t, err.Error(), "marshal payload")
 }
 
-// TestUnmarshalPayload_InvalidJSON 覆盖 UnmarshalPayload 反序列化失败分支。
+// TestUnmarshalPayload_InvalidJSON covers the unmarshal failure branch of UnmarshalPayload.
 func TestUnmarshalPayload_InvalidJSON(t *testing.T) {
 	task := asynq.NewTask("t", []byte("{not-json"))
 	var m map[string]string

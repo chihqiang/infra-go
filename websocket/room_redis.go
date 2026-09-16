@@ -8,24 +8,25 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// RedisClient Redis 客户端接口，兼容 *redis.Client、*redis.ClusterClient 和 *redis.Ring。
+// RedisClient is the Redis client interface; it is compatible with *redis.Client,
+// *redis.ClusterClient and *redis.Ring.
 type RedisClient = redis.UniversalClient
 
-// RedisRoom 基于 Redis SET 的房间实现。
-// 使用两个方向的 SET 维护映射：
-//   - {prefix}rooms:{room} → SET(fd1, fd2, ...)  房间内的连接集合
-//   - {prefix}fds:{fd}     → SET(room1, room2, ...) 连接所在的房间集合
+// RedisRoom is a Redis SET based room implementation.
+// It keeps the mapping in both directions with two kinds of SET:
+//   - {prefix}rooms:{room} → SET(fd1, fd2, ...)  connections in the room
+//   - {prefix}fds:{fd}     → SET(room1, room2, ...) rooms the connection is in
 //
-// 适用于多实例部署，不同进程通过共享 Redis 实现房间广播。
+// It fits multi-instance deployments, where processes share Redis to broadcast to rooms.
 //
-// 使用 Redis SET 维护 room → fds 和 fd → rooms 的双向映射。
+// Redis SETs keep the bidirectional mapping between room → fds and fd → rooms.
 type RedisRoom struct {
 	client RedisClient
 	prefix string
 }
 
-// NewRedisRoom 创建一个 Redis 房间。
-// client 为 Redis 客户端，prefix 为键前缀。
+// NewRedisRoom creates a Redis room.
+// client is the Redis client and prefix is the key prefix.
 func NewRedisRoom(client RedisClient, prefix string) *RedisRoom {
 	return &RedisRoom{
 		client: client,
@@ -33,29 +34,29 @@ func NewRedisRoom(client RedisClient, prefix string) *RedisRoom {
 	}
 }
 
-// Add 将连接加入房间。
+// Add adds a connection to the given rooms.
 func (r *RedisRoom) Add(fd ConnID, rooms ...string) {
 	ctx := context.Background()
 	fdStr := strconv.FormatUint(fd, 10)
 
 	pipe := r.client.Pipeline()
-	// 将 fd 加入每个房间的 SET
+	// Add the fd to the SET of every room
 	for _, room := range rooms {
 		pipe.SAdd(ctx, r.roomKey(room), fdStr)
 	}
-	// 将房间名加入 fd 的 SET
+	// Add the room names to the SET of the fd
 	pipe.SAdd(ctx, r.fdKey(fdStr), rooms)
 	_, _ = pipe.Exec(ctx)
 }
 
-// Delete 将连接从房间移除。
-// 如果 rooms 为空，则移除该连接所在的所有房间。
+// Delete removes a connection from the given rooms.
+// If rooms is empty, the connection is removed from all of its rooms.
 func (r *RedisRoom) Delete(fd ConnID, rooms ...string) {
 	ctx := context.Background()
 	fdStr := strconv.FormatUint(fd, 10)
 
 	if len(rooms) == 0 {
-		// 先获取该连接所在的所有房间
+		// Fetch all rooms the connection is in first
 		allRooms, err := r.client.SMembers(ctx, r.fdKey(fdStr)).Result()
 		if err != nil || len(allRooms) == 0 {
 			return
@@ -71,7 +72,7 @@ func (r *RedisRoom) Delete(fd ConnID, rooms ...string) {
 	_, _ = pipe.Exec(ctx)
 }
 
-// GetClients 获取房间内的所有连接 ID。
+// GetClients returns all connection IDs in the room.
 func (r *RedisRoom) GetClients(room string) []ConnID {
 	ctx := context.Background()
 
@@ -91,7 +92,7 @@ func (r *RedisRoom) GetClients(room string) []ConnID {
 	return fds
 }
 
-// GetRooms 获取连接所在的所有房间名称。
+// GetRooms returns the names of all rooms the connection is in.
 func (r *RedisRoom) GetRooms(fd ConnID) []string {
 	ctx := context.Background()
 	fdStr := strconv.FormatUint(fd, 10)
@@ -103,14 +104,16 @@ func (r *RedisRoom) GetRooms(fd ConnID) []string {
 	return rooms
 }
 
-// Clear 清空所有房间和连接映射。
-// 仅删除房间和连接映射相关的键（rooms: 和 fds: 前缀），
-// 不会误删同前缀下的其他业务键。
+// Clear clears all rooms and connection mappings.
+// It only deletes the keys related to room and connection mappings (the rooms: and
+// fds: prefixes) and never deletes unrelated business keys under the same prefix.
 //
-// ⚠️ 这些键由**所有实例共享**：清空会影响集群中的其他节点
-// （它们的连接会从房间中消失，后续广播静默失效）。
-// 因此本方法只应用于运维/测试场景，Server.Close 不会调用它，
-// 后者仅移除本实例的连接（见 Server.Close）。
+// ⚠️ These keys are **shared by all instances**: clearing them affects the other nodes
+// in the cluster (their connections vanish from the rooms and later broadcasts silently
+// stop working).
+// This method is therefore meant for operations/test scenarios only; Server.Close does
+// not call it, as the latter only removes the connections of this instance (see
+// Server.Close).
 func (r *RedisRoom) Clear() {
 	ctx := context.Background()
 
@@ -132,12 +135,12 @@ func (r *RedisRoom) Clear() {
 	}
 }
 
-// roomKey 构建房间键。
+// roomKey builds the room key.
 func (r *RedisRoom) roomKey(room string) string {
 	return fmt.Sprintf("%srooms:%s", r.prefix, room)
 }
 
-// fdKey 构建连接键。
+// fdKey builds the connection key.
 func (r *RedisRoom) fdKey(fd string) string {
 	return fmt.Sprintf("%sfds:%s", r.prefix, fd)
 }

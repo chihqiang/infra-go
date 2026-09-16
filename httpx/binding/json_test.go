@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 对应 json.go：JSONBinding。
+// Covers json.go: JSONBinding.
 
 type jsonReq struct {
 	Name  string `json:"name" binding:"required"`
@@ -43,7 +43,7 @@ func TestJSON_BindBody(t *testing.T) {
 
 func TestJSON_ValidationError(t *testing.T) {
 	var u jsonReq
-	require.Error(t, JSON.BindBody([]byte(`{"name":"Alice"}`), &u)) // 缺 email
+	require.Error(t, JSON.BindBody([]byte(`{"name":"Alice"}`), &u)) // email is missing
 }
 
 func TestJSON_InvalidJSON(t *testing.T) {

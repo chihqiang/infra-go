@@ -5,22 +5,23 @@ import (
 	"time"
 )
 
-// 统计事件类型。
+// Statistical event types.
 const (
 	success = iota
 	fail
 	drop
 )
 
-// bucket 滑动窗口中的单个时间桶，累计一段时间内的请求统计。
+// bucket is a single time bucket of the rolling window, accumulating the request
+// statistics for one interval.
 type bucket struct {
-	Sum     int64 // 总请求数
-	Success int64 // 成功数
-	Failure int64 // 失败数
-	Drop    int64 // 被熔断拒绝数
+	Sum     int64 // total requests
+	Success int64 // successes
+	Failure int64 // failures
+	Drop    int64 // requests rejected by the breaker
 }
 
-// add 按事件类型累加统计。
+// add accumulates the statistic according to the event type.
 func (b *bucket) add(v int64) {
 	switch v {
 	case fail:
@@ -35,7 +36,7 @@ func (b *bucket) add(v int64) {
 	}
 }
 
-// reset 清空桶内统计。
+// reset clears the statistics of the bucket.
 func (b *bucket) reset() {
 	b.Sum = 0
 	b.Success = 0
@@ -43,18 +44,20 @@ func (b *bucket) reset() {
 	b.Drop = 0
 }
 
-// rollingWindow 时间滑动窗口，将统计周期划分为多个时间桶。
-// 写入时自动推进 offset 并重置过期桶；读取时聚合所有未过期桶。
+// rollingWindow is a time-based rolling window that splits the statistical period
+// into several time buckets.
+// Writes advance offset automatically and reset expired buckets; reads aggregate
+// all non-expired buckets.
 type rollingWindow struct {
 	lock     sync.RWMutex
-	size     int           // 桶数量
-	interval time.Duration // 每个桶的时间跨度
-	offset   int           // 当前写入桶下标
-	lastTime time.Time     // 上一次写入的时间
+	size     int           // number of buckets
+	interval time.Duration // time span of each bucket
+	offset   int           // index of the bucket currently being written
+	lastTime time.Time     // time of the last write
 	buckets  []bucket
 }
 
-// newRollingWindow 创建滑动窗口，总统计窗口为 size * interval。
+// newRollingWindow creates a rolling window whose total span is size * interval.
 func newRollingWindow(size int, interval time.Duration) *rollingWindow {
 	return &rollingWindow{
 		size:     size,
@@ -64,7 +67,7 @@ func newRollingWindow(size int, interval time.Duration) *rollingWindow {
 	}
 }
 
-// add 将事件加入当前时间桶。
+// add puts the event into the current time bucket.
 func (rw *rollingWindow) add(v int64) {
 	rw.lock.Lock()
 	defer rw.lock.Unlock()
@@ -72,7 +75,7 @@ func (rw *rollingWindow) add(v int64) {
 	rw.buckets[rw.offset].add(v)
 }
 
-// span 计算自 lastTime 以来应跨越的桶数，超过窗口返回 size。
+// span returns how many buckets have elapsed since lastTime, capped at size.
 func (rw *rollingWindow) span() int {
 	offset := int(time.Since(rw.lastTime) / rw.interval)
 	if offset >= 0 && offset < rw.size {
@@ -81,7 +84,7 @@ func (rw *rollingWindow) span() int {
 	return rw.size
 }
 
-// updateOffset 推进 offset 并重置过期的桶。
+// updateOffset advances offset and resets the expired buckets.
 func (rw *rollingWindow) updateOffset() {
 	span := rw.span()
 	if span <= 0 {
@@ -94,6 +97,6 @@ func (rw *rollingWindow) updateOffset() {
 	}
 	rw.offset = (offset + span) % rw.size
 	now := time.Now()
-	// 对齐到 interval 边界，避免累积误差
+	// Align to the interval boundary to avoid accumulating drift
 	rw.lastTime = now.Add(-(now.Sub(rw.lastTime) % rw.interval))
 }

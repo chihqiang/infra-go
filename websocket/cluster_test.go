@@ -12,9 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- mockPubSub（仅测试使用）---
+// --- mockPubSub (test only) ---
 
-// mockPubSub 内存实现的 PubSub，用于集群测试。
+// mockPubSub is an in-memory PubSub implementation used by the cluster tests.
 type mockPubSub struct {
 	mu   sync.Mutex
 	subs map[string][]chan []byte
@@ -47,7 +47,8 @@ func (m *mockPubSub) Subscribe(_ context.Context, channel string) (<-chan []byte
 	cancel := func() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		// 用 nil 标记已取消，避免发送到已关闭的 channel
+		// Mark the subscription as cancelled with nil so that nothing is sent on a
+		// closed channel
 		for i, sub := range m.subs[channel] {
 			if sub == ch {
 				m.subs[channel][i] = nil
@@ -60,7 +61,7 @@ func (m *mockPubSub) Subscribe(_ context.Context, channel string) (<-chan []byte
 	return ch, cancel, nil
 }
 
-// --- mockPubSub 测试 ---
+// --- mockPubSub tests ---
 
 func TestMockPubSub(t *testing.T) {
 	ps := newMockPubSub()
@@ -81,7 +82,7 @@ func TestMockPubSub(t *testing.T) {
 	}
 }
 
-// --- 集群跨实例广播测试 ---
+// --- Cluster cross-instance broadcast tests ---
 
 func joinHandler() *EventHandler {
 	h := NewEventHandler()
@@ -115,9 +116,9 @@ func TestServer_ClusterBroadcast_SingleServer(t *testing.T) {
 	ws := dialWs(t, url)
 	defer ws.Close()
 	ws.WriteJSON(MustNewEvent("join", "lobby"))
-	_, _, _ = ws.ReadMessage() // joined 确认
+	_, _, _ = ws.ReadMessage() // joined confirmation
 
-	// 通过集群广播到 lobby
+	// Broadcast to lobby through the cluster
 	require.NoError(t, srv.To("lobby").PushText("cluster msg"))
 
 	ws.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -129,7 +130,7 @@ func TestServer_ClusterBroadcast_SingleServer(t *testing.T) {
 func TestServer_ClusterBroadcast_MultiServer(t *testing.T) {
 	ps := newMockPubSub()
 
-	// 两台服务器共享同一个 mockPubSub
+	// The two servers share the same mockPubSub
 	handler1 := joinHandler()
 	handler2 := joinHandler()
 
@@ -157,7 +158,7 @@ func TestServer_ClusterBroadcast_MultiServer(t *testing.T) {
 	url1 := "ws" + ts1.URL[len("http"):]
 	url2 := "ws" + ts2.URL[len("http"):]
 
-	// 客户端连接到各自的服务器，加入 lobby
+	// Each client connects to its own server and joins lobby
 	ws1 := dialWs(t, url1)
 	defer ws1.Close()
 	ws1.WriteJSON(MustNewEvent("join", "lobby"))
@@ -168,7 +169,7 @@ func TestServer_ClusterBroadcast_MultiServer(t *testing.T) {
 	ws2.WriteJSON(MustNewEvent("join", "lobby"))
 	_, _, _ = ws2.ReadMessage()
 
-	// 从 srv1 广播到 lobby，srv2 的客户端也应收到
+	// Broadcast to lobby from srv1; the client of srv2 must receive it too
 	require.NoError(t, srv1.To("lobby").PushText("cross-instance"))
 
 	ws1.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -218,7 +219,7 @@ func TestServer_ClusterBroadcastAll(t *testing.T) {
 	ws2 := dialWs(t, url2)
 	defer ws2.Close()
 
-	// 从 srv1 广播到所有连接，srv2 的也应收到
+	// Broadcast to all connections from srv1; srv2's connections must receive it too
 	srv1.BroadcastText("hello cluster")
 
 	ws1.SetReadDeadline(time.Now().Add(5 * time.Second))

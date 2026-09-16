@@ -8,17 +8,19 @@ import (
 
 var ErrNotFound = errors.New("cache: key not found")
 
-// Cache 统一缓存接口，内存与 Redis 两种实现共享同一组方法。
+// Cache is the unified cache interface; the in-memory and the Redis
+// implementations share the same set of methods.
 //
-// 注意 Get/Take 的返回值类型随后端而不同：
-//   - MemCache 返回存入时的原始类型（Set(ctx,"k",5) 读回 int(5)；
-//     Set(ctx,"k",u) 读回 u 本身）
-//   - RedisCache 必须序列化存储，读回的是 JSON 解码结果
-//     （Set(ctx,"k",5) 读回 json.Number("5")；Set(ctx,"k",u) 读回 map[string]any）
+// Note that the value type returned by Get/Take depends on the backend:
+//   - MemCache returns the original type stored (Set(ctx,"k",5) reads back int(5);
+//     Set(ctx,"k",u) reads back u itself)
+//   - RedisCache has to serialize values, so it reads back the JSON decoding result
+//     (Set(ctx,"k",5) reads back json.Number("5"); Set(ctx,"k",u) reads back map[string]any)
 //
-// 因此直接对 Get 的返回值做类型断言（如 v.(int)、v.(float64)）的代码
-// 在切换后端后会 panic。
-// 需要后端无关的读取时请使用 GetAs[T]，它统一经 JSON 往返解码到具体类型：
+// Therefore code that type-asserts the value returned by Get (such as v.(int),
+// v.(float64)) panics after switching backends.
+// When you need a backend-agnostic read, use GetAs[T], which always round-trips
+// through JSON and decodes into a concrete type:
 //
 //	n, err := cache.GetAs[int64](ctx, c, "counter")
 type Cache interface {
@@ -27,10 +29,11 @@ type Cache interface {
 	SetEx(ctx context.Context, key string, value any, ttl time.Duration) error
 	Delete(ctx context.Context, keys ...string) error
 	Take(ctx context.Context, key string, fetch func() (any, error)) (any, error)
-	// Increment 将 key 对应的数值自增 delta；key 不存在时初始化为 delta。
+	// Increment adds delta to the numeric value of key; a missing key is initialized to delta.
 	Increment(ctx context.Context, key string, delta int64) error
-	// Decrement 将 key 对应的数值自减 delta；key 不存在时初始化为 -delta。
+	// Decrement subtracts delta from the numeric value of key; a missing key is initialized to -delta.
 	Decrement(ctx context.Context, key string, delta int64) error
-	// Expire 为 key 设置存活时间 ttl，到期后自动失效；ttl <= 0 时立即失效。
+	// Expire sets the time to live of key, after which it expires automatically;
+	// a ttl <= 0 expires the key immediately.
 	Expire(ctx context.Context, key string, ttl time.Duration) error
 }

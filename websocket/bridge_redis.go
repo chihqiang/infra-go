@@ -8,31 +8,33 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// redisPubSub 桥接 go-redis 的 PubSub，实现 PubSub 接口。
+// redisPubSub bridges the go-redis PubSub and implements the PubSub interface.
 type redisPubSub struct {
 	client RedisClient
 }
 
-// NewRedisPubSub 创建基于 go-redis 的 PubSub 实现。
+// NewRedisPubSub creates a PubSub implementation backed by go-redis.
 func NewRedisPubSub(client RedisClient) PubSub {
 	return &redisPubSub{client: client}
 }
 
-// Publish 实现 PubSub 接口。
+// Publish implements the PubSub interface.
 func (p *redisPubSub) Publish(ctx context.Context, channel string, message []byte) error {
 	return p.client.Publish(ctx, channel, message).Err()
 }
 
-// Subscribe 实现 PubSub 接口。
-// 返回消息通道和取消函数；取消后消息通道被关闭，订阅连接被释放。
+// Subscribe implements the PubSub interface.
+// It returns the message channel and a cancel function; after cancel the message
+// channel is closed and the subscription connection is released.
 func (p *redisPubSub) Subscribe(ctx context.Context, channel string) (<-chan []byte, func(), error) {
-	// 使用可取消的子 context：用于释放订阅关联的资源。
-	// 注意：仅靠 context 无法唤醒阻塞中的 Receive，cancel 中还会显式 Close（见下）。
+	// Use a cancellable child context to release the resources tied to the subscription.
+	// Note: the context alone cannot wake up a blocked Receive, so cancel also closes
+	// the subscription explicitly (see below).
 	subCtx, subCancel := context.WithCancel(ctx)
 
 	pubsub := p.client.Subscribe(subCtx, channel)
 
-	// 等待订阅确认
+	// Wait for the subscription confirmation
 	_, err := pubsub.Receive(subCtx)
 	if err != nil {
 		subCancel()
@@ -45,10 +47,11 @@ func (p *redisPubSub) Subscribe(ctx context.Context, channel string) (<-chan []b
 
 	go func() {
 		defer close(out)
-		// 无论以何种方式退出，都释放订阅连接
+		// Release the subscription connection no matter how we exit
 		defer func() { _ = pubsub.Close() }()
 
-		// 使用 Receive 直接轮询，避免 Channel() 内部 goroutine 在某些场景下不兼容
+		// Poll with Receive directly to avoid the goroutine inside Channel() being
+		// incompatible in some scenarios
 		for {
 			msg, err := pubsub.Receive(subCtx)
 			if err != nil {
@@ -64,16 +67,17 @@ func (p *redisPubSub) Subscribe(ctx context.Context, channel string) (<-chan []b
 		}
 	}()
 
-	// cancel 保证幂等：可能被 ClusterHandler.Stop 与调用方重复调用
+	// cancel is idempotent: it may be called twice by ClusterHandler.Stop and the caller
 	var cancelOnce sync.Once
 	cancel := func() {
 		cancelOnce.Do(func() {
 			close(done)
 			subCancel()
-			// 必须显式关闭订阅来唤醒阻塞中的 Receive：
-			// go-redis 只从 ctx.Deadline() 推导读超时，Receive 在无 deadline 时
-			// 阻塞在 socket 读上，仅取消 context 无法中断它（实测确认）。
-			// PubSub.Close 是幂等的，重复调用返回 pool.ErrClosed。
+			// The subscription must be closed explicitly to wake up a blocked Receive:
+			// go-redis only derives the read timeout from ctx.Deadline(), so without a
+			// deadline Receive blocks on the socket read and cancelling the context alone
+			// cannot interrupt it (verified experimentally).
+			// PubSub.Close is idempotent and returns pool.ErrClosed when called twice.
 			_ = pubsub.Close()
 		})
 	}

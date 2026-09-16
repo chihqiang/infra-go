@@ -9,25 +9,27 @@ import (
 	"github.com/chihqiang/infra-go/httpx/respw"
 )
 
-// statusClientClosedRequest 客户端主动关闭请求（非标准状态码 499，nginx 约定）。
+// statusClientClosedRequest is used when the client closes the request early
+// (non-standard status code 499, an nginx convention).
 const statusClientClosedRequest = 499
 
-// Timeout 是请求超时中间件。
-// 每个请求最多执行 duration，超时返回 503 Service Unavailable。
-// 客户端主动断开返回 499；WebSocket / SSE 请求不受超时限制。
+// Timeout is a request timeout middleware.
+// Each request may run for at most duration; on timeout it responds with 503 Service
+// Unavailable. A client disconnect returns 499; WebSocket / SSE requests are exempt.
 type Timeout struct {
 	duration time.Duration
 }
 
-// NewTimeout 创建请求超时中间件。
-// duration <= 0 时中间件不生效（直接放行）。
+// NewTimeout creates the request timeout middleware.
+// When duration <= 0 the middleware is disabled (requests pass straight through).
 func NewTimeout(duration time.Duration) *Timeout {
 	return &Timeout{duration: duration}
 }
 
-// Middleware 返回标准形式 func(http.Handler) http.Handler 的请求超时中间件。
+// Middleware returns the request timeout middleware in the standard
+// func(http.Handler) http.Handler form.
 func (t *Timeout) Middleware() func(http.Handler) http.Handler {
-	// duration <= 0：不生效，直接透传
+	// duration <= 0: disabled, pass straight through
 	if t.duration <= 0 {
 		return func(next http.Handler) http.Handler {
 			return next
@@ -36,7 +38,7 @@ func (t *Timeout) Middleware() func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// WebSocket 升级与 SSE 长连接不适用请求超时
+			// WebSocket upgrades and long-lived SSE connections are not subject to the timeout
 			if r.Header.Get("Upgrade") == "websocket" ||
 				r.Header.Get("Accept") == "text/event-stream" {
 				next.ServeHTTP(w, r)
@@ -64,7 +66,8 @@ func (t *Timeout) Middleware() func(http.Handler) http.Handler {
 			case p := <-panicChan:
 				panic(p)
 			case <-done:
-				// 正常完成：将缓冲的 header/status/body 写到底层 ResponseWriter
+				// completed normally: flush the buffered header/status/body to the underlying
+				// ResponseWriter
 				tw.Done()
 			case <-ctx.Done():
 				if errors.Is(ctx.Err(), context.Canceled) {

@@ -1,31 +1,31 @@
 # logger
 
-基于 [go.uber.org/zap](https://github.com/uber-go/zap) 和 [lumberjack](https://github.com/natefinch/lumberjack) 的日志包，提供简洁易用的 API，同时保留 zap 的高性能，内置日志文件自动轮转功能。对外不暴露 zap 类型，用户无需导入 zap。
+A logging package built on [go.uber.org/zap](https://github.com/uber-go/zap) and [lumberjack](https://github.com/natefinch/lumberjack), offering a concise, easy-to-use API while keeping zap's high performance, with built-in automatic log file rotation. No zap types are exposed, so users never need to import zap.
 
-## 特性
+## Features
 
-- **接口驱动**：通过 `ILogger` 接口解耦，便于 mock 测试与库间替换
-- **零 zap 依赖**：提供独立的 `Field` 类型和字段构造函数（`String`、`Int`、`Err` 等），用户无需导入 zap
-- **四类日志 API**：结构化日志、格式化日志、带上下文结构化日志、带上下文格式化日志
-- **多格式输出**：JSON 编码（生产环境）和 Console 编码（开发环境）
-- **多输出目标**：支持 stdout、stderr 和文件，可同时输出到多个目标
-- **日志轮转**：基于 lumberjack，按文件大小自动切割、保留备份数量、按天数清理、可选 gzip 压缩
-- **默认值标签**：Config 通过 `default` 结构体标签定义默认值，遵循 conf 标准
-- **自动目录创建**：文件输出时自动创建不存在的目录
-- **全局 Logger**：内置全局实例，支持包级别直接调用
-- **上下文日志**：`Ctx` 后缀方法自动从 `context.Context` 提取字段（traceID、spanID 等）
-- **可扩展提取器**：通过 `RegisterContextExtractor` 注册自定义上下文字段提取器（返回注销函数，可撤销）
-- **调用者信息**：自动记录调用者的文件名和行号（正确跳过封装层）
-- **堆栈追踪**：可选在 Error 及以上级别记录堆栈
-- **应用名称**：可选输出固定的应用名称字段
+- **Interface-driven**: decoupled through the `ILogger` interface, which eases mock testing and swapping implementations between libraries
+- **No zap dependency**: provides its own `Field` type and field constructors (`String`, `Int`, `Err`, etc.), so users never import zap
+- **Four kinds of logging API**: structured logs, formatted logs, context-aware structured logs and context-aware formatted logs
+- **Multiple output formats**: JSON encoding (production) and Console encoding (development)
+- **Multiple output targets**: stdout, stderr and files; can write to several targets at once
+- **Log rotation**: built on lumberjack — size-based splitting, backup count retention, age-based cleanup and optional gzip compression
+- **Default-value tags**: Config defines defaults with `default` struct tags, following the conf standard
+- **Automatic directory creation**: missing directories are created automatically for file output
+- **Global Logger**: a built-in global instance that supports direct package-level calls
+- **Context logging**: `Ctx`-suffixed methods extract fields (traceID, spanID, etc.) from `context.Context` automatically
+- **Extensible extractors**: register custom context field extractors with `RegisterContextExtractor` (returns an unregister function, so it can be undone)
+- **Caller information**: records the caller's file name and line number automatically (correctly skipping wrapper layers)
+- **Stack traces**: optionally record stack traces at Error level and above
+- **Application name**: optionally emits a fixed application name field
 
-## 安装
+## Installation
 
 ```bash
 go get github.com/chihqiang/infra-go/logger
 ```
 
-## 快速开始
+## Quick start
 
 ```go
 package main
@@ -35,21 +35,21 @@ import (
 )
 
 func main() {
-    // 使用全局 Logger
+    // use the global Logger
     logger.Info("hello world")
-    // 输出: {"level":"INFO","time":"2026-01-01T12:00:00.000+08:00","caller":"main.go:9","msg":"hello world"}
+    // output: {"level":"INFO","time":"2026-01-01T12:00:00.000+08:00","caller":"main.go:9","msg":"hello world"}
 
-    // 格式化输出
+    // formatted output
     logger.Infof("user %s logged in, id=%d", "alice", 42)
 
-    // 程序退出前刷新缓冲区
+    // flush the buffer before the program exits
     defer logger.Sync()
 }
 ```
 
-## 配置
+## Configuration
 
-### 自定义 Logger
+### Custom Logger
 
 ```go
 l := logger.New(logger.Config{
@@ -63,59 +63,59 @@ l := logger.New(logger.Config{
     Rotation: logger.RotationConfig{
         MaxSize:    100,  // MB
         MaxBackups: 7,
-        MaxAge:     30,   // 天
+        MaxAge:     30,   // days
         Compress:   true,
     },
 })
 ```
 
-> `New` 返回 `ILogger` 接口。零值字段会自动填充默认值，默认值通过结构体标签 `default` 定义。
+> `New` returns the `ILogger` interface. Zero-value fields are filled with their defaults automatically; the defaults are defined by the `default` struct tag.
 
-### 配置项说明
+### Config reference
 
-| 字段 | 类型 | 默认值 | 标签 | 说明 |
+| Field | Type | Default | Tag | Description |
 | ------ | ------ | -------- | ------ | ------ |
-| `Level` | `Level` | `InfoLevel` | `default=0` | 日志级别 |
-| `Encoding` | `Encoding` | `JSONEncoding` | `default=json` | 编码格式：`JSONEncoding` 或 `ConsoleEncoding` |
-| `Output` | `[]string` | `["stdout"]` | `default=[stdout]` | 输出目标列表，支持 `"stdout"`、`"stderr"` 或文件路径 |
-| `ErrorOutput` | `string` | `"stderr"` | `default=stderr` | 内部错误输出目标 |
-| `Caller` | `bool` | `true` | `default=true` | 是否记录调用者信息 |
-| `Stacktrace` | `bool` | `false` | `optional` | 是否在 Error 及以上级别记录堆栈 |
-| `TimeLayout` | `string` | ISO8601 | `default=2006-01-02T15:04:05.000Z07:00` | 时间格式布局 |
-| `AppName` | `string` | `""` | `optional` | 应用名称，作为固定字段 `app` 输出 |
-| `Rotation` | `RotationConfig` | 见下表 | — | 日志文件轮转配置，仅对文件路径类型的 Output 生效 |
+| `Level` | `Level` | `InfoLevel` | `default=0` | Log level |
+| `Encoding` | `Encoding` | `JSONEncoding` | `default=json` | Encoding format: `JSONEncoding` or `ConsoleEncoding` |
+| `Output` | `[]string` | `["stdout"]` | `default=[stdout]` | Output target list; accepts `"stdout"`, `"stderr"` or file paths |
+| `ErrorOutput` | `string` | `"stderr"` | `default=stderr` | Target for internal error output |
+| `Caller` | `bool` | `true` | `default=true` | Whether to record caller information |
+| `Stacktrace` | `bool` | `false` | `optional` | Whether to record stack traces at Error level and above |
+| `TimeLayout` | `string` | ISO8601 | `default=2006-01-02T15:04:05.000Z07:00` | Time layout |
+| `AppName` | `string` | `""` | `optional` | Application name, emitted as the fixed field `app` |
+| `Rotation` | `RotationConfig` | see below | — | Log file rotation config; only applies to file-path outputs |
 
-#### RotationConfig 轮转配置
+#### RotationConfig
 
-| 字段 | 类型 | 默认值 | 标签 | 说明 |
+| Field | Type | Default | Tag | Description |
 | ------ | ------ | -------- | ------ | ------ |
-| `MaxSize` | `int` | `100` | `default=100` | 单个日志文件最大大小（MB），超过后触发轮转 |
-| `MaxBackups` | `int` | `7` | `default=7` | 保留的旧日志文件最大数量，超过后删除最旧的 |
-| `MaxAge` | `int` | `30` | `default=30` | 保留旧日志文件的最大天数，超过后删除 |
-| `Compress` | `bool` | `false` | `optional` | 是否用 gzip 压缩旧日志文件 |
-| `LocalTime` | `bool` | `true` | `default=true` | 是否使用本地时间命名备份文件，`false` 时使用 UTC 时间 |
+| `MaxSize` | `int` | `100` | `default=100` | Maximum size of a single log file (MB); rotation is triggered beyond it |
+| `MaxBackups` | `int` | `7` | `default=7` | Maximum number of old log files to keep; the oldest are deleted beyond it |
+| `MaxAge` | `int` | `30` | `default=30` | Maximum age of old log files in days; older ones are deleted |
+| `Compress` | `bool` | `false` | `optional` | Whether to gzip the old log files |
+| `LocalTime` | `bool` | `true` | `default=true` | Whether to use local time to name backup files; `false` uses UTC |
 
-> 轮转配置仅对文件路径类型的 `Output` 生效，`"stdout"` / `"stderr"` 不受影响。
+> The rotation config only applies to file-path `Output` entries; `"stdout"` / `"stderr"` are unaffected.
 
-### 日志级别
+### Log levels
 
 ```go
-logger.DebugLevel  // 调试信息
-logger.InfoLevel   // 常规信息（默认）
-logger.WarnLevel   // 警告
-logger.ErrorLevel  // 错误
-logger.DPanicLevel // 开发模式 panic
-logger.PanicLevel  // panic 后退出
-logger.FatalLevel  // 致命错误后 os.Exit(1)
+logger.DebugLevel  // debug information
+logger.InfoLevel   // general information (default)
+logger.WarnLevel   // warnings
+logger.ErrorLevel  // errors
+logger.DPanicLevel // panics in development mode
+logger.PanicLevel  // panic then exit
+logger.FatalLevel  // os.Exit(1) after a fatal error
 ```
 
-## ILogger 接口
+## The ILogger interface
 
-所有日志方法通过 `ILogger` 接口统一暴露，便于依赖注入和测试 mock。
+All logging methods are exposed through the `ILogger` interface, which eases dependency injection and test mocks.
 
 ```go
 type ILogger interface {
-    // 结构化日志
+    // structured logging
     Debug(msg string, fields ...Field)
     Info(msg string, fields ...Field)
     Warn(msg string, fields ...Field)
@@ -123,7 +123,7 @@ type ILogger interface {
     Panic(msg string, fields ...Field)
     Fatal(msg string, fields ...Field)
 
-    // 格式化日志
+    // formatted logging
     Debugf(format string, args ...any)
     Infof(format string, args ...any)
     Warnf(format string, args ...any)
@@ -131,7 +131,7 @@ type ILogger interface {
     Panicf(format string, args ...any)
     Fatalf(format string, args ...any)
 
-    // 带上下文的结构化日志
+    // structured logging with context
     DebugCtx(ctx context.Context, msg string, fields ...Field)
     InfoCtx(ctx context.Context, msg string, fields ...Field)
     WarnCtx(ctx context.Context, msg string, fields ...Field)
@@ -139,7 +139,7 @@ type ILogger interface {
     PanicCtx(ctx context.Context, msg string, fields ...Field)
     FatalCtx(ctx context.Context, msg string, fields ...Field)
 
-    // 带上下文的格式化日志
+    // formatted logging with context
     DebugfCtx(ctx context.Context, format string, args ...any)
     InfofCtx(ctx context.Context, format string, args ...any)
     WarnfCtx(ctx context.Context, format string, args ...any)
@@ -153,9 +153,9 @@ type ILogger interface {
 
 ## API
 
-### 结构化日志（高性能）
+### Structured logging (high performance)
 
-使用 `logger.Field` 传递键值对，性能最优。无需导入 zap。
+Pass key/value pairs with `logger.Field` for the best performance. No zap import needed.
 
 ```go
 l := logger.New(logger.Config{AppName: "api-server"})
@@ -168,15 +168,15 @@ l.Info("request received",
 )
 ```
 
-输出：
+Output:
 
 ```json
 {"level":"INFO","time":"...","caller":"main.go:12","app":"api-server","msg":"request received","method":"GET","path":"/api/users","status":200,"latency":"42ms"}
 ```
 
-#### 字段构造函数
+#### Field constructors
 
-| 函数 | 类型 |
+| Function | Type |
 | ------ | ------ |
 | `logger.String(key, val)` | string |
 | `logger.Int(key, val)` | int |
@@ -185,12 +185,12 @@ l.Info("request received",
 | `logger.Bool(key, val)` | bool |
 | `logger.Duration(key, val)` | time.Duration |
 | `logger.Time(key, val)` | time.Time |
-| `logger.Err(err)` | error（键名为 `"error"`） |
+| `logger.Err(err)` | error (key name is `"error"`) |
 | `logger.Any(key, val)` | any |
 
-### 格式化日志
+### Formatted logging
 
-支持 `Printf` 风格的格式化字符串，方法名以 `F` 结尾。
+Supports `Printf`-style format strings; the method names end with `F`.
 
 ```go
 l.Infof("user %s (id=%d) logged in from %s", name, id, ip)
@@ -198,24 +198,24 @@ l.Warnf("rate limit exceeded: %d/%d", current, max)
 l.Errorf("database error: %v", err)
 ```
 
-### 全局 Logger
+### Global Logger
 
-包内置全局 Logger 实例，可直接使用，无需创建。
+The package ships with a global Logger instance that can be used directly, with no setup.
 
 ```go
-// 结构化日志
+// structured logs
 logger.Info("server started", logger.String("addr", ":8080"))
 logger.Error("database connection failed", logger.Err(err))
 
-// 格式化日志
+// formatted logs
 logger.Infof("listening on %s", addr)
 logger.Warnf("deprecated config: %s", key)
 
-// 刷新缓冲区
+// flush the buffer
 defer logger.Sync()
 ```
 
-替换全局 Logger：
+Replacing the global Logger:
 
 ```go
 l := logger.New(logger.Config{
@@ -226,25 +226,25 @@ l := logger.New(logger.Config{
 logger.SetGlobal(l)
 ```
 
-> **关闭说明**：`New` 返回的是 `ILogger` 接口，**接口不含 `Close`**（`Close` 仅在具体类型 `*logger.Logger` 上定义）。全局实例退出前用包级 `logger.Sync()` 刷缓冲即可；确需手动关闭某个实例时用类型断言 `l.(*logger.Logger).Close()`。运行时热切换可用 `logger.ReplaceGlobal(cfg)`，它返回被替换的旧实例供你自行关闭。
+> **About closing**: `New` returns the `ILogger` interface, and **the interface has no `Close`** (`Close` is only defined on the concrete `*logger.Logger` type). Before the global instance exits, flushing the buffer with the package-level `logger.Sync()` is enough; if you really must close an instance manually, use a type assertion `l.(*logger.Logger).Close()`. For a hot swap at runtime use `logger.ReplaceGlobal(cfg)`, which returns the replaced instance so you can close it yourself.
 
-### 上下文日志
+### Context logging
 
-所有日志方法都有 `Ctx` 后缀版本，自动从 `context.Context` 中提取字段并注入日志。
+Every logging method has a `Ctx`-suffixed version that automatically extracts fields from the `context.Context` and injects them into the log.
 
-#### 基本用法
+#### Basic usage
 
 ```go
 ctx, span := trace.StartSpan(ctx, "handle-request")
 defer span.End()
 
-logger.InfofCtx(ctx, "处理请求, 用户ID: %d", userID)
-// 输出: {"level":"INFO","msg":"处理请求, 用户ID: 42","trace_id":"5c4eff...","span_id":"6252c3..."}
+logger.InfofCtx(ctx, "processing request, userID: %d", userID)
+// output: {"level":"INFO","msg":"processing request, userID: 42","trace_id":"5c4eff...","span_id":"6252c3..."}
 ```
 
-#### 可用的 Ctx 方法
+#### Available Ctx methods
 
-| 结构化日志 | 格式化日志 |
+| Structured logging | Formatted logging |
 | ----------- | ---------- |
 | `DebugCtx(ctx, msg, fields...)` | `DebugfCtx(ctx, format, args...)` |
 | `InfoCtx(ctx, msg, fields...)` | `InfofCtx(ctx, format, args...)` |
@@ -253,116 +253,117 @@ logger.InfofCtx(ctx, "处理请求, 用户ID: %d", userID)
 | `PanicCtx(ctx, msg, fields...)` | `PanicfCtx(ctx, format, args...)` |
 | `FatalCtx(ctx, msg, fields...)` | `FatalfCtx(ctx, format, args...)` |
 
-#### 自定义上下文提取器
+#### Custom context extractors
 
-通过 `RegisterContextExtractor` 注册自定义提取器，从 context 中提取业务字段。
-它返回一个**注销函数**，用于撤销本次注册。
+Register a custom extractor with `RegisterContextExtractor` to pull business fields out of the context.
+It returns an **unregister function** that undoes the registration.
 
 ```go
-// 提取器函数签名
+// extractor function signature
 type ContextExtractor func(ctx context.Context) []Field
 
-// 注册提取器（可注册多个，日志输出时合并所有结果）
+// register an extractor (several can be registered; all results are merged when a log is emitted)
 unregister := logger.RegisterContextExtractor(func(ctx context.Context) []logger.Field {
     if tenantID, ok := ctx.Value("tenant_id").(string); ok {
         return []logger.Field{logger.String("tenant_id", tenantID)}
     }
     return nil
 })
-defer unregister() // 不再使用时撤销（幂等，重复调用只生效一次）
+defer unregister() // undo it when no longer needed (idempotent; repeated calls take effect once)
 ```
 
-> **为什么要注销**：注册是追加式的，且 Go 中函数值不可比较、无法在注册时去重。
-> 初始化流程若被多次执行（重试、多阶段配置、测试复用），同一提取器会被注册多次，
-> 导致每条日志里相同字段重复输出多遍。用返回的注销函数即可撤销。
-> `extractor` 传 `nil` 时不注册，返回的注销函数为空操作。
+> **Why unregister**: registration is append-only, and Go function values cannot be compared, so duplicates
+> can't be detected at registration time. If the initialization flow runs more than once (retries, staged
+> configuration, test reuse), the same extractor gets registered several times and the same fields appear
+> repeatedly in every log line. The returned unregister function undoes it.
+> Passing `nil` as the `extractor` registers nothing, and the returned unregister function is a no-op.
 
-#### 内置提取器
+#### Built-in extractors
 
-`infra-go/trace` 包在 `init()` 中自动注册链路追踪提取器，无需手动配置：
+The `infra-go/trace` package registers a tracing extractor automatically in `init()`, so no manual setup is required:
 
 ```go
-import _ "github.com/chihqiang/infra-go/trace" // 自动注册 trace_id, span_id 提取器
+import _ "github.com/chihqiang/infra-go/trace" // registers the trace_id, span_id extractors automatically
 ```
 
-提取的字段：
+Extracted fields:
 
-- `trace_id`：链路追踪 ID
-- `span_id`：当前 span ID
+- `trace_id`: the trace ID
+- `span_id`: the current span ID
 
-#### 提取器执行顺序
+#### Extractor execution order
 
-1. 按注册顺序依次执行所有提取器
-2. 所有提取器的结果合并为一个字段列表
-3. `Ctx` 方法的 `fields` 参数追加在提取器字段之后
+1. All extractors run in registration order
+2. The results of all extractors are merged into a single field list
+3. The `fields` arguments of a `Ctx` method are appended after the extractor fields
 
 ```go
-// 提取器字段在前，手动字段在后
-logger.InfoCtx(ctx, "操作完成",
+// extractor fields first, manual fields afterwards
+logger.InfoCtx(ctx, "operation completed",
     logger.Int("status", 200),
 )
-// 输出: {"trace_id":"...","span_id":"...","status":200,"msg":"操作完成"}
+// output: {"trace_id":"...","span_id":"...","status":200,"msg":"operation completed"}
 ```
 
-## 编码格式
+## Encoding formats
 
-### JSON 编码（默认）
+### JSON encoding (default)
 
-适合生产环境，便于日志收集系统解析。
+Suited to production and easy for log collection systems to parse.
 
 ```json
 {"level":"INFO","time":"2026-01-01T12:00:00.000+08:00","caller":"main.go:10","msg":"hello","key":"value"}
 ```
 
-### Console 编码
+### Console encoding
 
-适合开发环境，人类可读，带颜色。
+Suited to development: human-readable and colorized.
 
 ```text
 2026-01-01T12:00:00.000+0800    INFO    main.go:10    hello    {"key": "value"}
 ```
 
-## 输出目标
+## Output targets
 
-### 标准输出/错误
+### Standard output / error
 
 ```go
 logger.New(logger.Config{
-    Output: []string{"stdout"},      // 标准输出
-    ErrorOutput: "stderr",           // 标准错误
+    Output: []string{"stdout"},      // standard output
+    ErrorOutput: "stderr",           // standard error
 })
 ```
 
-### 文件输出（自动轮转）
+### File output (automatic rotation)
 
-文件输出基于 [lumberjack](https://github.com/natefinch/lumberjack) 实现自动轮转，避免日志文件无限增长。
+File output uses [lumberjack](https://github.com/natefinch/lumberjack) for automatic rotation, so log files never grow without bound.
 
 ```go
 logger.New(logger.Config{
     Output: []string{"/var/log/app.log"},
     Rotation: logger.RotationConfig{
-        MaxSize:    100,  // 单文件最大 100MB
-        MaxBackups: 7,    // 保留 7 个备份
-        MaxAge:     30,   // 保留 30 天
-        Compress:   true, // gzip 压缩旧文件
+        MaxSize:    100,  // a single file is at most 100MB
+        MaxBackups: 7,    // keep 7 backups
+        MaxAge:     30,   // keep them for 30 days
+        Compress:   true, // gzip the old files
     },
 })
 ```
 
-轮转行为：
+Rotation behavior:
 
-1. 当日志文件大小超过 `MaxSize` 时，当前文件重命名为 `app-<timestamp>.log`（或 `.log.gz` 如果启用压缩）
-2. 创建新的 `app.log` 继续写入
-3. 如果备份数量超过 `MaxBackups`，删除最旧的备份
-4. 如果备份天数超过 `MaxAge`，删除超龄的备份
+1. When the log file exceeds `MaxSize`, the current file is renamed to `app-<timestamp>.log` (or `.log.gz` when compression is enabled)
+2. A new `app.log` is created and writing continues
+3. If the number of backups exceeds `MaxBackups`, the oldest backups are deleted
+4. If a backup is older than `MaxAge` days, it is deleted
 
-不设置 `Rotation` 时使用默认值（100MB/7份/30天/不压缩）。
+When `Rotation` is not set the defaults apply (100MB / 7 files / 30 days / no compression).
 
-文件输出时会自动创建不存在的目录。
+Missing directories are created automatically for file output.
 
-### 多目标输出
+### Multiple output targets
 
-同时输出到控制台和文件：
+Writing to the console and a file at the same time:
 
 ```go
 logger.New(logger.Config{
@@ -370,7 +371,7 @@ logger.New(logger.Config{
 })
 ```
 
-## 完整示例
+## Complete example
 
 ```go
 package main
@@ -382,7 +383,7 @@ import (
 )
 
 func main() {
-    // 创建 Logger
+    // create the Logger
     l := logger.New(logger.Config{
         Level:      logger.InfoLevel,
         Encoding:   logger.JSONEncoding,
@@ -399,22 +400,22 @@ func main() {
     })
     logger.SetGlobal(l)
 
-    // 结构化日志
+    // structured logs
     logger.Info("server starting",
         logger.String("host", "0.0.0.0"),
         logger.Int("port", 8080),
     )
 
-    // 格式化日志
+    // formatted logs
     logger.Infof("server shutdown after %v", time.Since(start))
 }
 ```
 
-## 性能建议
+## Performance recommendations
 
-- **生产环境**：使用结构化日志方法（`Info`、`Error` 等），性能最优
-- **开发环境**：使用 `ConsoleEncoding` 和 `DebugLevel`，格式化方法更便捷
-- **链路追踪**：使用 `Ctx` 后缀方法自动注入 traceID/spanID，无需手动传递
-- **退出前**：始终调用 `Sync()` 刷新缓冲区，避免丢失日志
-- **日志轮转**：生产环境务必配置 `Rotation`，避免日志文件无限增长
-- **压缩备份**：启用 `Compress: true` 节省磁盘空间，旧日志文件自动 gzip 压缩
+- **Production**: use the structured logging methods (`Info`, `Error`, etc.) for the best performance
+- **Development**: use `ConsoleEncoding` and `DebugLevel`; the formatted methods are more convenient
+- **Tracing**: use the `Ctx`-suffixed methods to inject traceID/spanID automatically, with no manual passing
+- **Before exiting**: always call `Sync()` to flush the buffer so logs aren't lost
+- **Rotation**: always configure `Rotation` in production so log files don't grow without bound
+- **Compressed backups**: enable `Compress: true` to save disk space; old log files are gzipped automatically

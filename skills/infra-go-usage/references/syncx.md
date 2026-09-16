@@ -1,16 +1,17 @@
 # syncx
 
-并发工具包，提供常用的并发控制原语。
+A concurrency utility package providing common concurrency control primitives.
 
-## 特性
+## Features
 
-- **SingleFlight**：防止缓存击穿，相同 key 的并发调用只执行一次
-- **ConcurrentMap**：泛型分段锁 Map，高并发读写性能优于 `sync.Map`
-- **Semaphore**：信号量，控制并发数量
-- **OnceValue / OnceError**：泛型懒加载，只执行一次
-- **OrDone / Merge / FanOut**：Channel 流水线工具
+- **SingleFlight**: cache stampede protection — concurrent calls with the same key run only once
+- **ConcurrentMap**: a generic sharded lock map, outperforming `sync.Map` under heavy concurrent
+  read/write
+- **Semaphore**: controls the level of concurrency
+- **OnceValue / OnceError**: generic lazy initialization that runs only once
+- **OrDone / Merge / FanOut**: channel pipeline helpers
 
-## 安装
+## Installation
 
 ```bash
 go get github.com/chihqiang/infra-go/syncx
@@ -18,27 +19,28 @@ go get github.com/chihqiang/infra-go/syncx
 
 ## SingleFlight
 
-防止缓存击穿，相同 key 的并发调用只执行一次，结果共享给所有调用者。
+Cache stampede protection: concurrent calls with the same key run only once, and the result is
+shared with every caller.
 
 ```go
 sf := syncx.NewSingleFlight[string]()
 
-// 100 个协程同时查询同一个 key，只穿透到底层数据源一次
+// 100 goroutines query the same key at once; only one reaches the underlying data source
 var wg sync.WaitGroup
 for i := 0; i < 100; i++ {
     wg.Add(1)
     go func() {
         defer wg.Done()
         val, err := sf.Do("user:123", func() (string, error) {
-            return fetchUserFromDB(123) // 只执行一次
+            return fetchUserFromDB(123) // runs only once
         })
-        // 所有协程拿到相同的结果
+        // every goroutine gets the same result
     }()
 }
 wg.Wait()
 ```
 
-支持 context 取消：
+Context cancellation is supported:
 
 ```go
 val, err := sf.DoCtx(ctx, "user:123", func(ctx context.Context) (string, error) {
@@ -46,64 +48,67 @@ val, err := sf.DoCtx(ctx, "user:123", func(ctx context.Context) (string, error) 
 })
 ```
 
-| 方法 | 说明 |
+| Method | Description |
 | ------ | ------ |
-| `Do(key, fn)` | 执行 fn，相同 key 并发只执行一次 |
-| `DoCtx(ctx, key, fn)` | 同上，支持 context 取消 |
-| `Forget(key)` | 清除 key 的调用记录，下次重新执行 |
+| `Do(key, fn)` | Run fn; concurrent calls with the same key run it only once |
+| `DoCtx(ctx, key, fn)` | Same as above, with context cancellation |
+| `Forget(key)` | Clear the key's call record so the next call runs fn again |
 
-> **panic 会传播给所有等待者**：若 leader 的 `fn` panic，等待者会收到**同一个
-> panic 值并同样 panic**，而不会被转换成零值返回。因此调用方的 `recover`
-> 必须覆盖每个 `Do`/`DoCtx` 调用点（而不只是发起调用的那一个）。
+> **A panic propagates to every waiter**: if the leader's `fn` panics, the waiters receive
+> **the same panic value and panic as well** instead of being handed a zero value. A caller's
+> `recover` must therefore cover every `Do`/`DoCtx` call site, not just the one that started the
+> call.
 >
-> 这样设计是为了避免"静默数据损坏"：在缓存击穿场景下，若等待者拿到
-> 零值 + `nil` error，上层会误判为加载成功并把零值写回缓存或返回给用户。
+> This design avoids "silent data corruption": during a cache stampede, if waiters received a
+> zero value plus a `nil` error, upper layers would mistake it for a successful load and write the
+> zero value back to the cache or hand it to users.
 
 ## ConcurrentMap
 
-泛型分段锁 Map，默认 32 个分段，比全局单一锁有更好的并发性能。
+A generic sharded lock map with 32 shards by default, giving better concurrency than a single
+global lock.
 
 ```go
 m := syncx.NewConcurrentMap[string, int]()
 
 m.Set("a", 1)
 val, ok := m.Get("a")       // 1, true
-val, ok = m.GetOrSet("b", 2) // 2, false (新设置)
+val, ok = m.GetOrSet("b", 2) // 2, false (newly set)
 m.Delete("a")
 
-// 遍历
+// iterate
 m.Range(func(key string, value int) bool {
     fmt.Printf("%s=%d\n", key, value)
-    return true // 返回 false 停止遍历
+    return true // return false to stop iterating
 })
 
-// 获取所有键/值
+// get all keys/values
 keys := m.Keys()
 values := m.Values()
 
 m.Clear()
 ```
 
-| 方法 | 说明 |
+| Method | Description |
 | ------ | ------ |
-| `Set(key, value)` | 设置键值对 |
-| `Get(key)` | 获取值，返回 (value, ok) |
-| `GetOrSet(key, default)` | 获取或设置默认值 |
-| `GetAndDelete(key)` | 获取并删除 |
-| `Delete(key)` | 删除键 |
-| `Has(key)` | 检查键是否存在 |
-| `Len()` | 返回键值对数量 |
-| `Range(fn)` | 遍历所有键值对 |
-| `Keys()` | 返回所有键 |
-| `Values()` | 返回所有值 |
-| `Clear()` | 清空所有键值对 |
+| `Set(key, value)` | Set a key/value pair |
+| `Get(key)` | Get a value, returning (value, ok) |
+| `GetOrSet(key, default)` | Get the value, or set the default |
+| `GetAndDelete(key)` | Get and delete |
+| `Delete(key)` | Delete a key |
+| `Has(key)` | Check whether a key exists |
+| `Len()` | Number of key/value pairs |
+| `Range(fn)` | Iterate over every key/value pair |
+| `Keys()` | Return all keys |
+| `Values()` | Return all values |
+| `Clear()` | Remove all key/value pairs |
 
 ## Semaphore
 
-信号量，用于控制并发数量。
+A semaphore used to limit concurrency.
 
 ```go
-sem := syncx.NewSemaphore(10) // 最多 10 个并发
+sem := syncx.NewSemaphore(10) // at most 10 concurrent
 
 for _, task := range tasks {
     sem.Acquire()
@@ -112,62 +117,62 @@ for _, task := range tasks {
         doWork(t)
     }(task)
 }
-sem.Wait() // 等待所有完成
+sem.Wait() // wait for all of them to finish
 ```
 
-非阻塞尝试获取：
+Non-blocking acquisition attempt:
 
 ```go
 if sem.TryAcquire() {
     defer sem.Release()
     doWork()
 } else {
-    // 信号量已满，跳过或排队
+    // the semaphore is full; skip or queue
 }
 ```
 
-| 方法 | 说明 |
+| Method | Description |
 | ------ | ------ |
-| `Acquire()` | 获取信号量，满则阻塞 |
-| `TryAcquire()` | 尝试获取，满则返回 false |
-| `Release()` | 释放信号量 |
-| `Wait()` | 等待所有已获取的信号量释放 |
-| `Capacity()` | 返回最大并发数 |
-| `Available()` | 返回当前可用数量 |
+| `Acquire()` | Acquire; blocks when full |
+| `TryAcquire()` | Try to acquire; returns false when full |
+| `Release()` | Release the semaphore |
+| `Wait()` | Wait until every acquired slot is released |
+| `Capacity()` | Return the maximum concurrency |
+| `Available()` | Return the number currently available |
 
 ## OnceValue / OnceError
 
-泛型懒加载，保证函数只执行一次。
+Generic lazy initialization that guarantees the function runs only once.
 
 ```go
-// 不带 error
+// without an error
 var config = syncx.NewOnceValue(func() *Config {
-    return loadConfig() // 只加载一次
+    return loadConfig() // loaded only once
 })
 cfg := config.Get()
 
-// 带 error
+// with an error
 var conn = syncx.NewOnceError(func() (*sql.DB, error) {
-    return sql.Open("mysql", dsn) // 只连接一次
+    return sql.Open("mysql", dsn) // connected only once
 })
 db, err := conn.Get()
 ```
 
-## Channel 工具
+## Channel helpers
 
 ### OrDone
 
-当 context 取消或源 channel 关闭时关闭输出 channel：
+Closes the output channel when the context is cancelled or the source channel is closed:
 
 ```go
 for v := range syncx.OrDoneCtx(ctx, src) {
-    process(v) // ctx 取消时自动停止
+    process(v) // stops automatically when ctx is cancelled
 }
 ```
 
 ### Merge
 
-将多个 channel 合并为一个：
+Merges several channels into one:
 
 ```go
 merged := syncx.Merge(ctx, ch1, ch2, ch3)
@@ -178,10 +183,11 @@ for v := range merged {
 
 ### FanOut
 
-将输入 channel 的每个值广播到所有输出 channel，各 output 之间并发发送互不阻塞。
+Broadcasts every value from the input channel to all output channels; sends to the various
+outputs run concurrently and do not block one another.
 
 ```go
-outs := syncx.FanOut(ctx, input, 3) // 3 个输出 channel，均收到全部值
+outs := syncx.FanOut(ctx, input, 3) // 3 output channels, each of them receiving every value
 for _, out := range outs {
     go func(ch <-chan T) {
         for v := range ch {
@@ -191,4 +197,5 @@ for _, out := range outs {
 }
 ```
 
-每个输出 channel 都会收到 `input` 中的每一个值。若某个消费者处理缓慢，不会阻塞其他消费者的接收。context 取消时所有等待发送的操作自动解除阻塞。
+Every output channel receives every value in `input`. A slow consumer does not block reception by
+the others. When the context is cancelled, every pending send is unblocked automatically.

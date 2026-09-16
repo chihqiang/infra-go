@@ -1,13 +1,15 @@
 package conf
 
-// Validator 定义配置验证接口。
-// 如果配置结构体实现了该接口，在加载配置后会自动调用 Validate 方法进行自定义验证。
+// Validator defines the configuration validation interface.
+// If a config struct implements this interface, the Validate method is called
+// automatically after the configuration is loaded, for custom validation.
 type Validator interface {
-	// Validate 验证配置值是否合法，返回 nil 表示通过。
+	// Validate validates whether the configuration values are legal; nil means it passed.
 	Validate() error
 }
 
-// validate 检查 v 是否实现了 Validator 接口，如果实现了则调用其 Validate 方法。
+// validate checks whether v implements the Validator interface and, if so, calls its
+// Validate method.
 func validate(v any) error {
 	if val, ok := v.(Validator); ok {
 		return val.Validate()

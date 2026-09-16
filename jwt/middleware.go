@@ -9,61 +9,68 @@ import (
 	stdjwt "github.com/golang-jwt/jwt/v5"
 )
 
-// 认证失败响应消息。
+// Authentication failure response messages.
 const (
 	msgTokenMissing = "token is missing"
 	msgTokenExpired = "token expired"
 	msgInvalidToken = "invalid token"
 )
 
-// claimCtxKey 用于在 context 中存储单个 claim 值的键类型。
-// 用未导出类型包装 claim key，避免与其他包的 context key 冲突。
+// claimCtxKey is the key type used to store a single claim value in a context.
+// The unexported type wraps the claim key to avoid clashing with context keys
+// from other packages.
 type claimCtxKey string
 
-// Claims 是 jwt.MapClaims 的别名，方便外部使用。
-// 使用 MapClaims 可以自由扩展任意字段，无需固定结构体。
+// Claims is an alias for jwt.MapClaims, for convenience.
+// MapClaims can be freely extended with arbitrary fields, so no fixed struct
+// is needed.
 type Claims = stdjwt.MapClaims
 
-// contextKey 用于在 context 中存储 claims 的键类型。
+// contextKey is the key type used to store claims in a context.
 type contextKey struct{}
 
-// claimsKey 是 context 中存储 claims 的键。
+// claimsKey is the context key under which claims are stored.
 var claimsKey = contextKey{}
 
-// WithClaims 将 claims 写入 context，返回新的 context。
-// 后续可通过 ClaimsFromContext 提取。
+// WithClaims stores claims in the context and returns the new context.
+// They can later be retrieved with ClaimsFromContext.
 func WithClaims(ctx context.Context, claims Claims) context.Context {
 	return context.WithValue(ctx, claimsKey, claims)
 }
 
-// ClaimsFromContext 从 context 中提取 claims。
-// 如果 context 中没有 claims，返回 nil。
+// ClaimsFromContext extracts claims from the context.
+// It returns nil when the context holds no claims.
 func ClaimsFromContext(ctx context.Context) Claims {
 	claims, _ := ctx.Value(claimsKey).(Claims)
 	return claims
 }
 
-// bearerChallenge 返回 401 响应的 WWW-Authenticate 质询。
+// bearerChallenge returns the WWW-Authenticate challenge for a 401 response.
 //
-// RFC 9110 §15.5.2 要求 401 MUST 携带 WWW-Authenticate；
-// JWT 采用 Bearer 方案，因此按 RFC 6750 §3 产出质询，
-// error 参数区分"缺凭证"与"凭证无效"，便于客户端决定是跳登录还是刷新令牌。
+// RFC 9110 §15.5.2 requires a 401 to carry WWW-Authenticate;
+// JWT uses the Bearer scheme, so the challenge is produced per RFC 6750 §3,
+// where the error parameter distinguishes "missing credentials" from
+// "invalid credentials" so the client can decide whether to redirect to login
+// or to refresh the token.
 func bearerChallenge(errCode string) middleware.Challenge {
 	return middleware.Challenge{Scheme: "Bearer", Error: errCode}
 }
 
-// AuthMiddleware 返回 JWT 认证中间件。
+// AuthMiddleware returns the JWT authentication middleware.
 //
-// getToken 由调用方提供，从请求中提取 token（如从 Header/Cookie/Query），
-// 中间件只负责解析验证和注入 claims，不关心 token 来源。
+// getToken is supplied by the caller and extracts the token from the request
+// (e.g. from a header, cookie or query); the middleware only parses, validates
+// and injects the claims and does not care where the token comes from.
 //
-// 验证失败返回 401 Unauthorized，并携带符合 RFC 6750 §3 的
-// `WWW-Authenticate: Bearer error="..."` 质询；
-// 错误响应经 httpx/middleware 的统一错误机制输出
-// （import httpx 主包时为其统一 JSON 响应，否则为 http.Error 纯文本）。
+// On validation failure it returns 401 Unauthorized together with an
+// `WWW-Authenticate: Bearer error="..."` challenge as specified by RFC 6750 §3;
+// the error response is emitted through the unified error mechanism of
+// httpx/middleware (a unified JSON response when the httpx main package is
+// imported, otherwise plain text via http.Error).
 //
-// 返回类型为 func(http.HandlerFunc) http.HandlerFunc，兼容 httpx.Middleware，
-// 可直接 server.Use 注册；也可通过 httpx.WithJWT 便捷注册。
+// The return type is func(http.HandlerFunc) http.HandlerFunc, compatible with
+// httpx.Middleware, so it can be registered with server.Use directly, or through
+// the httpx.WithJWT convenience helper.
 func (j *JWT) AuthMiddleware(getToken func(*http.Request) string) func(http.HandlerFunc) http.HandlerFunc {
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -77,8 +84,9 @@ func (j *JWT) AuthMiddleware(getToken func(*http.Request) string) func(http.Hand
 			claims, err := j.ParseAccessToken(token)
 			if err != nil {
 				if errors.Is(err, ErrExpiredToken) {
-					// 过期令牌仍是"无效令牌"，RFC 6750 无独立取值；
-					// 保留可读消息以便客户端区分（提示刷新而非重新登录）。
+					// An expired token is still an "invalid token" and RFC 6750 has no
+					// dedicated value for it; a readable message is kept so the client
+					// can tell the cases apart (prompting a refresh, not a re-login).
 					middleware.WriteUnauthorized(r.Context(), w,
 						bearerChallenge(middleware.BearerErrorInvalidToken), msgTokenExpired)
 				} else {
@@ -88,7 +96,8 @@ func (j *JWT) AuthMiddleware(getToken func(*http.Request) string) func(http.Hand
 				return
 			}
 
-			// 将业务声明（排除标准声明和 token_type）逐个注入 context
+			// Inject each business claim (excluding standard claims and token_type)
+			// into the context one by one
 			business := extractBusinessClaims(claims)
 			ctx := r.Context()
 			for k, v := range business {

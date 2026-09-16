@@ -1,31 +1,31 @@
 # jwt
 
-基于 [golang-jwt/jwt/v5](https://github.com/golang-jwt/jwt) 的 JWT 封装包，面向对象设计，配置只初始化一次，用 `Claims`（即 golang-jwt 的 `MapClaims` 别名）支持自由扩展声明字段。
+A JWT wrapper package built on [golang-jwt/jwt/v5](https://github.com/golang-jwt/jwt), designed in an object-oriented way: the configuration is initialized once, and `Claims` (an alias for golang-jwt's `MapClaims`) supports freely extending the claim fields.
 
-## 特性
+## Features
 
-- **面向对象**：`JWT` 实例封装配置，无需每次传参
-- **自由声明**：`jwt.Claims` 即 golang-jwt 的 `MapClaims` 类型别名（`map[string]any`），可自由扩展任意声明字段
-- **双令牌模式**：访问令牌（短期）+ 刷新令牌（长期），自动生成令牌对
-- **多算法支持**：HS256 / HS384 / HS512
-- **令牌刷新**：用刷新令牌生成全新令牌对
-- **类型验证**：区分访问令牌与刷新令牌，防止混用
-- **配置驱动**：Config 用 `default` 结构体标签定义默认值，遵循 conf 标准
-- **统一错误**：语义化错误（`ErrInvalidToken`、`ErrExpiredToken` 等），便于上层处理
-- **常量管理**：标准/业务声明的 key 均为常量，避免硬编码字符串
-- **HTTP 认证中间件**：`AuthMiddleware` 验证令牌后把业务 claims 注入 context；httpx 侧可用 `httpx.WithJWT` 便捷注册（见 [httpx](./httpx.md)）
+- **Object-oriented**: a `JWT` instance encapsulates the configuration, so parameters don't have to be passed every call
+- **Free-form claims**: `jwt.Claims` is a type alias for golang-jwt's `MapClaims` (`map[string]any`), so any claim field can be added freely
+- **Dual-token mode**: access token (short-lived) + refresh token (long-lived), generating token pairs automatically
+- **Multiple algorithms**: HS256 / HS384 / HS512
+- **Token refresh**: use a refresh token to generate a brand-new token pair
+- **Type validation**: distinguishes access tokens from refresh tokens to prevent mixing them up
+- **Configuration-driven**: Config defines defaults with `default` struct tags, following the conf standard
+- **Unified errors**: semantic errors (`ErrInvalidToken`, `ErrExpiredToken`, etc.) that are easy for callers to handle
+- **Constant management**: both standard and business claim keys are constants, avoiding hard-coded strings
+- **HTTP auth middleware**: `AuthMiddleware` validates the token and injects the business claims into the context; on the httpx side you can register it conveniently with `httpx.WithJWT` (see [httpx](./httpx.md))
 
-## 依赖关系
+## Dependencies
 
-`jwt` **不依赖 httpx 主包**（仅依赖 `httpx/middleware` 子包输出错误），因此 httpx 主包可反向引用 jwt 暴露 `httpx.WithJWT`，无循环依赖。认证失败经 `httpx/middleware` 的统一错误机制输出：应用 import 了 httpx 主包时为其统一 `Response[T]` JSON（携带 `request_id`），否则退化为 `http.Error` 纯文本。
+`jwt` **does not depend on the httpx main package** (it only relies on the `httpx/middleware` subpackage for error output), so the httpx main package can reference jwt in reverse to expose `httpx.WithJWT` without a circular dependency. Authentication failures are emitted through the unified error mechanism of `httpx/middleware`: when the application imports the httpx main package they become its unified `Response[T]` JSON (carrying `request_id`), otherwise they degrade to plain-text `http.Error`.
 
-## 安装
+## Installation
 
 ```bash
 go get github.com/chihqiang/infra-go/jwt
 ```
 
-## 快速开始
+## Quick start
 
 ```go
 package main
@@ -38,7 +38,7 @@ import (
 )
 
 func main() {
-    // 初始化只需一次
+    // initialization only needs to happen once
     j := jwt.MustNew(jwt.Config{
         Secret:             "my-secret-key",
         Issuer:             "my-app",
@@ -47,7 +47,7 @@ func main() {
         Algorithm:          jwt.AlgorithmHS256,
     })
 
-    // 生成令牌对
+    // generate a token pair
     pair, err := j.GenerateTokenPair(jwt.Claims{
         jwt.ClaimKeyUserID:   "user-123",
         jwt.ClaimKeyUsername: "alice",
@@ -57,7 +57,7 @@ func main() {
         panic(err)
     }
 
-    // 验证访问令牌
+    // validate the access token
     claims, err := j.ParseAccessToken(pair.AccessToken)
     if err != nil {
         panic(err)
@@ -68,117 +68,117 @@ func main() {
 
 ## API
 
-### 创建实例
+### Creating an instance
 
 ```go
-j, err := jwt.New(jwt.Config{Secret: "my-secret-key", Issuer: "my-app", ...}) // 返回 error
-j := jwt.MustNew(jwt.Config{Secret: "my-secret-key"})                         // 出错 panic
+j, err := jwt.New(jwt.Config{Secret: "my-secret-key", Issuer: "my-app", ...}) // returns an error
+j := jwt.MustNew(jwt.Config{Secret: "my-secret-key"})                         // panics on error
 ```
 
-### 令牌生成
+### Token generation
 
 ```go
-token, err := j.GenerateAccessToken(jwt.Claims{jwt.ClaimKeyUserID: "user-123"})   // 自动 token_type=access
-token, err := j.GenerateRefreshToken(jwt.Claims{jwt.ClaimKeyUserID: "user-123"})  // 自动 token_type=refresh
-pair, err := j.GenerateTokenPair(jwt.Claims{...})                                  // access + refresh 同时生成
-token, err := j.GenerateToken(jwt.Claims{jwt.ClaimKeyUserID: "123"}, 30*time.Minute) // 自定义过期时间
+token, err := j.GenerateAccessToken(jwt.Claims{jwt.ClaimKeyUserID: "user-123"})   // sets token_type=access automatically
+token, err := j.GenerateRefreshToken(jwt.Claims{jwt.ClaimKeyUserID: "user-123"})  // sets token_type=refresh automatically
+pair, err := j.GenerateTokenPair(jwt.Claims{...})                                  // generates access + refresh together
+token, err := j.GenerateToken(jwt.Claims{jwt.ClaimKeyUserID: "123"}, 30*time.Minute) // custom expiry
 ```
 
-### 令牌验证
+### Token validation
 
 ```go
-claims, err := j.ParseToken(tokenString)          // 解析（不验证类型）
-claims, err := j.ParseAccessToken(tokenString)    // 验证访问令牌
-claims, err := j.ParseRefreshToken(tokenString)   // 验证刷新令牌
+claims, err := j.ParseToken(tokenString)          // parse (without validating the type)
+claims, err := j.ParseAccessToken(tokenString)    // validate an access token
+claims, err := j.ParseRefreshToken(tokenString)   // validate a refresh token
 ```
 
-### 令牌刷新
+### Token refresh
 
 ```go
-newPair, err := j.RefreshToken(oldRefreshToken) // 用刷新令牌生成新令牌对
+newPair, err := j.RefreshToken(oldRefreshToken) // generate a new token pair from a refresh token
 ```
 
-### Claims 与 ClaimKey
+### Claims and ClaimKey
 
-`jwt.Claims` 是 golang-jwt 的 `MapClaims` 类型别名（`map[string]any`），可自由扩展：
+`jwt.Claims` is a type alias for golang-jwt's `MapClaims` (`map[string]any`) and can be extended freely:
 
 ```go
 claims := jwt.Claims{
     jwt.ClaimKeyUserID: "user-123",
     jwt.ClaimKeyRole:   "admin",
-    "meta":             map[string]any{"department": "engineering"}, // 自定义 key
+    "meta":             map[string]any{"department": "engineering"}, // custom key
 }
-userID, _ := claims[jwt.ClaimKeyUserID].(string) // 读取时需类型断言
+userID, _ := claims[jwt.ClaimKeyUserID].(string) // a type assertion is needed when reading
 ```
 
-预定义 key 常量：
+Predefined key constants:
 
-| 常量 | 值 | 说明 |
+| Constant | Value | Description |
 |------|----|------|
-| `ClaimKeyIssuer` | `"iss"` | 签发者 |
-| `ClaimKeySubject` | `"sub"` | 主题 |
-| `ClaimKeyAudience` | `"aud"` | 受众 |
-| `ClaimKeyExpirationTime` | `"exp"` | 过期时间 |
-| `ClaimKeyNotBefore` | `"nbf"` | 生效时间 |
-| `ClaimKeyIssuedAt` | `"iat"` | 签发时间 |
-| `ClaimKeyJWTID` | `"jti"` | JWT 唯一标识 |
-| `ClaimKeyTokenType` | `"token_type"` | 令牌类型 |
-| `ClaimKeyUserID` | `"user_id"` | 用户 ID |
-| `ClaimKeyUsername` | `"username"` | 用户名 |
-| `ClaimKeyRole` | `"role"` | 角色 |
-| `ClaimKeyPermissions` | `"permissions"` | 权限列表 |
-| `ClaimKeyScopes` | `"scopes"` | 作用域列表 |
+| `ClaimKeyIssuer` | `"iss"` | Issuer |
+| `ClaimKeySubject` | `"sub"` | Subject |
+| `ClaimKeyAudience` | `"aud"` | Audience |
+| `ClaimKeyExpirationTime` | `"exp"` | Expiration time |
+| `ClaimKeyNotBefore` | `"nbf"` | Not-before time |
+| `ClaimKeyIssuedAt` | `"iat"` | Issued-at time |
+| `ClaimKeyJWTID` | `"jti"` | Unique JWT identifier |
+| `ClaimKeyTokenType` | `"token_type"` | Token type |
+| `ClaimKeyUserID` | `"user_id"` | User ID |
+| `ClaimKeyUsername` | `"username"` | Username |
+| `ClaimKeyRole` | `"role"` | Role |
+| `ClaimKeyPermissions` | `"permissions"` | Permission list |
+| `ClaimKeyScopes` | `"scopes"` | Scope list |
 
-`TokenPair`：
+`TokenPair`:
 
 ```go
 type TokenPair struct {
-    AccessToken  string // 访问令牌
-    RefreshToken string // 刷新令牌
-    ExpiresAt    int64  // 访问令牌过期时间戳（秒）
+    AccessToken  string // access token
+    RefreshToken string // refresh token
+    ExpiresAt    int64  // access token expiry timestamp (seconds)
 }
 ```
 
-## 配置
+## Configuration
 
-| 字段 | 类型 | 默认值 | 说明 |
+| Field | Type | Default | Description |
 |------|------|--------|------|
-| `Secret` | `string` | `""` | HMAC 签名密钥（必填） |
-| `Issuer` | `string` | `""` | 签发者标识 |
-| `Audience` | `[]string` | `nil` | 受众列表 |
-| `AccessTokenExpire` | `time.Duration` | `2h` | 访问令牌有效期 |
-| `RefreshTokenExpire` | `time.Duration` | `168h` | 刷新令牌有效期 |
-| `Algorithm` | `Algorithm` | `HS256` | 签名算法 |
+| `Secret` | `string` | `""` | HMAC signing key (required) |
+| `Issuer` | `string` | `""` | Issuer identifier |
+| `Audience` | `[]string` | `nil` | Audience list |
+| `AccessTokenExpire` | `time.Duration` | `2h` | Access token lifetime |
+| `RefreshTokenExpire` | `time.Duration` | `168h` | Refresh token lifetime |
+| `Algorithm` | `Algorithm` | `HS256` | Signing algorithm |
 
-签名算法：`AlgorithmHS256`("HS256") / `AlgorithmHS384`("HS384") / `AlgorithmHS512`("HS512")。
+Signing algorithms: `AlgorithmHS256`("HS256") / `AlgorithmHS384`("HS384") / `AlgorithmHS512`("HS512").
 
-## 错误处理
+## Error handling
 
 ```go
 claims, err := j.ParseAccessToken(tokenString)
 switch {
 case err == nil:
-    // 成功
+    // success
 case errors.Is(err, jwt.ErrExpiredToken):
-    // 过期，需要刷新
+    // expired, needs refreshing
 case errors.Is(err, jwt.ErrInvalidToken):
-    // 无效（签名/格式/类型不匹配）
+    // invalid (signature/format/type mismatch)
 case errors.Is(err, jwt.ErrNotRefreshToken):
-    // 不是刷新令牌
+    // not a refresh token
 }
 ```
 
-| 错误 | 说明 |
+| Error | Description |
 |------|------|
-| `ErrInvalidToken` | 令牌无效（签名错误、格式错误、类型不匹配等） |
-| `ErrExpiredToken` | 令牌已过期 |
-| `ErrNotRefreshToken` | 令牌不是刷新令牌 |
-| `ErrSecretEmpty` | 密钥为空 |
-| `ErrUnsupportedAlgorithm` | 不支持的签名算法 |
+| `ErrInvalidToken` | Token is invalid (bad signature, malformed, type mismatch, etc.) |
+| `ErrExpiredToken` | Token has expired |
+| `ErrNotRefreshToken` | Token is not a refresh token |
+| `ErrSecretEmpty` | The secret is empty |
+| `ErrUnsupportedAlgorithm` | Unsupported signing algorithm |
 
-## 典型集成：HTTP 认证
+## Typical integration: HTTP authentication
 
-### 方式一：httpx.WithJWT（推荐，httpx 服务）
+### Option 1: httpx.WithJWT (recommended, httpx services)
 
 ```go
 j := jwt.MustNew(jwt.Config{Secret: cfg.JWTSecret})
@@ -188,9 +188,9 @@ server.Use(httpx.WithJWT(j, func(r *http.Request) string {
 }))
 ```
 
-### 方式二：直接使用 jwt.AuthMiddleware
+### Option 2: use jwt.AuthMiddleware directly
 
-`AuthMiddleware(getToken)` 返回 `func(http.HandlerFunc) http.HandlerFunc`（即 `httpx.Middleware`），可直接 `server.Use`：
+`AuthMiddleware(getToken)` returns `func(http.HandlerFunc) http.HandlerFunc` (that is, an `httpx.Middleware`), so it can be passed to `server.Use` directly:
 
 ```go
 server.Use(j.AuthMiddleware(func(r *http.Request) string {
@@ -198,11 +198,11 @@ server.Use(j.AuthMiddleware(func(r *http.Request) string {
 }))
 ```
 
-两者等价；`getToken` 由调用方决定 token 来源（Header/Cookie/Query）。
+The two are equivalent; the caller decides where `getToken` reads the token from (Header/Cookie/Query).
 
-### 下游读取 claims
+### Reading claims downstream
 
-认证通过后中间件把**业务声明**（排除标准声明与 `token_type`）注入 context：
+Once authentication succeeds the middleware injects the **business claims** (excluding the standard claims and `token_type`) into the context:
 
 ```go
 func GetUserHandler(w http.ResponseWriter, r *http.Request) {
@@ -212,13 +212,13 @@ func GetUserHandler(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-> 认证失败返回 401，并按 RFC 9110 §15.5.2（MUST）携带 `WWW-Authenticate` 质询；
-> `error` 参数取自 RFC 6750 §3：
+> A failed authentication returns 401 and, per RFC 9110 §15.5.2 (MUST), carries a `WWW-Authenticate` challenge;
+> the `error` parameter comes from RFC 6750 §3:
 >
-> | 场景 | `error` 取值 |
+> | Scenario | `error` value |
 > |------|-------------|
-> | 未提供令牌 | `invalid_request` |
-> | 令牌过期 / 无效 / 格式错误 | `invalid_token` |
+> | No token provided | `invalid_request` |
+> | Token expired / invalid / malformed | `invalid_token` |
 >
 > ```http
 > HTTP/1.1 401 Unauthorized
@@ -227,10 +227,10 @@ func GetUserHandler(w http.ResponseWriter, r *http.Request) {
 > {"code":401,"msg":"token expired","request_id":"..."}
 > ```
 >
-> 经 httpx 主包 import 时错误体为统一 JSON（如上）；未 import 时退化为 `http.Error` 纯文本。
-> 客户端可据此决定是跳转登录（`invalid_request`）还是刷新令牌（`invalid_token`）。
+> When the httpx main package is imported the error body is unified JSON (as above); otherwise it degrades to plain-text `http.Error`.
+> Clients can use this to decide between redirecting to login (`invalid_request`) and refreshing the token (`invalid_token`).
 
-## 完整示例
+## Complete example
 
 ```go
 package main
@@ -255,7 +255,7 @@ func main() {
         Algorithm:          jwt.AlgorithmHS256,
     })
 
-    // 登录：生成令牌对
+    // login: generate a token pair
     pair, err := j.GenerateTokenPair(jwt.Claims{
         jwt.ClaimKeyUserID: "user-001", jwt.ClaimKeyRole: "admin",
     })
@@ -264,14 +264,14 @@ func main() {
     }
     fmt.Printf("Access: %s...\n", pair.AccessToken[:30])
 
-    // 验证访问令牌
+    // validate the access token
     claims, err := j.ParseAccessToken(pair.AccessToken)
     if err != nil {
         logger.Fatal("failed to parse access token", logger.Err(err))
     }
     fmt.Printf("UserID: %v\n", claims[jwt.ClaimKeyUserID])
 
-    // 刷新令牌
+    // refresh the token
     newPair, err := j.RefreshToken(pair.RefreshToken)
     if err != nil {
         if errors.Is(err, jwt.ErrExpiredToken) {
@@ -282,7 +282,7 @@ func main() {
     }
     fmt.Printf("New Access: %s...\n", newPair.AccessToken[:30])
 
-    // 作为 HTTP 中间件使用（httpx.WithJWT 或 j.AuthMiddleware 均可）
+    // use as HTTP middleware (either httpx.WithJWT or j.AuthMiddleware works)
     _ = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
 }
 ```

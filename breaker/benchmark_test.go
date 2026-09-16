@@ -4,14 +4,16 @@ import (
 	"testing"
 )
 
-// 基准场景：真实配置（40 桶 / 250ms 每桶 / 10s 窗口）。
-// 走 newGoogleBreaker + defaultSREConfig 构造路径，覆盖真实初始化。
+// Benchmark scenario: the real configuration (40 buckets / 250ms per bucket / 10s window).
+// It goes through the newGoogleBreaker + defaultSREConfig construction path, covering
+// real initialisation.
 func realGoogleBreaker() *googleBreaker {
 	return newGoogleBreaker(defaultSREConfig())
 }
 
-// BenchmarkAcceptEmpty 空窗口（无历史数据）下每次 accept 判定的开销。
-// 这是正常流量下的常态路径，也是最需要优化的场景。
+// BenchmarkAcceptEmpty measures the cost of one accept decision with an empty
+// window (no history data).
+// This is the common path under normal traffic and the one most worth optimising.
 func BenchmarkAcceptEmpty(b *testing.B) {
 	br := realGoogleBreaker()
 	b.ReportAllocs()
@@ -21,7 +23,8 @@ func BenchmarkAcceptEmpty(b *testing.B) {
 	}
 }
 
-// BenchmarkAcceptWithHistory 窗口内有历史数据时每次 accept 判定的开销。
+// BenchmarkAcceptWithHistory measures the cost of one accept decision when the
+// window holds history data.
 func BenchmarkAcceptWithHistory(b *testing.B) {
 	br := realGoogleBreaker()
 	for i := 0; i < 1000; i++ {
@@ -34,7 +37,8 @@ func BenchmarkAcceptWithHistory(b *testing.B) {
 	}
 }
 
-// BenchmarkDo 通过 Breaker 接口执行一次完整请求判定的开销。
+// BenchmarkDo measures the cost of one full request decision through the Breaker
+// interface.
 func BenchmarkDo(b *testing.B) {
 	br := NewBreaker(WithName("bench"))
 	b.ReportAllocs()
@@ -44,7 +48,8 @@ func BenchmarkDo(b *testing.B) {
 	}
 }
 
-// BenchmarkWindowHistory 单独测滑动窗口聚合遍历的开销（accept 判定的核心成本）。
+// BenchmarkWindowHistory measures the cost of the rolling-window aggregation
+// traversal alone (the core cost of an accept decision).
 func BenchmarkWindowHistory(b *testing.B) {
 	br := realGoogleBreaker()
 	for i := 0; i < 1000; i++ {

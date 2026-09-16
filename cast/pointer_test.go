@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- 泛型取址 Ptr 测试 ---
+// --- Generic address-of Ptr tests ---
 
 func TestPtr(t *testing.T) {
 	p := Ptr("default")
@@ -20,27 +20,27 @@ func TestPtr(t *testing.T) {
 	assert.Equal(t, 42, *pn)
 }
 
-// --- 安全解引用 Val 测试 ---
+// --- Safe dereference Val tests ---
 
 func TestVal(t *testing.T) {
-	// 非 nil：返回指针指向的值
+	// non-nil: returns the value the pointer points to
 	p := Ptr(42)
 	assert.Equal(t, 42, Val(p))
 
-	// nil + 无默认值：返回零值
+	// nil without a default: returns the zero value
 	assert.Equal(t, 0, Val[int](nil))
 
-	// nil + 提供默认值：返回默认值
+	// nil with a default provided: returns that default
 	assert.Equal(t, 7, Val[int](nil, 7))
 
-	// 字符串场景
+	// string cases
 	assert.Equal(t, "", Val[string](nil))
 	assert.Equal(t, "fb", Val[string](nil, "fb"))
 	s := Ptr("ok")
 	assert.Equal(t, "ok", Val(s))
 }
 
-// --- ToXxxPtr 系列成功/失败测试 ---
+// --- ToXxxPtr success/failure tests ---
 
 func TestToXxxPtr_Success(t *testing.T) {
 	assert.Equal(t, 123, *ToIntPtr("123"))
@@ -59,7 +59,8 @@ func TestToXxxPtr_Success(t *testing.T) {
 }
 
 func TestToXxxPtr_Failure(t *testing.T) {
-	// 转换失败一律返回 nil，便于直接用于可选指针字段
+	// a failed conversion always returns nil, which makes the result directly usable for
+	// optional pointer fields
 	assert.Nil(t, ToIntPtr("abc"))
 	assert.Nil(t, ToInt64Ptr("abc"))
 	assert.Nil(t, ToUintPtr(-1))
@@ -69,6 +70,6 @@ func TestToXxxPtr_Failure(t *testing.T) {
 	assert.Nil(t, ToBoolPtr("not a bool"))
 	assert.Nil(t, ToDurationPtr("not a duration"))
 	assert.Nil(t, ToTimePtr("not a time"))
-	// ToString 极少失败，但 unsupported 结构体可触发失败
+	// ToString rarely fails, but an unsupported func value can trigger a failure
 	assert.Nil(t, ToStringPtr(func() {}))
 }

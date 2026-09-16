@@ -13,31 +13,36 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
-// defaultTracerName 追踪器名称，与 trace 包 TraceName 保持一致，
-// 使经本中间件创建的 span 与 trace.StartSpan 等属于同一 tracer。
+// defaultTracerName is the tracer name, aligned with the trace package's TraceName so that
+// spans created by this middleware and by trace.StartSpan share the same tracer.
 const defaultTracerName = "infra-go"
 
-// Tracing 是 HTTP 服务端链路追踪中间件。
+// Tracing is the HTTP server-side tracing middleware.
 //
-// 功能：
-//   - 从请求头提取上游传播的 span 上下文（W3C traceparent）
-//   - 为每个请求创建服务端 span（携带 method/path/status 等 HTTP 语义属性）
-//   - 将 span 注入 context，供下游 logger/orm/redisx 等模块自动关联 trace_id
+// It:
+//   - extracts the upstream propagated span context from the request headers (W3C traceparent)
+//   - creates a server span for every request (with HTTP semantic attributes such as
+//     method/path/status)
+//   - injects the span into the context so downstream logger/orm/redisx modules can
+//     correlate trace_id automatically
 //
-// 默认使用全局 TracerProvider（经 trace.StartAgent 装配）；请求 context 中若
-// 已有有效 span，则沿用其 TracerProvider（支持链路内嵌套追踪）。
+// It uses the global TracerProvider by default (installed via trace.StartAgent); if the
+// request context already holds a valid span, that span's TracerProvider is reused
+// (supporting nested tracing within one trace).
 type Tracing struct {
 	matcher *x.PathMatcher
 	name    string
 }
 
-// NewTracing 创建 HTTP 服务端链路追踪中间件。
-// ignorePaths 用于指定不追踪的请求路径（如健康检查、探针、监控等），命中规则的
-// 请求直接放行、不创建 span。路径匹配由 x 包统一提供，支持三种形式（详见
-// x.NewPathMatcher）：
-//   - 精确匹配：如 "/health"
-//   - 前缀通配：以 "*" 结尾且可跨目录，如 "/health*" 命中 /health、/healthz、/health/live
-//   - glob 通配：* 不跨目录，如 "/api/*/x"
+// NewTracing creates the HTTP server-side tracing middleware.
+// ignorePaths lists the request paths that must not be traced (health checks, probes,
+// metrics, and so on); requests matching a rule pass straight through without creating a
+// span. Path matching is provided uniformly by the x package and supports three forms
+// (see x.NewPathMatcher):
+//   - exact match: e.g. "/health"
+//   - prefix wildcard: ends with "*" and may cross directories, e.g. "/health*" matches
+//     /health, /healthz, /health/live
+//   - glob wildcard: "*" does not cross directories, e.g. "/api/*/x"
 func NewTracing(ignorePaths ...string) *Tracing {
 	return &Tracing{
 		matcher: x.NewPathMatcher(ignorePaths),
@@ -45,8 +50,8 @@ func NewTracing(ignorePaths ...string) *Tracing {
 	}
 }
 
-// WithTracerName 覆盖默认追踪器名称（默认 "infra-go"，与 trace.TraceName 一致）；
-// name 为空时保持默认。
+// WithTracerName overrides the default tracer name (default "infra-go", matching
+// trace.TraceName); an empty name keeps the default.
 func (t *Tracing) WithTracerName(name string) *Tracing {
 	if name != "" {
 		t.name = name
@@ -54,24 +59,25 @@ func (t *Tracing) WithTracerName(name string) *Tracing {
 	return t
 }
 
-// Middleware 返回标准形式 func(http.Handler) http.Handler 的链路追踪中间件，
-// 不依赖具体 HTTP 框架，可用于标准 net/http、httpx、gin、echo 等：
+// Middleware returns the tracing middleware in the standard
+// func(http.Handler) http.Handler form. It does not depend on any specific HTTP framework
+// and works with plain net/http, httpx, gin, echo, and others:
 //
-//	// 标准 net/http
+//	// plain net/http
 //	handler := middleware.NewTracing("/health*", "/metrics/*").Middleware()(mux)
 //
-//	// httpx（httpx.WithTracing 已内置便捷函数，直接 server.Use 即可）
+//	// httpx (httpx.WithTracing is the built-in convenience helper, ready for server.Use)
 //	server.Use(httpx.WithTracing("/health*"))
 func (t *Tracing) Middleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// 命中忽略列表的路径直接放行，不创建 span
+			// paths on the ignore list pass straight through without creating a span
 			if t.matcher.Match(r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			// 提取上游传播的链路上下文
+			// extract the upstream propagated trace context
 			ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 			spanName := r.URL.Path + " " + r.Method
 
@@ -83,10 +89,10 @@ func (t *Tracing) Middleware() func(http.Handler) http.Handler {
 			)
 			defer span.End()
 
-			// 注入 span 上下文，下游模块可通过 trace.TraceIDFromContext 关联
+			// inject the span context; downstream modules can correlate via trace.TraceIDFromContext
 			r = r.WithContext(ctx)
 
-			// 记录响应状态码到 span
+			// record the response status code on the span
 			rec := respw.NewRecorderWriter(w)
 			next.ServeHTTP(rec, r)
 			span.SetAttributes(semconv.HTTPAttributesFromHTTPStatusCode(rec.Status())...)
@@ -96,9 +102,9 @@ func (t *Tracing) Middleware() func(http.Handler) http.Handler {
 	}
 }
 
-// tracer 返回当前请求应使用的 tracer：
-// context 中存在有效 span 时使用其 TracerProvider 的 tracer（支持嵌套追踪），
-// 否则使用全局 TracerProvider 的 tracer。
+// tracer returns the tracer to use for the current request: when the context holds a valid
+// span, that span's TracerProvider is used (supporting nested tracing), otherwise the
+// global TracerProvider is used.
 func (t *Tracing) tracer(ctx context.Context) oteltrace.Tracer {
 	if span := oteltrace.SpanFromContext(ctx); span.SpanContext().IsValid() {
 		return span.TracerProvider().Tracer(t.name)

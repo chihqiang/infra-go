@@ -2,7 +2,7 @@ package middleware
 
 import "net/http"
 
-// CORS 响应头常量（仅在 CORS 逻辑内部使用，直接内联于此文件）。
+// CORS response header constants (used only inside the CORS logic, inlined in this file).
 const (
 	corsAllowAll        = "*"
 	corsHeaderOrigin    = "Origin"
@@ -22,32 +22,36 @@ const (
 	schemeHTTPS         = "https"
 )
 
-// CORS 为响应设置 CORS 头的中间件。
-// 构造时预构建允许来源集合，避免每次请求 O(n) 扫描。
+// CORS is a middleware that sets CORS headers on responses.
+// The set of allowed origins is prebuilt at construction time, avoiding an O(n) scan per request.
 type CORS struct {
 	allowAll bool
 	allowed  map[string]struct{}
-	// credentials 是否下发 Access-Control-Allow-Credentials: true，默认 true。
+	// credentials controls whether Access-Control-Allow-Credentials: true is sent; default true.
 	credentials bool
-	// rejectUnauthorized 未授权来源是否直接返回 403，默认 false（透传）。
+	// rejectUnauthorized controls whether an unauthorized origin is rejected with 403;
+	// default false (pass through).
 	rejectUnauthorized bool
 }
 
-// NewCORS 创建 CORS 中间件。
-// allowOrigins 为允许的来源列表；传入 "*" 表示允许所有来源（优先于其它条目）。
+// NewCORS creates the CORS middleware.
+// allowOrigins is the list of allowed origins; passing "*" allows every origin (it takes
+// precedence over the other entries).
 //
-// 关于凭证（Access-Control-Allow-Credentials）：
-// 按 Fetch 规范，"允许所有来源"与"允许携带凭证"不能同时用通配符表达 ——
-// 浏览器会拒绝 `Access-Control-Allow-Origin: *` 与
-// `Access-Control-Allow-Credentials: true` 的组合。因此 allowAll 模式下
-// 本中间件回显具体 Origin（并附带 Vary: Origin），而不是发送 "*"。
+// About credentials (Access-Control-Allow-Credentials):
+// Per the Fetch specification, "allow all origins" and "allow credentials" cannot both be
+// expressed with a wildcard — browsers reject the combination of
+// `Access-Control-Allow-Origin: *` and `Access-Control-Allow-Credentials: true`. Therefore in
+// allowAll mode this middleware echoes the concrete Origin (along with Vary: Origin) instead of
+// sending "*".
 //
-// ⚠️ 安全提示：allowAll + 凭证意味着**任意站点**都能发起带凭证的跨域请求
-// 并读取响应。生产环境请改用显式来源列表，或在确定不需要 cookie/Authorization
-// 时用 WithCredentials(false) 关闭凭证。
+// ⚠️ Security note: allowAll + credentials means **any site** can issue credentialed
+// cross-origin requests and read the responses. In production, switch to an explicit origin
+// list, or turn credentials off with WithCredentials(false) when cookie/Authorization are
+// definitely not needed.
 //
-// 未授权来源的默认处理是**透传**（不下发 CORS 头，请求继续交给下游），
-// 详见 WithRejectUnauthorizedOrigin。
+// An unauthorized origin is by default **passed through** (no CORS headers are sent and the
+// request continues to the downstream handler); see WithRejectUnauthorizedOrigin.
 func NewCORS(allowOrigins ...string) *CORS {
 	c := &CORS{
 		allowed:     make(map[string]struct{}, len(allowOrigins)),
@@ -63,46 +67,50 @@ func NewCORS(allowOrigins ...string) *CORS {
 	return c
 }
 
-// WithCredentials 设置是否下发 Access-Control-Allow-Credentials。
+// WithCredentials sets whether Access-Control-Allow-Credentials is sent.
 //
-// 默认 true（保持既有行为）。设为 false 时不下发该响应头，
-// 浏览器将禁止跨域请求携带 cookie / TLS 客户端证书，
-// 并把 Authorization 头排除在可暴露范围之外 —— 适用于纯公开 API。
+// It defaults to true (preserving the existing behaviour). When set to false the response header
+// is not sent, browsers will forbid cross-origin requests from carrying cookies / TLS client
+// certificates, and the Authorization header is excluded from what can be exposed — suitable for
+// purely public APIs.
 func (c *CORS) WithCredentials(enable bool) *CORS {
 	c.credentials = enable
 	return c
 }
 
-// WithRejectUnauthorizedOrigin 设置未授权来源是否直接返回 403，默认 false。
+// WithRejectUnauthorizedOrigin sets whether an unauthorized origin is directly rejected with
+// 403; default false.
 //
-// **默认透传（false）**：不下发 CORS 头，请求继续交给下游 handler。
-// 这是 CORS 的标准做法，原因是：
+// **Default pass-through (false)**: no CORS headers are sent and the request continues to the
+// downstream handler. This is the standard CORS approach, because:
 //
-//   - CORS 是**浏览器侧**的响应读取限制，而不是服务端的请求准入控制。
-//     缺少 Access-Control-Allow-Origin 时，浏览器已经会阻止脚本读取响应，
-//     服务端不需要（也不应该）再拒绝一次。
-//   - 返回 403 会误伤**非浏览器客户端**：curl、移动端、服务间调用、
-//     以及部分 HTTP 库会无条件带上 Origin 头，它们不受 CORS 约束，
-//     却会因为 403 被挡在业务逻辑之外。
-//   - 预检（OPTIONS）本就无法通过，浏览器不会发出真实请求；
-//     真实请求若被放行，其响应也不可被跨域脚本读取，因此透传并无安全损失。
+//   - CORS is a **browser-side** response reading restriction, not server-side request access
+//     control. Without Access-Control-Allow-Origin the browser already stops scripts from reading
+//     the response, so the server does not need to (and should not) reject it a second time.
+//   - Returning 403 also hits **non-browser clients**: curl, mobile apps, service-to-service
+//     calls and some HTTP libraries always send an Origin header. They are not bound by CORS,
+//     yet a 403 would keep them out of the business logic.
+//   - A preflight (OPTIONS) can never succeed anyway, so the browser never sends the real
+//     request; and if a real request is let through, its response still cannot be read by
+//     cross-origin scripts, so passing through costs nothing in security terms.
 //
-// 设为 true 时恢复"未授权来源 → 403"的严格行为，语义是
-// "只服务指定来源"，而不是"浏览器不能读"。请按实际需要选择：
-// 若业务确实只面向白名单来源（例如纯前端应用的后端），严格模式可提前拒绝、
-// 省去无谓的下游处理；但**不要**把 CORS 当作 CSRF 防护 ——
-// 简单请求（表单 POST、img GET）本就不受 CORS 阻止，
-// 状态变更接口请另行使用 CSRF token 或 SameSite Cookie。
+// Setting it to true restores the strict "unauthorized origin → 403" behaviour, whose meaning is
+// "only serve the listed origins" rather than "browsers cannot read". Choose according to your
+// actual needs: if the service really only targets whitelisted origins (for example the backend
+// of a pure front-end app), strict mode can reject early and save pointless downstream work; but
+// do **not** treat CORS as CSRF protection — simple requests (form POST, img GET) are not blocked
+// by CORS in the first place, so state-changing endpoints should separately use CSRF tokens or
+// SameSite cookies.
 func (c *CORS) WithRejectUnauthorizedOrigin(reject bool) *CORS {
 	c.rejectUnauthorized = reject
 	return c
 }
 
-// Middleware 返回标准形式 func(http.Handler) http.Handler 的 CORS 中间件。
+// Middleware returns the CORS middleware in the standard func(http.Handler) http.Handler form.
 //
-// 同源请求（Origin 与 Host 一致）不设置 CORS 头；授权来源下发 CORS 头，
-// OPTIONS 预检返回 204；未授权来源默认透传（不下发 CORS 头），
-// 可用 WithRejectUnauthorizedOrigin(true) 改为返回 403。
+// Same-origin requests (Origin matches Host) get no CORS headers; allowed origins get CORS
+// headers with OPTIONS preflight answered by 204; unauthorized origins pass through by default
+// (no CORS headers are sent), which WithRejectUnauthorizedOrigin(true) changes into a 403.
 func (c *CORS) Middleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -112,7 +120,7 @@ func (c *CORS) Middleware() func(http.Handler) http.Handler {
 				return
 			}
 
-			// 同源请求不需要 CORS 头
+			// Same-origin requests need no CORS headers
 			scheme := schemeHTTP
 			if r.TLS != nil {
 				scheme = schemeHTTPS
@@ -122,26 +130,28 @@ func (c *CORS) Middleware() func(http.Handler) http.Handler {
 				return
 			}
 
-			// 校验 Origin
+			// Validate the Origin
 			if !c.allowAll {
 				if _, ok := c.allowed[origin]; !ok {
 					if c.rejectUnauthorized {
 						w.WriteHeader(http.StatusForbidden)
 						return
 					}
-					// 透传：不下发任何 CORS 头，浏览器会阻止脚本读取响应。
-					// 非浏览器客户端不受影响。
+					// Pass through: no CORS headers are sent, so the browser blocks scripts from reading
+					// the response. Non-browser clients are unaffected.
 					next.ServeHTTP(w, r)
 					return
 				}
 			}
 
-			// 回显具体 Origin：响应随 Origin 变化，必须声明 Vary 以免被缓存串用。
+			// Echo the concrete Origin: the response varies with Origin, so Vary must be declared to
+			// keep caches from serving it to the wrong client.
 			//
-			// allowAll 模式下**不再**发送 "*"：与 Allow-Credentials: true 共用时
-			// 浏览器会拒绝整个响应，导致带凭证的跨域请求（withCredentials /
-			// credentials: 'include'）在旧实现下必然失败。
-			// 回显 Origin 同时满足"允许任意来源"与"允许凭证"，是浏览器可接受的唯一形式。
+			// allowAll mode does **not** send "*" any more: combined with Allow-Credentials: true
+			// the browser rejects the whole response, which made credentialed cross-origin requests
+			// (withCredentials / credentials: 'include') fail unconditionally in the old
+			// implementation. Echoing the Origin satisfies both "allow any origin" and "allow
+			// credentials", and is the only form browsers accept.
 			w.Header().Set(corsAllowOrigin, origin)
 			w.Header().Set(corsHeaderVary, corsHeaderOrigin)
 			w.Header().Set(corsAllowMethods, corsDefaultMethods)
@@ -152,7 +162,7 @@ func (c *CORS) Middleware() func(http.Handler) http.Handler {
 			}
 			w.Header().Set(corsMaxAge, corsDefaultMaxAge)
 
-			// OPTIONS 预检
+			// OPTIONS preflight
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
 				return

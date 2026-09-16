@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// createTempFile 创建临时配置文件用于测试。
+// createTempFile creates a temporary config file for tests.
 func createTempFile(t *testing.T, ext, text string) string {
 	t.Helper()
 	tmpFile, err := os.CreateTemp(os.TempDir(), "config*"+ext)
@@ -23,7 +23,7 @@ func createTempFile(t *testing.T, ext, text string) string {
 	return filename
 }
 
-// TestConfig 定义测试配置结构体。
+// TestConfig defines the test configuration struct.
 type TestConfig struct {
 	Host         string        `json:",default=0.0.0.0"`
 	Port         int           `json:",default=8080"`
@@ -176,7 +176,7 @@ func TestLoad_EnvVar(t *testing.T) {
 	var cfg EnvConfig
 	err := Load(file, &cfg)
 	assert.NoError(t, err)
-	assert.Equal(t, "myapp", cfg.Name) // 从环境变量读取
+	assert.Equal(t, "myapp", cfg.Name) // read from the environment variable
 	assert.Equal(t, 9090, cfg.Port)
 }
 
@@ -217,7 +217,7 @@ func TestExpandEnv(t *testing.T) {
 		{"var empty -> empty", "[${EXP_ENV_EMPTY}]", "[]"},
 		// ${VAR:-default}
 		{"default var not set", "${EXP_NOT_SET:-fallback}", "fallback"},
-		{"default var empty", "${EXP_ENV_EMPTY:-fallback}", "fallback"}, // shell :- 语义：空也回退
+		{"default var empty", "${EXP_ENV_EMPTY:-fallback}", "fallback"}, // shell :- semantics: empty falls back too
 		{"default var set", "${EXP_ENV_SET:-fallback}", "world"},
 		{"default mixed with text", "hi ${EXP_NOT_SET:-you}! ${EXP_ENV_SET}", "hi you! world"},
 		{"no default -> empty", "${EXP_NOT_SET}", ""},
@@ -230,8 +230,9 @@ func TestExpandEnv(t *testing.T) {
 	}
 }
 
-// TestExpandEnv_DollarEscape 验证 $$ 转义为字面量 $，
-// 使配置中能够书写字面 $（否则 `${...}` 之外的 $ 会被当作变量引用吞掉）。
+// TestExpandEnv_DollarEscape verifies that $$ escapes to a literal $, so that a literal
+// $ can be written in a config (otherwise a $ outside `${...}` is swallowed as a
+// variable reference).
 func TestExpandEnv_DollarEscape(t *testing.T) {
 	t.Setenv("EE_VAR", "val")
 
@@ -254,9 +255,9 @@ func TestExpandEnv_DollarEscape(t *testing.T) {
 	}
 }
 
-// TestLoad_UseEnvDoesNotSwallowLiteralDollar 回归测试：开启 UseEnv 后，
-// 配置中的字面 $ 不再被当作变量引用吞掉。
-// 旧实现在解析前对原文做文本替换，`"p$ssword"` 会被展开成 `"p"`。
+// TestLoad_UseEnvDoesNotSwallowLiteralDollar is a regression test: with UseEnv enabled,
+// a literal $ in the config is no longer swallowed as a variable reference.
+// The old implementation replaced text before parsing, so `"p$ssword"` became `"p"`.
 func TestLoad_UseEnvDoesNotSwallowLiteralDollar(t *testing.T) {
 	file := createTempFile(t, ".json", `{"password": "p$$ssword"}`)
 
@@ -267,8 +268,10 @@ func TestLoad_UseEnvDoesNotSwallowLiteralDollar(t *testing.T) {
 	assert.Equal(t, "p$ssword", cfg.Password)
 }
 
-// TestLoad_UseEnvCannotInjectStructure 回归测试：环境变量的值不得注入/改写配置结构。
-// 旧实现在解析前做文本替换，值中的 JSON 片段会凭空创建出新的键。
+// TestLoad_UseEnvCannotInjectStructure is a regression test: environment variable values
+// must not inject/rewrite the config structure.
+// The old implementation replaced text before parsing, so a JSON fragment inside a value
+// created brand-new keys out of thin air.
 func TestLoad_UseEnvCannotInjectStructure(t *testing.T) {
 	t.Setenv("INJECT_ME", `","admin":true,"x":"`)
 
@@ -276,7 +279,8 @@ func TestLoad_UseEnvCannotInjectStructure(t *testing.T) {
 
 	var cfg struct {
 		User string `json:"user"`
-		// 该键只能来自配置文件本身；若被环境变量凭空创建，下面断言会失败
+		// this key can only come from the config file itself; if an env var conjured it
+		// up, the assertion below would fail
 		Admin bool `json:"admin,optional"`
 	}
 	require.NoError(t, Load(file, &cfg, UseEnv()))
@@ -284,8 +288,9 @@ func TestLoad_UseEnvCannotInjectStructure(t *testing.T) {
 	assert.False(t, cfg.Admin, "env value must not inject new config keys")
 }
 
-// TestLoad_UseEnvSpecialCharsInValue 回归测试：环境变量值中的引号、大括号、
-// 逗号等字符不再破坏配置文件语法（旧实现下会导致解析失败）。
+// TestLoad_UseEnvSpecialCharsInValue is a regression test: quotes, braces, commas and
+// similar characters in environment variable values no longer break the config file
+// syntax (the old implementation failed to parse).
 func TestLoad_UseEnvSpecialCharsInValue(t *testing.T) {
 	t.Setenv("QUOTED_VAL", `he said "hi" and left`)
 	t.Setenv("BRACE_VAL", `{"a":1}`)
@@ -308,7 +313,8 @@ func TestLoad_UseEnvSpecialCharsInValue(t *testing.T) {
 	assert.Equal(t, "line1\nline2", cfg.Multi)
 }
 
-// TestLoad_UseEnvSpecialCharsInYAML 同上，覆盖 YAML（值中的冒号/引号不再破坏语法）。
+// TestLoad_UseEnvSpecialCharsInYAML is the same as above, covering YAML (colons/quotes
+// inside values no longer break the syntax).
 func TestLoad_UseEnvSpecialCharsInYAML(t *testing.T) {
 	t.Setenv("URL_VAL", "https://user:pass@host:5432/db?sslmode=disable")
 	t.Setenv("JSON_VAL", `{"k": "v"}`)
@@ -325,7 +331,8 @@ func TestLoad_UseEnvSpecialCharsInYAML(t *testing.T) {
 	assert.Equal(t, `{"k": "v"}`, cfg.Meta)
 }
 
-// TestLoad_UseEnvExpandsMapKeys 验证 map 的键同样支持环境变量展开（与旧行为一致）。
+// TestLoad_UseEnvExpandsMapKeys verifies that map keys also support environment variable
+// expansion (matching the previous behaviour).
 func TestLoad_UseEnvExpandsMapKeys(t *testing.T) {
 	t.Setenv("MAP_KEY", "dynamic")
 	t.Setenv("MAP_VAL", "v")
@@ -339,8 +346,8 @@ func TestLoad_UseEnvExpandsMapKeys(t *testing.T) {
 	assert.Equal(t, map[string]string{"dynamic": "v"}, cfg.Labels)
 }
 
-// TestLoad_UseEnvDuplicateKeyAfterExpansion 验证展开后键冲突会报错，
-// 而不是静默丢弃其中一个键的数据。
+// TestLoad_UseEnvDuplicateKeyAfterExpansion verifies that a key collision after expansion
+// returns an error rather than silently dropping the data of one of the keys.
 func TestLoad_UseEnvDuplicateKeyAfterExpansion(t *testing.T) {
 	t.Setenv("DUP_KEY", "same")
 
@@ -354,7 +361,8 @@ func TestLoad_UseEnvDuplicateKeyAfterExpansion(t *testing.T) {
 	assert.Contains(t, err.Error(), "duplicate key")
 }
 
-// TestLoad_UseEnvNestedAndSlices 验证嵌套结构体与切片元素中的引用也会被展开。
+// TestLoad_UseEnvNestedAndSlices verifies that references inside nested structs and slice
+// elements are expanded too.
 func TestLoad_UseEnvNestedAndSlices(t *testing.T) {
 	t.Setenv("NEST_HOST", "h")
 	t.Setenv("LIST_ITEM", "item")
@@ -373,8 +381,8 @@ func TestLoad_UseEnvNestedAndSlices(t *testing.T) {
 	assert.Equal(t, []string{"item", "plain"}, cfg.Items)
 }
 
-// TestLoad_UseEnvDoesNotReexpandResult 验证展开结果不会被二次展开
-// （环境变量的值里含 ${...} 时应原样保留）。
+// TestLoad_UseEnvDoesNotReexpandResult verifies that an expansion result is not expanded a
+// second time (a value containing ${...} must be kept verbatim).
 func TestLoad_UseEnvDoesNotReexpandResult(t *testing.T) {
 	t.Setenv("INNER_REF", "${OTHER_VAR}")
 	t.Setenv("OTHER_VAR", "should-not-appear")
@@ -388,7 +396,8 @@ func TestLoad_UseEnvDoesNotReexpandResult(t *testing.T) {
 	assert.Equal(t, "${OTHER_VAR}", cfg.Host)
 }
 
-// TestLoadFromBytes_UseEnv 验证字节入口同样支持 opts（UseEnv）。
+// TestLoadFromBytes_UseEnv verifies that the byte-based entry points support opts (UseEnv)
+// as well.
 func TestLoadFromBytes_UseEnv(t *testing.T) {
 	t.Setenv("BYTES_HOST", "from-bytes")
 
@@ -405,7 +414,8 @@ func TestLoadFromBytes_UseEnv(t *testing.T) {
 	assert.Equal(t, "from-bytes", yamlCfg.Host)
 }
 
-// TestLoadFromBytes_NoOptsKeepsLiteral 验证不传 opts 时配置中的 $ 原样保留。
+// TestLoadFromBytes_NoOptsKeepsLiteral verifies that $ in the config is kept verbatim when
+// no opts are passed.
 func TestLoadFromBytes_NoOptsKeepsLiteral(t *testing.T) {
 	t.Setenv("BYTES_HOST", "from-bytes")
 
@@ -416,7 +426,8 @@ func TestLoadFromBytes_NoOptsKeepsLiteral(t *testing.T) {
 	assert.Equal(t, "${BYTES_HOST}", raw.Host)
 }
 
-// TestLoad_UseEnvDisabledKeepsLiteral 验证未开启 UseEnv 时配置中的 $ 原样保留。
+// TestLoad_UseEnvDisabledKeepsLiteral verifies that $ in the config is kept verbatim when
+// UseEnv is not enabled.
 func TestLoad_UseEnvDisabledKeepsLiteral(t *testing.T) {
 	file := createTempFile(t, ".json", `{"password": "p$ssword", "host": "${DB_HOST}"}`)
 
@@ -430,7 +441,7 @@ func TestLoad_UseEnvDisabledKeepsLiteral(t *testing.T) {
 }
 
 func TestLoad_UseEnvExpansionDefaultValue(t *testing.T) {
-	// 未设置环境变量时回退到 :- 默认值
+	// fall back to the :- default when the environment variable is not set
 	text := `{
 		"host": "${DB_HOST:-fallback.example.com}",
 		"port": "${DB_PORT:-3306}"
@@ -445,10 +456,10 @@ func TestLoad_UseEnvExpansionDefaultValue(t *testing.T) {
 	var cfg EnvExpConfig
 	err := Load(file, &cfg, UseEnv())
 	assert.NoError(t, err)
-	assert.Equal(t, "fallback.example.com", cfg.Host) // 未设置 → 默认值
+	assert.Equal(t, "fallback.example.com", cfg.Host) // not set -> default value
 	assert.Equal(t, "3306", cfg.Port)
 
-	// 设置了环境变量 → 优先使用环境变量
+	// environment variable set -> the environment variable takes precedence
 	t.Setenv("DB_HOST", "db.example.com")
 	var cfg2 EnvExpConfig
 	err = Load(file, &cfg2, UseEnv())
@@ -458,7 +469,7 @@ func TestLoad_UseEnvExpansionDefaultValue(t *testing.T) {
 }
 
 func TestLoad_UseEnvExpansionYAMLDefault(t *testing.T) {
-	// 用户场景：YAML 嵌套结构 + 密钥/签发者默认值
+	// user scenario: nested YAML structure with secret/issuer defaults
 	text := "jwt:\n  secret: ${JWT_SECRET:-dev-secret}\n  issuer: ${JWT_ISSUER:-my-app}\n"
 
 	type JWT struct {
@@ -473,17 +484,17 @@ func TestLoad_UseEnvExpansionYAMLDefault(t *testing.T) {
 	var cfg AppConfig
 	err := Load(file, &cfg, UseEnv())
 	assert.NoError(t, err)
-	assert.Equal(t, "dev-secret", cfg.JWT.Secret) // 未设置 → 默认值
+	assert.Equal(t, "dev-secret", cfg.JWT.Secret) // not set -> default value
 	assert.Equal(t, "my-app", cfg.JWT.Issuer)
 
-	// 环境变量为空字符串时也应回退默认值（shell :- 语义）
+	// an empty environment variable also falls back to the default (shell :- semantics)
 	t.Setenv("JWT_SECRET", "")
 	var cfg2 AppConfig
 	err = Load(file, &cfg2, UseEnv())
 	assert.NoError(t, err)
 	assert.Equal(t, "dev-secret", cfg2.JWT.Secret)
 
-	// 设置了非空环境变量 → 覆盖默认值
+	// a non-empty environment variable is set -> it overrides the default
 	t.Setenv("JWT_SECRET", "real-secret")
 	t.Setenv("JWT_ISSUER", "prod")
 	var cfg3 AppConfig
@@ -493,7 +504,7 @@ func TestLoad_UseEnvExpansionYAMLDefault(t *testing.T) {
 	assert.Equal(t, "prod", cfg3.JWT.Issuer)
 }
 
-// validatorTestConfig 实现 Validator 接口
+// validatorTestConfig implements the Validator interface
 type validatorTestConfig struct {
 	Port int `json:"port"`
 }
@@ -737,7 +748,7 @@ func TestLoad_LargeIntegers(t *testing.T) {
 	assert.Equal(t, int64(9223372036854775807), cfg.Timestamp)
 }
 
-// --- 解析错误分支 ---
+// --- parse error branches ---
 
 func TestLoad_ParseJSONError(t *testing.T) {
 	file := createTempFile(t, ".json", `{invalid json`)
@@ -762,7 +773,7 @@ func TestLoadFromJSONBytes_Invalid(t *testing.T) {
 }
 
 func TestLoadFromJSONBytes_TypeMismatch(t *testing.T) {
-	// port 字段期望 int，但传入嵌套对象 → unmarshal 失败
+	// the port field expects an int but a nested object is passed -> unmarshal fails
 	var cfg struct {
 		Port int `json:"port"`
 	}
@@ -784,7 +795,7 @@ func TestLoadFromYAMLBytes_TypeMismatch(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- 端到端：YAML 复合结构触发 normalizeValue 全链路 ---
+// --- end to end: a composite YAML structure exercises the whole normalizeValue path ---
 
 func TestLoad_YAML_Composite(t *testing.T) {
 	text := `
@@ -818,7 +829,7 @@ enabled: true
 	assert.True(t, cfg.Enabled)
 }
 
-// YAML 整数 key 触发 map[any]any 规范化路径。
+// YAML integer keys exercise the map[any]any normalisation path.
 func TestLoad_YAML_IntKeys(t *testing.T) {
 	text := `
 m:
@@ -855,7 +866,7 @@ name: app
 }
 
 func TestLoad_EnvExpansion_EmptyVar(t *testing.T) {
-	// 未设置的环境变量展开为空串
+	// an unset environment variable expands to the empty string
 	file := createTempFile(t, ".json", `{"host": "${NOT_SET_VAR}"}`)
 	var cfg struct {
 		Host string `json:"host"`

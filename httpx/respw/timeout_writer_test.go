@@ -47,7 +47,7 @@ func TestTimeoutWriter_WriteAfterTimeout(t *testing.T) {
 	w := httptest.NewRecorder()
 	tw := newTestTimeoutWriter(w)
 
-	// 标记超时后，Write 应返回 ErrHandlerTimeout，且不写入缓冲
+	// After a timeout, Write must return ErrHandlerTimeout and write nothing to the buffer
 	tw.Timeout()
 	_, err := tw.Write([]byte("x"))
 	assert.ErrorIs(t, err, http.ErrHandlerTimeout)
@@ -73,7 +73,7 @@ func TestTimeoutWriter_FlushWritesBuffer(t *testing.T) {
 	tw.Flush()
 	assert.True(t, w.Flushed)
 	assert.Equal(t, "data", w.Body.String())
-	// 刷新后缓冲被清空
+	// The buffer is cleared after flushing
 	assert.Empty(t, tw.wbuf.Bytes())
 }
 
@@ -85,9 +85,10 @@ func TestTimeoutWriter_HijackUnsupported(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- Flush 与状态码 ---
+// --- Flush and status code ---
 
-// countingWriter 记录 WriteHeader 被转发的次数，用于验证响应头不会被重复写出。
+// countingWriter records how often WriteHeader is forwarded, verifying that
+// response headers are never written twice.
 type countingWriter struct {
 	*httptest.ResponseRecorder
 	headerWrites int
@@ -98,8 +99,9 @@ func (w *countingWriter) WriteHeader(code int) {
 	w.ResponseRecorder.WriteHeader(code)
 }
 
-// TestTimeoutWriter_FlushWritesExplicitStatusCode 验证 Flush 会把 handler 显式
-// 设置的状态码写到底层，而不是被 net/http 的隐式 200 覆盖（历史缺陷）。
+// TestTimeoutWriter_FlushWritesExplicitStatusCode verifies that Flush writes the
+// status code explicitly set by the handler to the underlying writer instead of
+// letting net/http's implicit 200 override it (historical defect).
 func TestTimeoutWriter_FlushWritesExplicitStatusCode(t *testing.T) {
 	rec := httptest.NewRecorder()
 	tw := newTestTimeoutWriter(rec)
@@ -113,8 +115,9 @@ func TestTimeoutWriter_FlushWritesExplicitStatusCode(t *testing.T) {
 	assert.True(t, rec.Flushed)
 }
 
-// TestTimeoutWriter_FlushThenDoneWritesHeaderOnce 验证 Flush 之后 Done 不会重复
-// 写响应头（避免 "superfluous WriteHeader"）且状态码保持不变。
+// TestTimeoutWriter_FlushThenDoneWritesHeaderOnce verifies that Done after Flush
+// does not write the response header twice (avoiding "superfluous WriteHeader")
+// and that the status code stays unchanged.
 func TestTimeoutWriter_FlushThenDoneWritesHeaderOnce(t *testing.T) {
 	rec := httptest.NewRecorder()
 	cw := &countingWriter{ResponseRecorder: rec}
@@ -131,7 +134,8 @@ func TestTimeoutWriter_FlushThenDoneWritesHeaderOnce(t *testing.T) {
 	assert.Equal(t, "ab", rec.Body.String())
 }
 
-// TestTimeoutWriter_FlushWithOKStatus 验证 200 仍交由 net/http 隐式写入（不显式 WriteHeader）。
+// TestTimeoutWriter_FlushWithOKStatus verifies that 200 is still left to net/http
+// to write implicitly (no explicit WriteHeader).
 func TestTimeoutWriter_FlushWithOKStatus(t *testing.T) {
 	rec := httptest.NewRecorder()
 	cw := &countingWriter{ResponseRecorder: rec}
@@ -145,7 +149,8 @@ func TestTimeoutWriter_FlushWithOKStatus(t *testing.T) {
 	assert.Equal(t, "ok", rec.Body.String())
 }
 
-// TestTimeoutWriter_FlushAfterTimeoutNoop 验证超时后 Flush 不再向底层写入。
+// TestTimeoutWriter_FlushAfterTimeoutNoop verifies that Flush no longer writes to
+// the underlying writer after a timeout.
 func TestTimeoutWriter_FlushAfterTimeoutNoop(t *testing.T) {
 	rec := httptest.NewRecorder()
 	cw := &countingWriter{ResponseRecorder: rec}

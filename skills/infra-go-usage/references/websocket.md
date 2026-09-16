@@ -1,28 +1,30 @@
 # websocket
 
-基于 [gorilla/websocket](https://github.com/gorilla/websocket) 的 WebSocket 服务封装，提供连接管理、事件分发、房间广播和心跳检测等功能。
+A WebSocket server wrapper built on [gorilla/websocket](https://github.com/gorilla/websocket),
+providing connection management, event dispatch, room broadcasting, and heartbeat checks.
 
-## 特性
+## Features
 
-- **事件驱动**：`EventHandler` 自动将 JSON `{type, data}` 消息分发到注册的处理器
-- **房间系统**：内存 + Redis 双后端，支持 `Join/Leave` 和按房间广播
-- **集群支持**：通过 Redis Pub/Sub 实现跨实例广播，连接 ID 全局唯一
-- **流畅广播**：`srv.To("room1", "room2").PushText("hello")` 一行完成定向推送
-- **心跳检测**：基于 Ping/Pong 的自动心跳，超时自动断开
-- **线程安全**：所有写操作通过 mutex 保护，支持并发写入
-- **用户值存储**：`conn.Set("userID", "xxx")` 方便在 Handler 间传递上下文
-- **配置驱动**：Config 通过 `default` 结构体标签定义默认值，遵循 conf 标准
-- **统一风格**：中文注释、英文错误信息、函数式选项配置，与 infra-go 其他模块一致
+- **Event-driven**: `EventHandler` dispatches JSON `{type, data}` messages to registered handlers
+- **Room system**: in-memory + Redis backends, supporting `Join/Leave` and per-room broadcast
+- **Cluster support**: cross-instance broadcast through Redis Pub/Sub, with globally unique conn IDs
+- **Fluent broadcasting**: `srv.To("room1", "room2").PushText("hello")` targets rooms in one line
+- **Heartbeat**: automatic Ping/Pong heartbeats that disconnect on timeout
+- **Thread safety**: every write is protected by a mutex, so concurrent writes are supported
+- **User value storage**: `conn.Set("userID", "xxx")` passes context between Handlers
+- **Config-driven**: Config defines defaults via `default` struct tags, following the conf standard
+- **Consistent style**: English comments, English error messages, and functional options, in line
+  with the other infra-go modules
 
-## 安装
+## Installation
 
 ```bash
 go get github.com/chihqiang/infra-go/websocket
 ```
 
-## 快速开始
+## Quick start
 
-### 基础示例
+### Basic example
 
 ```go
 package main
@@ -37,30 +39,30 @@ import (
 )
 
 func main() {
-    // 创建事件驱动处理器
+    // create the event-driven handler
     handler := websocket.NewEventHandler()
 
-    // 连接建立
+    // connection established
     handler.OnOpen(func(conn *websocket.Conn) {
-        logger.Infof("连接建立: %d", conn.ID())
+        logger.Infof("connection opened: %d", conn.ID())
         conn.Set("joinedAt", time.Now())
     })
 
-    // 事件处理：聊天消息
+    // event handling: chat message
     handler.Handle("chat", func(conn *websocket.Conn, data json.RawMessage) {
         var msg struct {
             Text string `json:"text"`
         }
         _ = json.Unmarshal(data, &msg)
 
-        // 广播给所有连接
+        // broadcast to all connections
         conn.Server().BroadcastEvent("message", map[string]string{
             "text":     msg.Text,
             "sender":   "anonymous",
         })
     })
 
-    // 事件处理：加入房间
+    // event handling: join a room
     handler.Handle("join", func(conn *websocket.Conn, data json.RawMessage) {
         var room string
         _ = json.Unmarshal(data, &room)
@@ -68,12 +70,12 @@ func main() {
         conn.Emit("joined", room)
     })
 
-    // 连接关闭
+    // connection closed
     handler.OnClose(func(conn *websocket.Conn, err error) {
-        logger.Infof("连接关闭: %d", conn.ID())
+        logger.Infof("connection closed: %d", conn.ID())
     })
 
-    // 创建服务器
+    // create the server
     srv := websocket.MustNew(websocket.Config{}, handler)
     defer srv.Close()
 
@@ -82,10 +84,11 @@ func main() {
 }
 ```
 
-### Redis 房间（多实例部署）
+### Redis rooms (multi-instance deployment)
 
-集群部署时，每个实例设置不同的 `NodeID`，连接 ID 编码为 `nodeID<<32 | localCounter`，
-保证全局唯一。通过 Redis Pub/Sub 自动实现跨实例广播：
+In a cluster every instance sets a different `NodeID` and connection IDs are encoded as
+`nodeID<<32 | localCounter`, which keeps them globally unique. Cross-instance broadcasting happens
+automatically through Redis Pub/Sub:
 
 ```go
 package main
@@ -112,14 +115,14 @@ func main() {
     handler.Handle("chat", func(conn *websocket.Conn, data json.RawMessage) {
         var msg struct{ Text string `json:"text"` }
         _ = json.Unmarshal(data, &msg)
-        // 广播到指定房间（自动跨实例）
+        // broadcast to a specific room (cross-instance automatically)
         conn.Server().To("lobby").Emit("message", msg)
     })
 
-    // 使用 Redis 房间 + NodeID，多实例共享房间状态和广播
+    // Redis rooms + NodeID: several instances share room state and broadcasts
     srv := websocket.MustNew(websocket.Config{
         RoomType: "redis",
-        NodeID:   1, // 每个实例设置不同的 NodeID
+        NodeID:   1, // every instance sets a different NodeID
     }, handler, websocket.WithRedisClient(rdb))
     defer srv.Close()
 
@@ -128,28 +131,28 @@ func main() {
 }
 ```
 
-### 自定义 Handler
+### Custom Handler
 
-实现 `Handler` 接口可以完全控制连接生命周期：
+Implementing the `Handler` interface gives full control over the connection lifecycle:
 
 ```go
 type myHandler struct{}
 
 func (h *myHandler) HandleOpen(conn *websocket.Conn) {
-    logger.Infof("连接建立: %d", conn.ID())
+    logger.Infof("connection opened: %d", conn.ID())
 }
 
 func (h *myHandler) HandleMessage(conn *websocket.Conn, messageType int, data []byte) {
-    // 原始消息处理（非事件驱动）
+    // raw message handling (not event-driven)
     _ = conn.WriteMessage(messageType, data) // echo
 }
 
 func (h *myHandler) HandleClose(conn *websocket.Conn, err error) {
-    logger.Infof("连接关闭: %d", conn.ID())
+    logger.Infof("connection closed: %d", conn.ID())
 }
 
 func (h *myHandler) HandleError(conn *websocket.Conn, err error) {
-    logger.Error("连接错误", logger.Int("conn_id", conn.ID()), logger.Err(err))
+    logger.Error("connection error", logger.Int("conn_id", conn.ID()), logger.Err(err))
 }
 
 func main() {
@@ -161,16 +164,16 @@ func main() {
 
 ## API
 
-### 创建服务器
+### Creating a server
 
 ```go
-// 创建服务器（返回 error）
+// create a server (returns an error)
 srv, err := websocket.New(websocket.Config{}, handler)
 
-// 创建服务器（出错 panic，适合全局初始化）
+// create a server (panics on error, suited to global initialization)
 srv := websocket.MustNew(websocket.Config{}, handler)
 
-// 使用选项
+// with options
 srv := websocket.MustNew(websocket.Config{}, handler,
     websocket.WithLogger(myLogger),
     websocket.WithCheckOrigin(func(r *http.Request) bool {
@@ -179,103 +182,103 @@ srv := websocket.MustNew(websocket.Config{}, handler,
 )
 ```
 
-### 选项
+### Options
 
-| 选项 | 说明 |
+| Option | Description |
 | ------ | ------ |
-| `WithLogger(l logger.ILogger)` | 设置日志记录器，默认使用 `logger.GetGlobal()` |
-| `WithRedisClient(client)` | 设置 Redis 客户端（用于 Redis 房间） |
-| `WithPubSub(ps)` | 设置自定义 PubSub 实现（用于集群广播） |
-| `WithCheckOrigin(fn)` | 设置 Origin 检查函数，默认允许所有来源 |
-| `WithSubprotocols(protocols...)` | 设置子协议协商列表 |
+| `WithLogger(l logger.ILogger)` | Set the logger; defaults to `logger.GetGlobal()` |
+| `WithRedisClient(client)` | Set the Redis client (used for Redis rooms) |
+| `WithPubSub(ps)` | Set a custom PubSub implementation (used for cluster broadcast) |
+| `WithCheckOrigin(fn)` | Set the Origin check function; allows every origin by default |
+| `WithSubprotocols(protocols...)` | Set the subprotocol negotiation list |
 
-### Server 方法
+### Server methods
 
 ```go
-// 连接管理
-conn, ok := srv.GetConn(id)     // 根据连接 ID 获取连接
-count := srv.Count()            // 当前在线连接数
-err := srv.CloseConn(id)        // 关闭指定连接
-err := srv.Close()              // 关闭服务器（断开所有连接）
+// connection management
+conn, ok := srv.GetConn(id)     // get a connection by its ID
+count := srv.Count()            // number of live connections
+err := srv.CloseConn(id)        // close a specific connection
+err := srv.Close()              // close the server (disconnecting every connection)
 
-// 广播
-srv.Broadcast(data)            // 广播文本消息到所有连接
-srv.BroadcastText("hello")      // 广播字符串到所有连接
-srv.BroadcastJSON(v)           // 广播 JSON 到所有连接
-srv.BroadcastEvent("news", v)   // 广播事件到所有连接
+// broadcast
+srv.Broadcast(data)            // broadcast a text message to all connections
+srv.BroadcastText("hello")      // broadcast a string to all connections
+srv.BroadcastJSON(v)           // broadcast JSON to all connections
+srv.BroadcastEvent("news", v)   // broadcast an event to all connections
 
-// 定向广播（返回 Broadcaster）
+// targeted broadcast (returns a Broadcaster)
 srv.To("room1", "room2").PushText("hello")
 srv.To("room1").Emit("event", data)
 srv.To("room1").WriteJSON(v)
 
-// 房间管理
-room := srv.Room()              // 获取房间管理器
-clients := room.GetClients("room1") // 获取房间内的连接 ID 列表
+// room management
+room := srv.Room()              // get the room manager
+clients := room.GetClients("room1") // list the connection IDs inside a room
 ```
 
-### Conn 方法
+### Conn methods
 
 ```go
-// 连接信息
-id := conn.ID()                 // 连接唯一 ID
-srv := conn.Server()            // 所属服务器
-addr := conn.RemoteAddr()       // 客户端地址
-req := conn.Request()           // 原始 HTTP 请求（只读）
+// connection info
+id := conn.ID()                 // unique connection ID
+srv := conn.Server()            // the owning server
+addr := conn.RemoteAddr()       // client address
+req := conn.Request()           // the original HTTP request (read-only)
 
-// 发送消息
-conn.WriteText(data)            // 发送文本消息
-conn.WriteTextString("hello")   // 发送字符串文本消息
-conn.WriteBinary(data)          // 发送二进制消息
-conn.WriteJSON(v)               // 发送 JSON 消息
-conn.WriteMessage(type, data)    // 发送指定类型消息
-conn.Emit("event", data)        // 发送事件 {"type":"event","data":...}
+// sending messages
+conn.WriteText(data)            // send a text message
+conn.WriteTextString("hello")   // send a string text message
+conn.WriteBinary(data)          // send a binary message
+conn.WriteJSON(v)               // send a JSON message
+conn.WriteMessage(type, data)    // send a message of the given type
+conn.Emit("event", data)        // send an event {"type":"event","data":...}
 
-// 房间操作
-conn.Join("room1", "room2")    // 加入房间
-conn.Leave("room1")              // 离开房间
-rooms := conn.Rooms()           // 当前所在的所有房间
+// room operations
+conn.Join("room1", "room2")    // join rooms
+conn.Leave("room1")              // leave a room
+rooms := conn.Rooms()           // all rooms the connection is currently in
 
-// 用户值
-conn.Set("userID", "user-123")  // 设置用户值
-val, ok := conn.Get("userID")   // 获取用户值
-val := conn.MustGet("userID")   // 获取用户值（不存在返回 nil）
+// user values
+conn.Set("userID", "user-123")  // set a user value
+val, ok := conn.Get("userID")   // get a user value
+val := conn.MustGet("userID")   // get a user value (nil when absent)
 
-// 关闭
-conn.Close()                    // 关闭连接
-conn.IsClosed()                 // 连接是否已关闭
+// close
+conn.Close()                    // close the connection
+conn.IsClosed()                 // whether the connection is already closed
 ```
 
 ### EventHandler
 
-`EventHandler` 是默认的 `Handler` 实现，支持事件驱动的消息处理：
+`EventHandler` is the default `Handler` implementation and supports event-driven message handling:
 
 ```go
 h := websocket.NewEventHandler()
 
-// 链式注册回调
+// register callbacks in a chain
 h.OnOpen(func(conn *websocket.Conn) {
-    logger.Infof("连接建立: %d", conn.ID())
+    logger.Infof("connection opened: %d", conn.ID())
 }).OnClose(func(conn *websocket.Conn, err error) {
-    logger.Infof("连接关闭: %d", conn.ID())
+    logger.Infof("connection closed: %d", conn.ID())
 }).OnError(func(conn *websocket.Conn, err error) {
     logger.Error("websocket error", logger.Err(err))
 })
 
-// 原始消息回调（在事件分发之前调用，对每条消息生效）
+// raw message callback (called before event dispatch, for every message)
 h.OnMessage(func(conn *websocket.Conn, data []byte) {
-    logger.Infof("收到原始消息: %s", string(data))
+    logger.Infof("raw message received: %s", string(data))
 })
 
-// 注册事件处理器
-// 客户端发送 {"type":"chat","data":{"text":"hello"}} 时触发
+// register event handlers
+// triggered when a client sends {"type":"chat","data":{"text":"hello"}}
 h.Handle("chat", func(conn *websocket.Conn, data json.RawMessage) {
     var msg struct{ Text string `json:"text"` }
     _ = json.Unmarshal(data, &msg)
-    // 处理消息...
+    // handle the message...
 })
 
-// 多个事件
+// multiple events
 h.Handle("join", func(conn *websocket.Conn, data json.RawMessage) {
     // ...
 }).Handle("leave", func(conn *websocket.Conn, data json.RawMessage) {
@@ -285,97 +288,99 @@ h.Handle("join", func(conn *websocket.Conn, data json.RawMessage) {
 
 ### Event
 
-`Event` 是 `{type, data}` 格式的事件结构，用于事件驱动的消息通信：
+`Event` is the `{type, data}` event structure used for event-driven messaging:
 
 ```go
-// 创建事件
+// create an event
 e, err := websocket.NewEvent("chat", map[string]string{"msg": "hello"})
 // => {"type":"chat","data":{"msg":"hello"}}
 
-// 通过连接发送
+// send through a connection
 conn.Emit("chat", map[string]string{"msg": "hello"})
 
-// 通过广播器发送
+// send through a broadcaster
 srv.To("room1").Emit("chat", map[string]string{"msg": "hello"})
 
-// 在事件处理器中解码数据
+// decode the data inside an event handler
 h.Handle("chat", func(conn *websocket.Conn, data json.RawMessage) {
     var msg struct{ Text string `json:"text"` }
-    _ = json.Unmarshal(data, &msg) // data 为 json.RawMessage，无 Unmarshal 方法，须用 json.Unmarshal
+    _ = json.Unmarshal(data, &msg) // data is a json.RawMessage with no Unmarshal method; use json.Unmarshal
 })
 ```
 
 ### Room
 
-`Room` 接口提供房间管理，支持内存和 Redis 两种实现：
+The `Room` interface provides room management with both in-memory and Redis implementations:
 
 ```go
-// 内存房间（单机）
+// in-memory rooms (single node)
 room := websocket.NewMemoryRoom()
 
-// Redis 房间（分布式）
+// Redis rooms (distributed)
 room := websocket.NewRedisRoom(rdb, "ws:room:")
 
-// 操作
-room.Add(1, "room1", "room2")           // 将连接 1 加入房间
-room.Delete(1, "room1")                  // 将连接 1 从 room1 移除
-room.Delete(1)                           // 移除连接 1 的所有房间
-clients := room.GetClients("room1")     // 获取房间内的连接 ID 列表
-rooms := room.GetRooms(1)               // 获取连接 1 所在的所有房间
-room.Clear()                             // 清空所有房间（⚠️ 仅运维/测试用，见下）
+// operations
+room.Add(1, "room1", "room2")           // add connection 1 to the rooms
+room.Delete(1, "room1")                  // remove connection 1 from room1
+room.Delete(1)                           // remove connection 1 from every room
+clients := room.GetClients("room1")     // list the connection IDs in a room
+rooms := room.GetRooms(1)               // all rooms connection 1 is in
+room.Clear()                             // clear every room (⚠️ ops/testing only, see below)
 ```
 
-> ⚠️ **`Clear` 影响所有实例**：Redis 房间的键（`{prefix}rooms:*` / `{prefix}fds:*`）
-> 由集群中所有实例共享，`Clear` 会把**其他节点**的连接也从房间中抹掉，
-> 使其后续广播静默失效。因此它只应用于运维/测试场景。
+> ⚠️ **`Clear` affects every instance**: the Redis room keys (`{prefix}rooms:*` / `{prefix}fds:*`)
+> are shared by every instance in the cluster, so `Clear` also wipes the connections of **other
+> nodes** from the rooms, silently breaking their later broadcasts. It should therefore only be
+> used for operations/testing.
 >
-> `Server.Close()` **不会**调用 `Clear`，它只把本实例的连接移出房间
-> （通过 `room.Delete(fd)` 逐个清理），不会影响其他节点。
+> `Server.Close()` does **not** call `Clear`; it only removes this instance's connections from the
+> rooms (cleaning up one by one through `room.Delete(fd)`) without affecting other nodes.
 
-### 写超时与慢客户端
+### Write timeout and slow clients
 
-每次写入前都会设置写截止时间（`WriteTimeout`，默认 10 秒）。这是必需的：
-客户端若不读取数据，其 TCP 缓冲区写满后 `WriteMessage` 会**无限阻塞**，
-且阻塞期间持有该连接的写锁，会连带卡住：
+A write deadline (`WriteTimeout`, 10 seconds by default) is set before every write. This is
+necessary: if a client stops reading, its TCP buffer fills up and `WriteMessage` **blocks
+forever**, and while blocked it holds that connection's write lock, which in turn stalls:
 
-- 广播循环（阻塞调用方的业务 goroutine）
-- `Conn.Close()` 与整个 `Server.Close()`
-- 该连接的心跳 goroutine
+- the broadcast loop (blocking the caller's business goroutine)
+- `Conn.Close()` and, through it, the whole `Server.Close()`
+- that connection's heartbeat goroutine
 
-超过 `WriteTimeout` 后写入返回错误（通常是 `i/o timeout`），锁被释放，
-上述流程可以继续。默认值对正常客户端足够宽松，无需调整；只有在网络极差、
-单条消息极大等场景才需要调大。
+Once `WriteTimeout` elapses the write returns an error (usually `i/o timeout`), the lock is
+released, and the flows above can continue. The default is generous enough for normal clients and
+needs no tuning; only scenarios such as a very poor network or extremely large single messages
+require a larger value.
 
-## 配置
+## Configuration
 
-### 配置项说明
+### Configuration fields
 
-| 字段 | 类型 | 默认值 | 说明 |
+| Field | Type | Default | Description |
 | ------ | ------ | -------- | ------ |
-| `PingInterval` | `time.Duration` | `25s` | 心跳检测间隔 |
-| `PingTimeout` | `time.Duration` | `60s` | 心跳超时时间 |
-| `ReadBufferSize` | `int` | `4096` | 读缓冲区大小（字节） |
-| `WriteBufferSize` | `int` | `4096` | 写缓冲区大小（字节） |
-| `WriteTimeout` | `time.Duration` | `10s` | 单次写操作的超时时间；设为负值可禁用 |
-| `MaxMessageSize` | `int64` | `4096` | 单条消息最大大小（字节） |
-| `NodeID` | `uint16` | `0` | 节点 ID，集群部署时每个实例必须不同 |
-| `RoomType` | `string` | `memory` | 房间存储类型（`memory` 或 `redis`） |
-| `RoomPrefix` | `string` | `ws:room:` | Redis 房间键前缀 |
-| `RedisAddr` | `string` | `127.0.0.1:6379` | Redis 地址 |
-| `RedisPassword` | `string` | `""` | Redis 密码 |
-| `RedisDB` | `int` | `0` | Redis 数据库编号 |
+| `PingInterval` | `time.Duration` | `25s` | Heartbeat interval |
+| `PingTimeout` | `time.Duration` | `60s` | Heartbeat timeout |
+| `ReadBufferSize` | `int` | `4096` | Read buffer size (bytes) |
+| `WriteBufferSize` | `int` | `4096` | Write buffer size (bytes) |
+| `WriteTimeout` | `time.Duration` | `10s` | Timeout for a single write; set to a negative value to disable |
+| `MaxMessageSize` | `int64` | `4096` | Maximum size of a single message (bytes) |
+| `NodeID` | `uint16` | `0` | Node ID; every instance must differ in a cluster |
+| `RoomType` | `string` | `memory` | Room storage type (`memory` or `redis`) |
+| `RoomPrefix` | `string` | `ws:room:` | Redis room key prefix |
+| `RedisAddr` | `string` | `127.0.0.1:6379` | Redis address |
+| `RedisPassword` | `string` | `""` | Redis password |
+| `RedisDB` | `int` | `0` | Redis database number |
 
-### 消息类型常量
+### Message type constants
 
-| 常量 | 值 | 说明 |
+| Constant | Value | Description |
 | ------ | ---- | ------ |
-| `TextMessage` | `1` | 文本消息 |
-| `BinaryMessage` | `2` | 二进制消息 |
-| `CloseMessage` | `3` | 关闭消息 |
-| `PingMessage` | `9` | Ping 消息 |
-| `PongMessage` | `10` | Pong 消息 |
+| `TextMessage` | `1` | Text message |
+| `BinaryMessage` | `2` | Binary message |
+| `CloseMessage` | `3` | Close message |
+| `PingMessage` | `9` | Ping message |
+| `PongMessage` | `10` | Pong message |
 
-## 架构设计
+## Architecture
 
 ```text
 ┌──────────────────────────────────────────────────────┐
@@ -399,75 +404,75 @@ room.Clear()                             // 清空所有房间（⚠️ 仅运�
 └──────────────────────────────────────────────────────┘
 ```
 
-### 心跳机制
+### Heartbeat mechanism
 
-服务器每隔 `PingInterval`（默认 25 秒）向客户端发送 Ping 帧：
+Every `PingInterval` (25 seconds by default) the server sends a Ping frame to the client:
 
-1. 客户端收到 Ping 后自动回复 Pong（由浏览器/SDK 自动处理）
-2. 服务器收到 Pong 后重置读超时为 `PingTimeout`（默认 60 秒）
-3. 如果 `PingTimeout` 内未收到任何消息或 Pong，则断开连接
+1. The client replies with a Pong automatically (handled by the browser/SDK)
+2. On receiving the Pong the server resets the read deadline to `PingTimeout` (60 seconds by default)
+3. If neither a message nor a Pong arrives within `PingTimeout`, the connection is closed
 
-### Room 实现
+### Room implementations
 
-**MemoryRoom**（内存房间）：
+**MemoryRoom** (in-memory rooms):
 
-- 使用两个 map 维护 `room → fds` 和 `fd → rooms` 的双向映射
-- 通过 `sync.RWMutex` 保证并发安全
-- 适用于单机部署
+- Two maps maintain the bidirectional mapping between `room → fds` and `fd → rooms`
+- `sync.RWMutex` keeps it safe for concurrent use
+- Suited to single-node deployments
 
-**RedisRoom**（Redis 房间）：
+**RedisRoom** (Redis rooms):
 
-- 使用 Redis SET 维护映射：`{prefix}rooms:{room}` 和 `{prefix}fds:{fd}`
-- 通过 `SADD/SREM/SMEMBERS` 管理集合
-- 适用于多实例部署，不同进程通过共享 Redis 实现跨实例广播
+- Redis SETs maintain the mappings: `{prefix}rooms:{room}` and `{prefix}fds:{fd}`
+- The sets are managed with `SADD/SREM/SMEMBERS`
+- Suited to multi-instance deployments, where processes share Redis for cross-instance broadcast
 
-### 集群部署
+### Cluster deployment
 
-集群部署时需要解决两个问题：
+Cluster deployment has to solve two problems:
 
-1. **连接 ID 全局唯一**：每个实例设置不同的 `NodeID`，
-   连接 ID 编码为 `nodeID<<32 | localCounter`，保证不同实例的 ID 不重叠。
+1. **Globally unique connection IDs**: every instance sets a different `NodeID`, and connection IDs
+   are encoded as `nodeID<<32 | localCounter`, so IDs from different instances never overlap.
 
    ```go
-   // 实例 A: NodeID=1 → 连接 ID = 4294967297, 4294967298, ...
-   // 实例 B: NodeID=2 → 连接 ID = 8589934593, 8589934594, ...
+   // instance A: NodeID=1 → conn IDs = 4294967297, 4294967298, ...
+   // instance B: NodeID=2 → conn IDs = 8589934593, 8589934594, ...
    ```
 
-2. **跨实例广播**：通过 Redis Pub/Sub 实现消息跨实例投递。
-   当实例 A 调用 `srv.To("lobby").PushText("hello")` 时：
-   - 消息通过 Redis `PUBLISH` 发送到集群频道
-   - 所有实例（包括 A 自身）的 ClusterHandler 收到消息
-   - 各实例根据本地房间成员分发到本地连接
+2. **Cross-instance broadcast**: Redis Pub/Sub delivers messages across instances.
+   When instance A calls `srv.To("lobby").PushText("hello")`:
+   - the message is published to the cluster channel with Redis `PUBLISH`
+   - the ClusterHandler of every instance (including A itself) receives it
+   - each instance dispatches to its local connections according to its local room members
 
    ```go
-   // Redis 房间模式自动启用集群广播
+   // the Redis room mode enables cluster broadcast automatically
    srv := websocket.MustNew(websocket.Config{
        RoomType: "redis",
-       NodeID:   1, // 每个实例不同
+       NodeID:   1, // different per instance
    }, handler, websocket.WithRedisClient(rdb))
 
-   // 也可通过 WithPubSub 注入自定义实现
+   // a custom implementation can also be injected with WithPubSub
    srv := websocket.MustNew(websocket.Config{
        NodeID: 1,
    }, handler, websocket.WithPubSub(myPubSub))
    ```
 
-## 错误处理
+## Error handling
 
-| 错误 | 说明 |
+| Error | Description |
 | ------ | ------ |
-| `ErrConnClosed` | 连接已关闭 |
+| `ErrConnClosed` | The connection is already closed |
 
 ```go
 err := conn.WriteText(data)
 if errors.Is(err, websocket.ErrConnClosed) {
-    // 连接已关闭
+    // the connection is already closed
 }
 ```
 
-## 完整示例
+## Full example
 
-### 聊天室
+### Chat room
 
 ```go
 package main
@@ -488,27 +493,27 @@ type ChatMessage struct {
 func main() {
     handler := websocket.NewEventHandler()
 
-    // 用户加入聊天室
+    // a user joins the chat room
     handler.OnOpen(func(conn *websocket.Conn) {
         conn.Join("chatroom")
         conn.Emit("system", map[string]string{
-            "msg": "欢迎加入聊天室",
+            "msg": "Welcome to the chat room",
         })
     })
 
-    // 收到聊天消息，广播给聊天室所有成员
+    // a chat message arrived: broadcast it to everyone in the chat room
     handler.Handle("message", func(conn *websocket.Conn, data json.RawMessage) {
         var msg ChatMessage
         _ = json.Unmarshal(data, &msg)
-        // 广播到 chatroom 房间
+        // broadcast to the chatroom room
         _ = conn.Server().To("chatroom").Emit("message", msg)
     })
 
-    // 用户离开
+    // a user leaves
     handler.OnClose(func(conn *websocket.Conn, err error) {
-        // 通知聊天室
+        // notify the chat room
         _ = conn.Server().To("chatroom").Emit("system", map[string]string{
-            "msg": "有用户离开了聊天室",
+            "msg": "A user has left the chat room",
         })
     })
 
@@ -520,13 +525,13 @@ func main() {
 }
 ```
 
-### 前端 JavaScript 对应
+### Corresponding frontend JavaScript
 
 ```javascript
 const ws = new WebSocket("ws://localhost:8080/ws");
 
 ws.onopen = () => {
-    // 收到系统消息: {"type":"system","data":{"msg":"欢迎加入聊天室"}}
+    // system message received: {"type":"system","data":{"msg":"Welcome to the chat room"}}
 };
 
 ws.onmessage = (event) => {
@@ -534,7 +539,7 @@ ws.onmessage = (event) => {
     console.log(data.type, data.data);
 };
 
-// 发送消息
+// send a message
 ws.send(JSON.stringify({
     type: "message",
     data: { user: "Alice", text: "Hello!" }

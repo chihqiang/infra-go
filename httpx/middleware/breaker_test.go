@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// 对应 breaker.go：全局熔断中间件。
+// Covers breaker.go: the global circuit breaker middleware.
 
 func TestBreaker_Allows(t *testing.T) {
 	silenceLogger(t)
@@ -23,7 +23,7 @@ func TestBreaker_RejectsOnFailure(t *testing.T) {
 	brk := NewBreaker().Middleware()
 	fail := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusInternalServerError) }
 
-	// 大量 5xx 触发熔断后，请求被快速拒绝（503）
+	// Once a burst of 5xx responses trips the breaker, requests are rejected quickly (503)
 	var rejected bool
 	for i := 0; i < 2000; i++ {
 		rec := perform(brk, fail, httptest.NewRequest(http.MethodGet, "/fail", nil))
@@ -32,5 +32,5 @@ func TestBreaker_RejectsOnFailure(t *testing.T) {
 			break
 		}
 	}
-	assert.True(t, rejected, "熔断器应最终打开并拒绝请求")
+	assert.True(t, rejected, "the breaker should eventually open and reject requests")
 }

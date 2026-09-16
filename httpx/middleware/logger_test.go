@@ -13,9 +13,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 对应 logger.go：AccessLogger 访问日志中间件。
+// Covers logger.go: the AccessLogger access log middleware.
 
-// captureLogger 将全局 logger 重定向到临时文件并返回路径，便于断言日志写入。
+// captureLogger redirects the global logger to a temporary file and returns its path, making it
+// easy to assert on logged output.
 func captureLogger(t *testing.T) string {
 	t.Helper()
 	logPath := filepath.Join(t.TempDir(), "test.log")
@@ -29,7 +30,8 @@ func captureLogger(t *testing.T) string {
 	return logPath
 }
 
-// readLogLines 读取日志文件内容并返回非空行；文件不存在（未产生日志）时返回空切片。
+// readLogLines reads the log file and returns its non-empty lines; when the file does not exist
+// (no log was produced) it returns an empty slice.
 func readLogLines(t *testing.T, logPath string) []string {
 	t.Helper()
 	data, err := os.ReadFile(logPath)
@@ -54,7 +56,7 @@ func TestAccessLogger_WritesLog(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	lines := readLogLines(t, logPath)
-	require.NotEmpty(t, lines) // 正常请求应写入访问日志
+	require.NotEmpty(t, lines) // a normal request should write an access log entry
 	assert.Contains(t, lines[0], "http request")
 }
 
@@ -71,13 +73,13 @@ func TestAccessLogger_SkipExactPaths(t *testing.T) {
 	logPath := captureLogger(t)
 	mw := NewAccessLogger("/skip", "/skip2").Middleware()
 
-	// 命中 skip 的路径不记录日志
+	// Paths hitting skip are not logged
 	rec := perform(mw, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) },
 		httptest.NewRequest(http.MethodGet, "/skip", nil))
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Empty(t, readLogLines(t, logPath))
 
-	// 其它路径正常记录
+	// Other paths are logged normally
 	rec2 := perform(mw, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) },
 		httptest.NewRequest(http.MethodGet, "/ok", nil))
 	assert.Equal(t, http.StatusOK, rec2.Code)

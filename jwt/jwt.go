@@ -9,29 +9,30 @@ import (
 	stdjwt "github.com/golang-jwt/jwt/v5"
 )
 
-// 错误定义。
+// Error definitions.
 var (
-	// ErrInvalidToken 令牌无效。
+	// ErrInvalidToken indicates an invalid token.
 	ErrInvalidToken = errors.New("jwt: invalid token")
-	// ErrExpiredToken 令牌已过期。
+	// ErrExpiredToken indicates an expired token.
 	ErrExpiredToken = errors.New("jwt: token is expired")
-	// ErrNotRefreshToken 不是刷新令牌。
+	// ErrNotRefreshToken indicates the token is not a refresh token.
 	ErrNotRefreshToken = errors.New("jwt: token is not a refresh token")
-	// ErrSecretEmpty 密钥为空。
+	// ErrSecretEmpty indicates an empty secret.
 	ErrSecretEmpty = errors.New("jwt: secret is empty")
-	// ErrUnsupportedAlgorithm 不支持的签名算法。
+	// ErrUnsupportedAlgorithm indicates an unsupported signing algorithm.
 	ErrUnsupportedAlgorithm = errors.New("jwt: unsupported algorithm")
 )
 
-// fillDefault 填充默认值，然后用用户配置中的非零字段覆盖。
-// 使用 mapping.FillAndOverride 统一处理。
+// fillDefault fills in the defaults and then overrides them with the non-zero
+// fields from the user configuration.
+// Delegated to mapping.FillAndOverride.
 func fillDefault(cfg Config) Config {
 	var c Config
 	mapping.MustFillAndOverride(&c, cfg)
 	return c
 }
 
-// signingMethod 根据算法返回对应的 jwt.SigningMethod。
+// signingMethod returns the jwt.SigningMethod matching the algorithm.
 func signingMethod(alg Algorithm) (stdjwt.SigningMethod, error) {
 	switch alg {
 	case AlgorithmHS256:
@@ -45,15 +46,15 @@ func signingMethod(alg Algorithm) (stdjwt.SigningMethod, error) {
 	}
 }
 
-// --- JWT 面向对象封装 ---
+// --- JWT object-oriented wrapper ---
 
-// JWT 封装了 JWT 操作，配置只需初始化一次。
+// JWT wraps JWT operations; the configuration only needs to be initialized once.
 type JWT struct {
 	config Config
 	method stdjwt.SigningMethod
 }
 
-// New 创建 JWT 实例，配置只需传入一次。
+// New creates a JWT instance; the configuration is only passed in once.
 func New(cfg Config) (*JWT, error) {
 	c := fillDefault(cfg)
 
@@ -72,8 +73,8 @@ func New(cfg Config) (*JWT, error) {
 	}, nil
 }
 
-// MustNew 创建 JWT 实例，出错时 panic。
-// 适用于全局初始化场景。
+// MustNew creates a JWT instance and panics on error.
+// Suitable for global initialization scenarios.
 func MustNew(cfg Config) *JWT {
 	j, err := New(cfg)
 	if err != nil {
@@ -82,24 +83,24 @@ func MustNew(cfg Config) *JWT {
 	return j
 }
 
-// Config 返回填充默认值后的配置。
+// Config returns the configuration with defaults filled in.
 func (j *JWT) Config() Config {
 	return j.config
 }
 
-// --- 令牌生成 ---
+// --- Token generation ---
 
-// GenerateToken 生成单个令牌。
-// claims 为自定义声明，会自动注入 iss、aud、iat、nbf、exp 标准字段。
-// 如果 claims 中未设置 "token_type"，需调用方自行设置。
-// expire 为令牌有效期。
+// GenerateToken generates a single token.
+// claims holds the custom claims; the standard iss, aud, iat, nbf and exp
+// fields are injected automatically. If "token_type" is not set in claims,
+// the caller must set it. expire is the token's time to live.
 func (j *JWT) GenerateToken(claims Claims, expire time.Duration) (string, error) {
-	// 复制 claims，避免修改调用方传入的 map。
+	// Copy the claims so the map passed in by the caller is not modified.
 	claims = copyClaims(claims)
 
 	now := time.Now()
 
-	// 注入标准声明
+	// Inject the standard claims
 	claims[ClaimKeyIssuedAt] = now.Unix()
 	claims[ClaimKeyNotBefore] = now.Unix()
 	claims[ClaimKeyExpirationTime] = now.Add(expire).Unix()
@@ -114,24 +115,24 @@ func (j *JWT) GenerateToken(claims Claims, expire time.Duration) (string, error)
 	return token.SignedString([]byte(j.config.Secret))
 }
 
-// GenerateAccessToken 生成访问令牌，自动设置 token_type 为 access。
+// GenerateAccessToken generates an access token, setting token_type to access.
 func (j *JWT) GenerateAccessToken(claims Claims) (string, error) {
 	claims = copyClaims(claims)
 	claims[ClaimKeyTokenType] = TokenTypeAccess
 	return j.GenerateToken(claims, j.config.AccessTokenExpire)
 }
 
-// GenerateRefreshToken 生成刷新令牌，自动设置 token_type 为 refresh。
+// GenerateRefreshToken generates a refresh token, setting token_type to refresh.
 func (j *JWT) GenerateRefreshToken(claims Claims) (string, error) {
 	claims = copyClaims(claims)
 	claims[ClaimKeyTokenType] = TokenTypeRefresh
 	return j.GenerateToken(claims, j.config.RefreshTokenExpire)
 }
 
-// GenerateTokenPair 生成访问令牌和刷新令牌对。
-// claims 中的自定义字段会同时写入两个令牌。
+// GenerateTokenPair generates an access token and refresh token pair.
+// Custom fields in claims are written into both tokens.
 func (j *JWT) GenerateTokenPair(claims Claims) (*TokenPair, error) {
-	// 复制 claims，避免两个令牌共享底层数据
+	// Copy the claims so the two tokens do not share the same backing data
 	accessClaims := copyClaims(claims)
 	refreshClaims := copyClaims(claims)
 
@@ -152,43 +153,50 @@ func (j *JWT) GenerateTokenPair(claims Claims) (*TokenPair, error) {
 	}, nil
 }
 
-// --- 令牌验证 ---
+// --- Token validation ---
 
-// parserOptions 根据配置构造解析期校验选项。
+// parserOptions builds the parse-time validation options from the configuration.
 //
-// 关键：iss/aud 必须在此校验，而不是只在签发时写入。
-// 旧实现只把 Issuer/Audience 写进令牌却从不校验，导致共享同一密钥的不同应用
-// （或多租户场景）可以互相接受对方签发的令牌 —— 例如 iss=app-a/aud=tenant-a
-// 的令牌会被配置为 app-b/tenant-b 的实例接受（实测确认），形成跨租户越权。
+// Key point: iss/aud must be validated here, not merely written at signing time.
+// The old implementation only wrote Issuer/Audience into the token and never
+// validated them, so different applications sharing the same secret
+// (or multi-tenant setups) accepted each other's tokens — for example a token
+// with iss=app-a/aud=tenant-a was accepted by an instance configured with
+// app-b/tenant-b (verified empirically), allowing cross-tenant privilege
+// escalation.
 func (j *JWT) parserOptions() []stdjwt.ParserOption {
 	opts := []stdjwt.ParserOption{
-		// 限定允许的签名算法，双重防护 alg 混淆攻击
-		// （keyfunc 中另有 token.Method.Alg() 校验）
+		// Restrict the allowed signing algorithm as a second line of defence
+		// against algorithm-confusion attacks (keyfunc also verifies
+		// token.Method.Alg()).
 		stdjwt.WithValidMethods([]string{string(j.config.Algorithm)}),
 	}
 	if j.config.Issuer != "" {
 		opts = append(opts, stdjwt.WithIssuer(j.config.Issuer))
 	}
 	if len(j.config.Audience) > 0 {
-		// WithAudience：令牌的 aud 必须包含其中至少一个配置值
+		// WithAudience: the token's aud must contain at least one configured value
 		opts = append(opts, stdjwt.WithAudience(j.config.Audience...))
 	}
 	return opts
 }
 
-// ParseToken 解析并验证令牌，返回 claims。
+// ParseToken parses and validates a token, returning its claims.
 //
-// 校验内容：签名与算法、exp/nbf、以及**配置了才启用**的 iss/aud。
-// 若 Config 未设置 Issuer/Audience，则对应声明不做校验
-// （为兼容"仅用密钥校验"的既有用法）。
+// Validation covers: the signature and algorithm, exp/nbf, and the iss/aud
+// claims **only when configured**. If Config leaves Issuer/Audience unset, the
+// corresponding claim is not validated (for compatibility with the existing
+// "secret-only validation" usage).
 func (j *JWT) ParseToken(tokenString string) (Claims, error) {
 	claims := Claims{}
 
 	token, err := stdjwt.ParseWithClaims(tokenString, claims, func(token *stdjwt.Token) (any, error) {
-		// 严格校验签名算法与配置一致，防止 alg 混淆攻击。
-		// 比较 Alg() 字符串而非方法指针：方法指针依赖 golang-jwt 的内部单例，
-		// 若有人 RegisterSigningMethod 注册自定义实现（或未来 SDK 返回新实例），
-		// 指针比较会失效。
+		// Strictly verify that the signing algorithm matches the configuration,
+		// preventing algorithm-confusion attacks. Compare the Alg() string
+		// rather than the method pointer: method pointers rely on golang-jwt's
+		// internal singletons, so a pointer comparison breaks if someone
+		// registers a custom implementation via RegisterSigningMethod
+		// (or a future SDK returns a new instance).
 		if alg := token.Method.Alg(); alg != string(j.config.Algorithm) {
 			return nil, fmt.Errorf("%w: unexpected signing method: %v", ErrInvalidToken, alg)
 		}
@@ -209,7 +217,7 @@ func (j *JWT) ParseToken(tokenString string) (Claims, error) {
 	return claims, nil
 }
 
-// ParseAccessToken 解析访问令牌，验证令牌类型为 access。
+// ParseAccessToken parses an access token and verifies its type is access.
 func (j *JWT) ParseAccessToken(tokenString string) (Claims, error) {
 	claims, err := j.ParseToken(tokenString)
 	if err != nil {
@@ -223,7 +231,7 @@ func (j *JWT) ParseAccessToken(tokenString string) (Claims, error) {
 	return claims, nil
 }
 
-// ParseRefreshToken 解析刷新令牌，验证令牌类型为 refresh。
+// ParseRefreshToken parses a refresh token and verifies its type is refresh.
 func (j *JWT) ParseRefreshToken(tokenString string) (Claims, error) {
 	claims, err := j.ParseToken(tokenString)
 	if err != nil {
@@ -237,25 +245,26 @@ func (j *JWT) ParseRefreshToken(tokenString string) (Claims, error) {
 	return claims, nil
 }
 
-// --- 令牌刷新 ---
+// --- Token refresh ---
 
-// RefreshToken 使用刷新令牌生成新的令牌对。
-// 旧的刷新令牌验证通过后，提取其中的自定义声明，生成全新的令牌对。
+// RefreshToken generates a new token pair from a refresh token.
+// Once the old refresh token passes validation, its custom claims are extracted
+// and a brand new token pair is generated.
 func (j *JWT) RefreshToken(refreshToken string) (*TokenPair, error) {
 	claims, err := j.ParseRefreshToken(refreshToken)
 	if err != nil {
 		return nil, err
 	}
 
-	// 移除标准声明和 token_type，只保留业务字段
+	// Drop the standard claims and token_type, keeping only business fields
 	cleanClaims := extractBusinessClaims(claims)
 
 	return j.GenerateTokenPair(cleanClaims)
 }
 
-// --- 内部辅助 ---
+// --- Internal helpers ---
 
-// copyClaims 深拷贝 MapClaims，避免共享底层数据。
+// copyClaims deep-copies MapClaims to avoid sharing the backing data.
 func copyClaims(src Claims) Claims {
 	dst := make(Claims, len(src))
 	for k, v := range src {
@@ -264,8 +273,9 @@ func copyClaims(src Claims) Claims {
 	return dst
 }
 
-// standardClaimKeys 标准 JWT 声明与 token_type 的 key 集合。
-// 定义为包级变量，避免每次调用 extractBusinessClaims 时重复构建。
+// standardClaimKeys is the set of standard JWT claim keys plus token_type.
+// Declared as a package-level variable so extractBusinessClaims does not rebuild
+// it on every call.
 var standardClaimKeys = map[string]bool{
 	ClaimKeyIssuer:         true,
 	ClaimKeyAudience:       true,
@@ -277,8 +287,8 @@ var standardClaimKeys = map[string]bool{
 	ClaimKeyJWTID:          true,
 }
 
-// extractBusinessClaims 从 claims 中提取业务字段，
-// 移除标准声明和 token_type。
+// extractBusinessClaims extracts the business fields from claims,
+// removing the standard claims and token_type.
 func extractBusinessClaims(claims Claims) Claims {
 	result := make(Claims)
 	for k, v := range claims {

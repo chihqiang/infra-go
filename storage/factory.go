@@ -2,8 +2,9 @@ package storage
 
 import "fmt"
 
-// New 根据配置创建存储实例。
-// 工厂方法：根据 Config.Driver 选择对应的存储实现（local、OSS、COS 或 KODO）。
+// New creates a storage instance from the configuration.
+// Factory method: it picks the matching storage implementation based on
+// Config.Driver (local, OSS, COS or KODO).
 func New(cfg Config) (Storage, error) {
 	switch cfg.Driver {
 	case DriverLocal:
@@ -19,7 +20,7 @@ func New(cfg Config) (Storage, error) {
 	}
 }
 
-// MustNew 根据配置创建存储实例，出错时 panic。
+// MustNew creates a storage instance from the configuration and panics on failure.
 func MustNew(cfg Config) Storage {
 	s, err := New(cfg)
 	if err != nil {

@@ -7,7 +7,7 @@ import (
 	"github.com/hibiken/asynq"
 )
 
-// logAdapter 将项目 logger 适配为 asynq.Logger。
+// logAdapter adapts the project logger to asynq.Logger.
 type logAdapter struct{ log logger.ILogger }
 
 func newLogAdapter(log logger.ILogger) *logAdapter {
@@ -23,8 +23,8 @@ func (a *logAdapter) Warn(args ...interface{})  { a.log.Warn(fmt.Sprint(args...)
 func (a *logAdapter) Error(args ...interface{}) { a.log.Error(fmt.Sprint(args...)) }
 func (a *logAdapter) Fatal(args ...interface{}) { a.log.Fatal(fmt.Sprint(args...)) }
 
-// toAsynqConfig 将 Config 转为 asynq.Config。
-// la 为 nil 时不设 Logger，asynq 使用默认日志器。
+// toAsynqConfig converts Config into asynq.Config.
+// When la is nil no Logger is set and asynq uses its default logger.
 func (c Config) toAsynqConfig(la *logAdapter) asynq.Config {
 	queues := c.Queues
 	if len(queues) == 0 {
@@ -42,7 +42,7 @@ func (c Config) toAsynqConfig(la *logAdapter) asynq.Config {
 	return cfg
 }
 
-// redisOpt 返回 asynq Redis 连接配置。
+// redisOpt returns the asynq Redis connection configuration.
 func (c Config) redisOpt() asynq.RedisConnOpt {
 	return asynq.RedisClientOpt{
 		Addr:     c.RedisAddr,
@@ -51,7 +51,7 @@ func (c Config) redisOpt() asynq.RedisConnOpt {
 	}
 }
 
-// defaultOpts 返回基于配置的默认任务选项。
+// defaultOpts returns the default task options derived from the configuration.
 func (c Config) defaultOpts() []asynq.Option {
 	return []asynq.Option{
 		asynq.MaxRetry(c.DefaultMaxRetry),

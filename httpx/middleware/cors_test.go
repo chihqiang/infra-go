@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// 对应 cors.go：CORS 中间件。
+// Covers cors.go: the CORS middleware.
 
 func TestCORS_NoOrigin(t *testing.T) {
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
@@ -25,8 +25,8 @@ func TestCORS_AllowAll(t *testing.T) {
 
 	rec := perform(NewCORS("*").Middleware(), ok, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
-	// allowAll 回显具体 Origin（而非 "*"），因为同时下发了 Allow-Credentials；
-	// "*" + 凭证的组合会被浏览器拒绝。
+	// allowAll echoes the concrete Origin (not "*") because Allow-Credentials is sent as well;
+	// the "*" + credentials combination is rejected by browsers.
 	assert.Equal(t, "http://any.com", rec.Header().Get("Access-Control-Allow-Origin"))
 	assert.Equal(t, "Origin", rec.Header().Get("Vary"))
 	assert.Equal(t, "GET, POST, PUT, DELETE, OPTIONS, PATCH", rec.Header().Get("Access-Control-Allow-Methods"))
@@ -44,12 +44,13 @@ func TestCORS_AllowSpecific(t *testing.T) {
 	assert.Equal(t, "Origin", rec.Header().Get("Vary"))
 }
 
-// TestCORS_UnauthorizedOrigin 验证未授权来源默认**透传**：
-// 不下发 CORS 头（浏览器会阻止脚本读取响应），但请求仍交给下游。
+// TestCORS_UnauthorizedOrigin verifies that an unauthorized origin is **passed through** by
+// default: no CORS headers are sent (so the browser blocks scripts from reading the response),
+// but the request still reaches the downstream handler.
 //
-// 不返回 403 的原因见 WithRejectUnauthorizedOrigin 文档：
-// CORS 是浏览器侧的响应读取限制，不是服务端准入控制；
-// 返回 403 会误伤带 Origin 头的非浏览器客户端（curl / 移动端 / 服务间调用）。
+// For why it does not return 403 see the WithRejectUnauthorizedOrigin documentation:
+// CORS is a browser-side response reading restriction, not server-side access control; returning
+// 403 would hit non-browser clients that send an Origin header (curl / mobile / service calls).
 func TestCORS_UnauthorizedOrigin(t *testing.T) {
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
@@ -62,7 +63,7 @@ func TestCORS_UnauthorizedOrigin(t *testing.T) {
 	assert.Empty(t, rec.Header().Get("Access-Control-Allow-Credentials"))
 }
 
-// TestCORS_RejectUnauthorizedOrigin 验证可选严格模式返回 403。
+// TestCORS_RejectUnauthorizedOrigin verifies that the optional strict mode returns 403.
 func TestCORS_RejectUnauthorizedOrigin(t *testing.T) {
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
@@ -74,7 +75,8 @@ func TestCORS_RejectUnauthorizedOrigin(t *testing.T) {
 	assert.Empty(t, rec.Header().Get("Access-Control-Allow-Origin"))
 }
 
-// TestCORS_RejectUnauthorizedOrigin_AllowedStillPasses 验证严格模式不影响授权来源。
+// TestCORS_RejectUnauthorizedOrigin_AllowedStillPasses verifies that strict mode does not affect
+// allowed origins.
 func TestCORS_RejectUnauthorizedOrigin_AllowedStillPasses(t *testing.T) {
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
@@ -86,8 +88,9 @@ func TestCORS_RejectUnauthorizedOrigin_AllowedStillPasses(t *testing.T) {
 	assert.Equal(t, "http://allowed.com", rec.Header().Get("Access-Control-Allow-Origin"))
 }
 
-// TestCORS_UnauthorizedPreflightPassesThrough 验证未授权来源的预检请求也是透传：
-// 没有 CORS 头，浏览器会判定预检失败，因此无需服务端再返回 403。
+// TestCORS_UnauthorizedPreflightPassesThrough verifies that a preflight request from an
+// unauthorized origin also passes through: with no CORS headers the browser deems the preflight
+// to have failed, so the server need not return 403 either.
 func TestCORS_UnauthorizedPreflightPassesThrough(t *testing.T) {
 	reached := false
 	next := func(w http.ResponseWriter, r *http.Request) {
@@ -105,7 +108,7 @@ func TestCORS_UnauthorizedPreflightPassesThrough(t *testing.T) {
 
 func TestCORS_SameOrigin(t *testing.T) {
 	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
-	// 同源：Origin 与请求 Host 一致 → 直接放行且不设 CORS 头
+	// Same-origin: Origin matches the request Host → pass straight through with no CORS headers
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/x", nil)
 	req.Header.Set("Origin", "http://example.com")
 

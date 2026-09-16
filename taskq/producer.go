@@ -8,15 +8,15 @@ import (
 	"github.com/hibiken/asynq"
 )
 
-// Producer 生产者，封装 asynq.Client，负责投递任务到队列。
+// Producer wraps asynq.Client and is responsible for enqueueing tasks onto queues.
 type Producer struct {
 	client      *asynq.Client
 	cfg         Config
-	defaultOpts []asynq.Option // 构造时缓存的默认选项，避免每次投递重复构建
+	defaultOpts []asynq.Option // default options cached at construction, so enqueues do not rebuild them
 }
 
-// NewProducer 创建生产者。
-// opts 用于表达 Config 结构体无法表达的显式零值，见 Option。
+// NewProducer creates a producer.
+// opts expresses explicit zero values that the Config struct cannot represent, see Option.
 func NewProducer(cfg Config, opts ...Option) *Producer {
 	c := fillDefault(cfg, opts...)
 	return &Producer{
@@ -26,13 +26,14 @@ func NewProducer(cfg Config, opts ...Option) *Producer {
 	}
 }
 
-// Close 关闭，释放连接。
+// Close closes the producer and releases the connection.
 func (p *Producer) Close() error { return p.client.Close() }
 
-// Enqueue 投递任务到队列立即执行。
-// opts 可覆盖默认选项（队列、重试、超时等）。
+// Enqueue enqueues a task for immediate execution.
+// opts can override the default options (queue, retries, timeout, and so on).
 func (p *Producer) Enqueue(ctx context.Context, task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error) {
-	// 先拷贝一份，避免 append 复用 defaultOpts 的底层数组导致跨调用数据串扰。
+	// Copy first: appending directly could reuse the backing array of defaultOpts
+	// and leak state across calls.
 	opts = append(append([]asynq.Option{}, p.defaultOpts...), opts...)
 	info, err := p.client.EnqueueContext(ctx, task, opts...)
 	if err != nil {
@@ -41,7 +42,7 @@ func (p *Producer) Enqueue(ctx context.Context, task *asynq.Task, opts ...asynq.
 	return info, nil
 }
 
-// EnqueuePayload 投递任务，自动将 payload JSON 序列化。
+// EnqueuePayload enqueues a task and marshals the payload to JSON automatically.
 func (p *Producer) EnqueuePayload(ctx context.Context, typename string, payload any, opts ...asynq.Option) (*asynq.TaskInfo, error) {
 	data, err := MarshalPayload(payload)
 	if err != nil {
@@ -50,13 +51,13 @@ func (p *Producer) EnqueuePayload(ctx context.Context, typename string, payload 
 	return p.Enqueue(ctx, asynq.NewTask(typename, data), opts...)
 }
 
-// EnqueueIn 延迟投递，d 后执行。
+// EnqueueIn enqueues a task for delayed execution, running after d.
 func (p *Producer) EnqueueIn(ctx context.Context, task *asynq.Task, d time.Duration, opts ...asynq.Option) (*asynq.TaskInfo, error) {
 	opts = append(opts, asynq.ProcessIn(d))
 	return p.Enqueue(ctx, task, opts...)
 }
 
-// EnqueueAt 定时投递，在 t 时刻执行。
+// EnqueueAt enqueues a task for scheduled execution at time t.
 func (p *Producer) EnqueueAt(ctx context.Context, task *asynq.Task, t time.Time, opts ...asynq.Option) (*asynq.TaskInfo, error) {
 	opts = append(opts, asynq.ProcessAt(t))
 	return p.Enqueue(ctx, task, opts...)

@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newMiniRedis 创建一个内嵌的 miniredis 实例并返回 Redis 客户端。
+// newMiniRedis creates an embedded miniredis instance and returns a Redis client.
 func newMiniRedis(t *testing.T) (*redis.Client, func()) {
 	t.Helper()
 	mr, err := miniredis.Run()
@@ -28,23 +28,24 @@ func newMiniRedis(t *testing.T) (*redis.Client, func()) {
 	return client, cleanup
 }
 
-// --- Redis 令牌桶测试 ---
+// --- Redis token bucket tests ---
 
 func TestRedisTokenBucket_Allow(t *testing.T) {
 	client, cleanup := newMiniRedis(t)
 	defer cleanup()
 
-	// rate 取极小值（1 个令牌 / 1000 秒），使测试期间几乎没有令牌补充，
-	// 断言不依赖机器快慢。此前 rate=100（每 10ms 补 1 个令牌），
-	// 负载高时第 6 个请求会在补令牌后被放行，导致偶发失败。
+	// Use an extremely small rate (1 token / 1000 seconds) so that almost no token is
+	// replenished during the test and the assertions do not depend on machine speed.
+	// Previously rate=100 (one token every 10ms), so under load the 6th request could be
+	// allowed after a token had been replenished, causing occasional failures.
 	tb := NewRedisTokenBucket(client, "test:tb:1", 0.001, 5)
 
-	// 突发：前 5 个请求应该通过
+	// Burst: the first 5 requests should pass
 	for i := 0; i < 5; i++ {
 		assert.True(t, tb.Allow(), "request %d should be allowed", i)
 	}
 
-	// 第 6 个请求应该被限流
+	// The 6th request must be rate limited
 	assert.False(t, tb.Allow(), "request 6 should be rejected")
 }
 
@@ -52,20 +53,20 @@ func TestRedisTokenBucket_Refill(t *testing.T) {
 	client, cleanup := newMiniRedis(t)
 	defer cleanup()
 
-	// rate=1/sec, burst=3：1 秒只生成 1 个令牌
+	// rate=1/sec, burst=3: only one token is generated per second
 	tb := NewRedisTokenBucket(client, "test:tb:2", 1, 3)
 
-	// 消耗完所有令牌
+	// Consume every token
 	for i := 0; i < 3; i++ {
 		tb.Allow()
 	}
 	assert.False(t, tb.Allow(), "4th request should be rejected")
 
-	// 等待 50ms，不足 1 秒，不应该有新令牌
+	// Wait 50ms, which is less than one second, so no new token should appear
 	time.Sleep(50 * time.Millisecond)
 	assert.False(t, tb.Allow(), "request after 50ms should still be rejected")
 
-	// 等待足够时间，令牌补充
+	// Wait long enough for a token to be replenished
 	time.Sleep(1100 * time.Millisecond)
 	assert.True(t, tb.Allow(), "request after 1.1s should be allowed")
 }
@@ -84,9 +85,11 @@ func TestRedisTokenBucket_Concurrent(t *testing.T) {
 	client, cleanup := newMiniRedis(t)
 	defer cleanup()
 
-	// rate 取极小值（1 个令牌 / 1000 秒），使测试期间几乎没有令牌补充，
-	// 断言不依赖机器快慢。此前 rate=1/sec、上限 55 个令牌，
-	// 在 -race 等慢环境下 200 个并发请求耗时超过 5 秒就会多放行令牌。
+	// Use an extremely small rate (1 token / 1000 seconds) so that almost no token is
+	// replenished during the test and the assertions do not depend on machine speed.
+	// Previously rate=1/sec with a burst of 55 tokens, so if 200 concurrent requests took
+	// longer than 5 seconds in a slow environment such as -race, extra tokens were let
+	// through.
 	tb := NewRedisTokenBucket(client, "test:tb:4", 0.001, 50)
 
 	var allowed, rejected int64
@@ -106,7 +109,7 @@ func TestRedisTokenBucket_Concurrent(t *testing.T) {
 	wg.Wait()
 
 	assert.Equal(t, int64(200), allowed+rejected)
-	// burst=50，并发期间可能有少量令牌补充
+	// burst=50, so a few tokens may be replenished during the concurrent run
 	assert.LessOrEqual(t, allowed, int64(55))
 	assert.Greater(t, allowed, int64(0))
 }
@@ -124,14 +127,15 @@ func TestRedisTokenBucket_ContextCancelled(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- Redis 滑动窗口测试 ---
+// --- Redis sliding window tests ---
 
 func TestRedisSlidingWindow_Allow(t *testing.T) {
 	client, cleanup := newMiniRedis(t)
 	defer cleanup()
 
-	// 窗口取足够长（10s），确保 6 次调用都落在同一窗口内，断言不依赖机器快慢。
-	// 此前窗口为 100ms，负载高时前 5 次调用可能跨越窗口边界，导致第 6 次被放行。
+	// Use a long enough window (10s) so that all 6 calls fall inside the same window and the
+	// assertions do not depend on machine speed. Previously the window was 100ms, so under
+	// load the first 5 calls could cross the window boundary and the 6th was allowed.
 	sw := NewRedisSlidingWindow(client, "test:sw:1", 5, 10*time.Second)
 
 	for i := 0; i < 5; i++ {
@@ -207,28 +211,29 @@ func TestRedisSlidingWindow_Concurrent(t *testing.T) {
 	assert.Equal(t, int64(80), rejected)
 }
 
-// --- 分布式场景测试 ---
+// --- Distributed scenario tests ---
 
 func TestRedisTokenBucket_MultipleInstances(t *testing.T) {
 	client, cleanup := newMiniRedis(t)
 	defer cleanup()
 
-	// 模拟两个实例共享同一个 Redis
-	// rate 取极小值，使测试期间几乎没有令牌补充。
-	// 此前 rate=100（每 10ms 补 1 个令牌），-race 下 5 次调用耗时超过 10ms
-	// 就会补上令牌，导致第 6 个请求被误放行。
+	// Simulate two instances sharing the same Redis.
+	// Use an extremely small rate so that almost no token is replenished during the test.
+	// Previously rate=100 (one token every 10ms), so under -race the 5 calls could take
+	// longer than 10ms, a token would be replenished and the 6th request was wrongly
+	// allowed.
 	tb1 := NewRedisTokenBucket(client, "shared:tb", 0.001, 5)
 	tb2 := NewRedisTokenBucket(client, "shared:tb", 0.001, 5)
 
-	// 实例1 消耗 3 个令牌
+	// Instance 1 consumes 3 tokens
 	for i := 0; i < 3; i++ {
 		require.True(t, tb1.Allow())
 	}
 
-	// 实例2 只能消耗 2 个令牌
+	// Instance 2 can only consume 2 tokens
 	assert.True(t, tb2.Allow())
 	assert.True(t, tb2.Allow())
-	// 第 6 个请求应该被限流
+	// The 6th request must be rate limited
 	assert.False(t, tb2.Allow())
 }
 
@@ -239,25 +244,25 @@ func TestRedisSlidingWindow_MultipleInstances(t *testing.T) {
 	sw1 := NewRedisSlidingWindow(client, "shared:sw", 5, 10*time.Second)
 	sw2 := NewRedisSlidingWindow(client, "shared:sw", 5, 10*time.Second)
 
-	// 实例1 消耗 3 个
+	// Instance 1 consumes 3
 	for i := 0; i < 3; i++ {
 		require.True(t, sw1.Allow())
 	}
 
-	// 实例2 只能消耗 2 个
+	// Instance 2 can only consume 2
 	assert.True(t, sw2.Allow())
 	assert.True(t, sw2.Allow())
-	// 第 6 个请求应该被限流
+	// The 6th request must be rate limited
 	assert.False(t, sw2.Allow())
 }
 
-// --- 工厂函数测试 ---
+// --- Factory function tests ---
 
 func TestNewTokenBucketWithStore_Memory(t *testing.T) {
 	l := NewTokenBucketWithStore(StoreMemory, nil, "", TokenBucketConfig{Rate: 100, Burst: 10})
 	assert.NotNil(t, l)
 
-	// 应该是内存令牌桶
+	// It must be an in-memory token bucket
 	_, ok := l.(*TokenBucket)
 	assert.True(t, ok)
 }
@@ -269,11 +274,11 @@ func TestNewTokenBucketWithStore_Redis(t *testing.T) {
 	l := NewTokenBucketWithStore(StoreRedis, client, "factory:tb", TokenBucketConfig{Rate: 100, Burst: 10})
 	assert.NotNil(t, l)
 
-	// 应该是 Redis 令牌桶
+	// It must be a Redis token bucket
 	_, ok := l.(*RedisTokenBucket)
 	assert.True(t, ok)
 
-	// 验证功能正常
+	// Verify that it works
 	assert.True(t, l.Allow())
 }
 
@@ -298,27 +303,27 @@ func TestNewSlidingWindowWithStore_Redis(t *testing.T) {
 	assert.True(t, l.Allow())
 }
 
-// --- Chain 混合测试 ---
+// --- Mixed Chain tests ---
 
 func TestChain_MixedMemoryAndRedis(t *testing.T) {
 	client, cleanup := newMiniRedis(t)
 	defer cleanup()
 
-	// 内存令牌桶 + Redis 滑动窗口
+	// An in-memory token bucket plus a Redis sliding window
 	memTB := NewTokenBucket(100, 10)
 	redisSW := NewRedisSlidingWindow(client, "chain:sw", 5, 10*time.Second)
 
 	chain := NewChain(memTB, redisSW)
 
-	// 两个限流器都允许前 5 个请求
+	// Both limiters allow the first 5 requests
 	for i := 0; i < 5; i++ {
 		assert.True(t, chain.Allow(), "request %d should be allowed", i)
 	}
-	// 第 6 个被 Redis 滑动窗口拒绝
+	// The 6th is rejected by the Redis sliding window
 	assert.False(t, chain.Allow())
 }
 
-// --- 常量测试 ---
+// --- Constant tests ---
 
 func TestStoreTypeConstants(t *testing.T) {
 	assert.Equal(t, StoreType("memory"), StoreMemory)

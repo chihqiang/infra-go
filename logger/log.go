@@ -1,7 +1,8 @@
-// Package logger 提供基于 zap + lumberjack 的结构化日志封装。
+// Package logger provides a structured logging wrapper built on zap + lumberjack.
 //
-// 支持结构化/格式化/带 Context 三种日志风格、JSON 与控制台两种编码、
-// 文件按大小轮转与保留策略；提供包级全局 Logger，可用 SetGlobal / ReplaceGlobal 切换。
+// It supports three logging styles (structured / formatted / context-aware), two encodings
+// (JSON and console) and size-based rotation with a retention policy for log files. A
+// package-level global Logger is provided and can be swapped with SetGlobal / ReplaceGlobal.
 package logger
 
 import (
@@ -9,15 +10,16 @@ import (
 	"sync/atomic"
 )
 
-// 全局 Logger：所有包级日志函数（Info/Error 等）均转发到 GetGlobal() 返回的实例。
-// 默认输出到 stderr（JSON 格式，Info 级别），可用 SetGlobal / ReplaceGlobal 替换。
+// Global Logger: all package-level log functions (Info/Error, ...) forward to the instance
+// returned by GetGlobal(). It writes to stderr by default (JSON encoding, Info level) and can
+// be replaced via SetGlobal / ReplaceGlobal.
 var (
-	// global 全局 Logger 实例。
+	// global is the global Logger instance.
 	global atomic.Pointer[ILogger]
 )
 
 func init() {
-	// 初始化全局 Logger，默认输出到 stderr。
+	// Initialise the global Logger, which writes to stderr by default.
 	l := ILogger(New(Config{
 		Level:       InfoLevel,
 		Encoding:    JSONEncoding,
@@ -28,131 +30,136 @@ func init() {
 	global.Store(&l)
 }
 
-// SetGlobal 设置全局 Logger，之后所有包级日志函数都写入 l。
+// SetGlobal sets the global Logger; all package-level log functions write to l afterwards.
 func SetGlobal(l ILogger) {
 	global.Store(&l)
 }
 
-// GetGlobal 返回当前的全局 Logger。
+// GetGlobal returns the current global Logger.
 func GetGlobal() ILogger {
 	return *global.Load()
 }
 
-// ReplaceGlobal 用默认配置创建新 Logger 替换全局实例，返回被替换的旧 Logger。
-// 便于在运行时热切换日志配置（如重载配置文件）后手动关闭旧实例。
+// ReplaceGlobal builds a new Logger from cfg, swaps it in as the global instance and returns
+// the replaced (old) Logger.
+// This makes it easy to hot-swap the log configuration at runtime (for example after
+// reloading a config file) and close the old instance manually.
 func ReplaceGlobal(cfg Config) ILogger {
 	newLogger := New(cfg)
 	old := global.Swap(&newLogger)
 	return *old
 }
 
-// --- 结构化日志 ---
+// --- Structured logging ---
 
-// Debug 以 Debug 级别记录一条结构化日志到全局 Logger。
+// Debug logs one structured entry at Debug level to the global Logger.
 func Debug(msg string, fields ...Field) { GetGlobal().Debug(msg, fields...) }
 
-// Info 以 Info 级别记录一条结构化日志到全局 Logger。
+// Info logs one structured entry at Info level to the global Logger.
 func Info(msg string, fields ...Field) { GetGlobal().Info(msg, fields...) }
 
-// Warn 以 Warn 级别记录一条结构化日志到全局 Logger。
+// Warn logs one structured entry at Warn level to the global Logger.
 func Warn(msg string, fields ...Field) { GetGlobal().Warn(msg, fields...) }
 
-// Error 以 Error 级别记录一条结构化日志到全局 Logger。
+// Error logs one structured entry at Error level to the global Logger.
 func Error(msg string, fields ...Field) { GetGlobal().Error(msg, fields...) }
 
-// Panic 以 Panic 级别记录日志后触发 panic。
+// Panic logs at Panic level and then panics.
 func Panic(msg string, fields ...Field) { GetGlobal().Panic(msg, fields...) }
 
-// Fatal 以 Fatal 级别记录日志后调用 os.Exit(1)。
+// Fatal logs at Fatal level and then calls os.Exit(1).
 func Fatal(msg string, fields ...Field) { GetGlobal().Fatal(msg, fields...) }
 
-// --- 格式化日志 ---
+// --- Formatted logging ---
 
-// Debugf 以 Debug 级别记录格式化日志（fmt.Sprintf 风格）。
+// Debugf logs a formatted entry at Debug level (fmt.Sprintf style).
 func Debugf(format string, args ...any) { GetGlobal().Debugf(format, args...) }
 
-// Infof 以 Info 级别记录格式化日志。
+// Infof logs a formatted entry at Info level.
 func Infof(format string, args ...any) { GetGlobal().Infof(format, args...) }
 
-// Warnf 以 Warn 级别记录格式化日志。
+// Warnf logs a formatted entry at Warn level.
 func Warnf(format string, args ...any) { GetGlobal().Warnf(format, args...) }
 
-// Errorf 以 Error 级别记录格式化日志。
+// Errorf logs a formatted entry at Error level.
 func Errorf(format string, args ...any) { GetGlobal().Errorf(format, args...) }
 
-// Panicf 以 Panic 级别记录格式化日志后触发 panic。
+// Panicf logs a formatted entry at Panic level and then panics.
 func Panicf(format string, args ...any) { GetGlobal().Panicf(format, args...) }
 
-// Fatalf 以 Fatal 级别记录格式化日志后调用 os.Exit(1)。
+// Fatalf logs a formatted entry at Fatal level and then calls os.Exit(1).
 func Fatalf(format string, args ...any) { GetGlobal().Fatalf(format, args...) }
 
-// --- 带上下文的结构化日志 ---
+// --- Structured logging with context ---
 
-// DebugCtx 以 Debug 级别记录日志，并自动并入 ctx 中注册的上下文提取器字段。
+// DebugCtx logs at Debug level and merges in the context extractor fields registered in ctx.
 func DebugCtx(ctx context.Context, msg string, fields ...Field) {
 	GetGlobal().DebugCtx(ctx, msg, fields...)
 }
 
-// InfoCtx 以 Info 级别记录日志，并自动并入 ctx 中注册的上下文提取器字段。
+// InfoCtx logs at Info level and merges in the context extractor fields registered in ctx.
 func InfoCtx(ctx context.Context, msg string, fields ...Field) {
 	GetGlobal().InfoCtx(ctx, msg, fields...)
 }
 
-// WarnCtx 以 Warn 级别记录日志，并自动并入 ctx 中注册的上下文提取器字段。
+// WarnCtx logs at Warn level and merges in the context extractor fields registered in ctx.
 func WarnCtx(ctx context.Context, msg string, fields ...Field) {
 	GetGlobal().WarnCtx(ctx, msg, fields...)
 }
 
-// ErrorCtx 以 Error 级别记录日志，并自动并入 ctx 中注册的上下文提取器字段。
+// ErrorCtx logs at Error level and merges in the context extractor fields registered in ctx.
 func ErrorCtx(ctx context.Context, msg string, fields ...Field) {
 	GetGlobal().ErrorCtx(ctx, msg, fields...)
 }
 
-// PanicCtx 以 Panic 级别记录日志后触发 panic，并自动并入上下文提取器字段。
+// PanicCtx logs at Panic level, then panics, merging in the context extractor fields.
 func PanicCtx(ctx context.Context, msg string, fields ...Field) {
 	GetGlobal().PanicCtx(ctx, msg, fields...)
 }
 
-// FatalCtx 以 Fatal 级别记录日志后调用 os.Exit(1)，并自动并入上下文提取器字段。
+// FatalCtx logs at Fatal level, then calls os.Exit(1), merging in the context extractor
+// fields.
 func FatalCtx(ctx context.Context, msg string, fields ...Field) {
 	GetGlobal().FatalCtx(ctx, msg, fields...)
 }
 
-// --- 带上下文的格式化日志 ---
+// --- Formatted logging with context ---
 
-// DebugfCtx 以 Debug 级别记录格式化日志，并自动并入上下文提取器字段。
+// DebugfCtx logs a formatted entry at Debug level and merges in the context extractor fields.
 func DebugfCtx(ctx context.Context, format string, args ...any) {
 	GetGlobal().DebugfCtx(ctx, format, args...)
 }
 
-// InfofCtx 以 Info 级别记录格式化日志，并自动并入上下文提取器字段。
+// InfofCtx logs a formatted entry at Info level and merges in the context extractor fields.
 func InfofCtx(ctx context.Context, format string, args ...any) {
 	GetGlobal().InfofCtx(ctx, format, args...)
 }
 
-// WarnfCtx 以 Warn 级别记录格式化日志，并自动并入上下文提取器字段。
+// WarnfCtx logs a formatted entry at Warn level and merges in the context extractor fields.
 func WarnfCtx(ctx context.Context, format string, args ...any) {
 	GetGlobal().WarnfCtx(ctx, format, args...)
 }
 
-// ErrorfCtx 以 Error 级别记录格式化日志，并自动并入上下文提取器字段。
+// ErrorfCtx logs a formatted entry at Error level and merges in the context extractor fields.
 func ErrorfCtx(ctx context.Context, format string, args ...any) {
 	GetGlobal().ErrorfCtx(ctx, format, args...)
 }
 
-// PanicfCtx 以 Panic 级别记录格式化日志后触发 panic，并自动并入上下文提取器字段。
+// PanicfCtx logs a formatted entry at Panic level, then panics, merging in the extractor
+// fields.
 func PanicfCtx(ctx context.Context, format string, args ...any) {
 	GetGlobal().PanicfCtx(ctx, format, args...)
 }
 
-// FatalfCtx 以 Fatal 级别记录格式化日志后调用 os.Exit(1)，并自动并入上下文提取器字段。
+// FatalfCtx logs a formatted entry at Fatal level, then calls os.Exit(1), merging in the
+// extractor fields.
 func FatalfCtx(ctx context.Context, format string, args ...any) {
 	GetGlobal().FatalfCtx(ctx, format, args...)
 }
 
 // --- Sync ---
 
-// Sync 刷新全局 Logger 的缓冲区。
+// Sync flushes the buffers of the global Logger.
 func Sync() error {
 	return GetGlobal().Sync()
 }

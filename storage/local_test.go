@@ -41,28 +41,28 @@ func TestLocal_WriteReadURLDelete(t *testing.T) {
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	// Write 到嵌套子目录
+	// Write into a nested subdirectory
 	err = s.Write(ctx, "images/a.png", []byte("png-data"))
 	require.NoError(t, err)
 
-	// 文件真实落盘
+	// The file really lands on disk
 	got, err := os.ReadFile(filepath.Join(root, "images", "a.png"))
 	require.NoError(t, err)
 	assert.Equal(t, "png-data", string(got))
 
-	// URL 使用配置前缀
+	// URL uses the configured prefix
 	u, err := s.URL(ctx, "images/a.png")
 	require.NoError(t, err)
 	assert.Equal(t, "http://localhost:8080/static/images/a.png", u)
 
-	// 覆盖已存在文件
+	// Overwrite an existing file
 	err = s.Write(ctx, "images/a.png", []byte("new"))
 	require.NoError(t, err)
 	got, err = os.ReadFile(filepath.Join(root, "images", "a.png"))
 	require.NoError(t, err)
 	assert.Equal(t, "new", string(got))
 
-	// 删除
+	// Delete
 	n, err := s.Delete(ctx, "images/a.png")
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), n)
@@ -84,14 +84,14 @@ func TestLocal_URLFileScheme(t *testing.T) {
 	s, err := NewLocal(&LocalConfig{RootDir: root})
 	require.NoError(t, err)
 
-	// 无 URL 前缀时返回 file:// 绝对路径
+	// Without a URL prefix a file:// absolute path is returned
 	u, err := s.URL(context.Background(), "dir/f.txt")
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(u, "file://"))
 	assert.True(t, strings.HasSuffix(u, "dir/f.txt"))
 }
 
-// --- 补充：local 错误分支 ---
+// --- Extra: local error branches ---
 
 func TestLocal_WriteCancelledCtx(t *testing.T) {
 	s, err := NewLocal(&LocalConfig{RootDir: t.TempDir()})
@@ -116,7 +116,7 @@ func TestLocal_DeleteCancelledCtx(t *testing.T) {
 }
 
 func TestLocal_WriteDirBlockedByFile(t *testing.T) {
-	// 父路径被同名文件占据 → MkdirAll 失败
+	// The parent path is taken by a file of the same name -> MkdirAll fails
 	root := t.TempDir()
 	s, err := NewLocal(&LocalConfig{RootDir: root})
 	require.NoError(t, err)
@@ -124,20 +124,20 @@ func TestLocal_WriteDirBlockedByFile(t *testing.T) {
 	blocker := filepath.Join(root, "blocker")
 	require.NoError(t, os.WriteFile(blocker, []byte("file"), 0o644))
 
-	// blocker/x.txt 的父目录 blocker 是个文件 → MkdirAll 报错
+	// The parent directory blocker of blocker/x.txt is a file -> MkdirAll errors
 	err = s.Write(context.Background(), "blocker/x.txt", []byte("x"))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to create local directory")
 }
 
 func TestLocal_DeleteDirectory(t *testing.T) {
-	// 对非空目录调用 os.Remove 会报错
+	// Calling os.Remove on a non-empty directory reports an error
 	root := t.TempDir()
 	s, err := NewLocal(&LocalConfig{RootDir: root})
 	require.NoError(t, err)
 
 	dir := filepath.Join(root, "adir")
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "sub"), 0o755)) // 非空
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "sub"), 0o755)) // non-empty
 
 	_, err = s.Delete(context.Background(), "adir")
 	assert.Error(t, err)
@@ -152,12 +152,12 @@ func TestLocal_ReadExists(t *testing.T) {
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	// 未写入前：不存在
+	// Before writing: does not exist
 	ok, err := s.Exists(ctx, "docs/a.txt")
 	require.NoError(t, err)
 	assert.False(t, ok)
 
-	// 写入后：存在且内容可读回
+	// After writing: exists and the content reads back
 	require.NoError(t, s.Write(ctx, "docs/a.txt", []byte("hello")))
 	ok, err = s.Exists(ctx, "docs/a.txt")
 	require.NoError(t, err)
@@ -167,7 +167,7 @@ func TestLocal_ReadExists(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "hello", string(data))
 
-	// 删除后：恢复为不存在，读取报错
+	// After deleting: gone again, and reading returns an error
 	_, err = s.Delete(ctx, "docs/a.txt")
 	require.NoError(t, err)
 	ok, err = s.Exists(ctx, "docs/a.txt")
@@ -206,13 +206,14 @@ func TestLocal_ExistsCancelledCtx(t *testing.T) {
 	assert.Contains(t, err.Error(), "check local file")
 }
 
-// --- 安全：路径穿越防护 ---
+// --- Security: path traversal protection ---
 
-// TestLocal_PathTraversalRejected 验证任何逃逸 root 的 path 都被拒绝，
-// 且不会读取 / 写入 / 删除 root 之外的文件。
+// TestLocal_PathTraversalRejected verifies that any path escaping root is
+// rejected and that no file outside root is read / written / deleted.
 func TestLocal_PathTraversalRejected(t *testing.T) {
 	root := t.TempDir()
-	// 在 root 之外放置"敏感文件"，用于验证无法经由路径穿越访问或删除。
+	// Place a "sensitive file" outside root to verify it cannot be reached or
+	// deleted through a path traversal.
 	outside := filepath.Join(filepath.Dir(root), "infra-go-secret.txt")
 	require.NoError(t, os.WriteFile(outside, []byte("secret"), 0o600))
 	t.Cleanup(func() { _ = os.Remove(outside) })
@@ -224,11 +225,11 @@ func TestLocal_PathTraversalRejected(t *testing.T) {
 	escapes := []string{
 		"../infra-go-secret.txt",
 		"../../infra-go-secret.txt",
-		"a/../../infra-go-secret.txt", // 中途回溯
-		"/../../infra-go-secret.txt",  // 前导斜杠 + 回溯
-		"//../infra-go-secret.txt",    // 双斜杠前缀不得被绕过
-		"..",                          // 指向父目录本身
-		"../",                         // 父目录（带尾斜杠）
+		"a/../../infra-go-secret.txt", // walks back in the middle
+		"/../../infra-go-secret.txt",  // leading slash plus walk-back
+		"//../infra-go-secret.txt",    // a double slash prefix must not bypass the check
+		"..",                          // points at the parent directory itself
+		"../",                         // parent directory (with a trailing slash)
 	}
 	for _, p := range escapes {
 		t.Run(p, func(t *testing.T) {
@@ -249,17 +250,18 @@ func TestLocal_PathTraversalRejected(t *testing.T) {
 		})
 	}
 
-	// 敏感文件既未被删除也未被覆盖。
+	// The sensitive file was neither deleted nor overwritten.
 	data, err := os.ReadFile(outside)
 	require.NoError(t, err)
 	assert.Equal(t, "secret", string(data))
 
-	// root 之外没有因穿越写入而新增文件。
+	// No new file appeared outside root because of a traversal write.
 	_, err = os.Stat(filepath.Join(filepath.Dir(root), "pwned"))
 	assert.True(t, os.IsNotExist(err))
 }
 
-// TestLocal_EmptyPathRejected 验证空路径被拒绝，避免误操作 root 目录本身。
+// TestLocal_EmptyPathRejected verifies that an empty path is rejected, so the
+// root directory itself cannot be touched by mistake.
 func TestLocal_EmptyPathRejected(t *testing.T) {
 	s, err := NewLocal(&LocalConfig{RootDir: t.TempDir()})
 	require.NoError(t, err)
@@ -278,8 +280,9 @@ func TestLocal_EmptyPathRejected(t *testing.T) {
 	}
 }
 
-// TestLocal_SafePathNormalization 验证合法的相对路径（含前导 "/"、"." 与
-// 内部可归一化的 ".."）仍然可用，且都落在 root 之内，避免修复穿越时误伤兼容性。
+// TestLocal_SafePathNormalization verifies that valid relative paths (with a
+// leading "/", ".", or an internally cleanable "..") still work and all stay
+// below root, so fixing the traversal does not break compatibility.
 func TestLocal_SafePathNormalization(t *testing.T) {
 	root := t.TempDir()
 	s, err := NewLocal(&LocalConfig{RootDir: root})
@@ -297,13 +300,14 @@ func TestLocal_SafePathNormalization(t *testing.T) {
 		assert.True(t, ok, "Exists(%q)", p)
 	}
 
-	// 全部归一化到 root/a/b.txt
+	// All of them normalize to root/a/b.txt
 	got, err := os.ReadFile(filepath.Join(root, "a", "b.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "ok", string(got))
 }
 
-// TestLocal_DeleteTraversalDoesNotRemoveDirectory 验证穿越删除不会命中 root 自身或其父目录。
+// TestLocal_DeleteTraversalDoesNotRemoveDirectory verifies that a traversal
+// delete cannot hit root itself or its parent directory.
 func TestLocal_DeleteTraversalDoesNotRemoveDirectory(t *testing.T) {
 	root := t.TempDir()
 	s, err := NewLocal(&LocalConfig{RootDir: root})
@@ -312,7 +316,7 @@ func TestLocal_DeleteTraversalDoesNotRemoveDirectory(t *testing.T) {
 	_, err = s.Delete(context.Background(), "..")
 	require.ErrorIs(t, err, errPathEscapesRoot)
 
-	// root 目录仍然存在
+	// The root directory still exists
 	info, err := os.Stat(root)
 	require.NoError(t, err)
 	assert.True(t, info.IsDir())

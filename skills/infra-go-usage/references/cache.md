@@ -1,120 +1,122 @@
 # cache
 
-统一缓存接口，提供**内存缓存**（`MemCache`）与 **Redis 分布式缓存**（`RedisCache`）两种实现，可在本地/分布式间按需切换。
+Unified cache interface offering two implementations — an **in-memory cache** (`MemCache`) and a **Redis distributed cache** (`RedisCache`) — so you can switch between local and distributed as needed.
 
-## 特性
+## Features
 
-- **统一接口**：`Cache` 非泛型接口，内存与 Redis 实现一致，一个实例可存任意类型值（`any`）
-- **过期删除**：支持默认/按 key 指定过期时间，过期时间带轻微抖动避免大量 key 同时过期（雪崩防护）
-- **防缓存击穿**：`Take` 通过 SingleFlight 合并相同 key 的并发请求，底层只查一次
-- **防缓存穿透**（Redis）：查询无结果时写入短时占位符，避免不存在 key 反复穿透 DB
-- **LRU 淘汰**（内存）：`WithLimit` 限制容量，超出后淘汰最久未使用的 key
-- **命中率统计**（内存）：周期性输出 QPS、命中率、元素数量（默认每分钟）
-- **数值自增/自减**：`Increment` / `Decrement` 原子计数（内存加锁，Redis 用 INCRBY），key 不存在时自动初始化
-- **按 key 设置存活时间**：`Expire` 为已有 key 设置 TTL，到期自动失效，无需重写整条缓存
+- **Unified interface**: `Cache` is a non-generic interface; the in-memory and Redis implementations are identical, and one instance can hold values of any type (`any`)
+- **Expiry deletion**: supports a default expiry and per-key expiry, with a slight jitter so many keys don't expire at the same moment (avalanche protection)
+- **Cache stampede protection**: `Take` coalesces concurrent requests for the same key via SingleFlight, so the underlying fetch runs only once
+- **Cache penetration protection** (Redis): when a lookup yields no result, a short-lived placeholder is written so nonexistent keys don't repeatedly hit the DB
+- **LRU eviction** (in-memory): `WithLimit` caps the capacity and evicts the least recently used key once exceeded
+- **Hit-rate statistics** (in-memory): periodically reports QPS, hit rate and element count (every minute by default)
+- **Numeric increment/decrement**: `Increment` / `Decrement` provide atomic counting (mutex in memory, INCRBY in Redis), auto-initializing missing keys
+- **Per-key TTL**: `Expire` sets a TTL on an existing key so it lapses automatically, without rewriting the whole cache entry
 
-## 安装
+## Installation
 
 ```bash
 go get github.com/chihqiang/infra-go/cache
 ```
 
-## 统一接口
+## Unified interface
 
-未命中返回 `cache.ErrNotFound`，用标准库 `errors.Is(err, cache.ErrNotFound)` 判断（支持包装后的错误）：
+A miss returns `cache.ErrNotFound`; test it with the standard library `errors.Is(err, cache.ErrNotFound)` (wrapped errors are supported):
 
-| 方法 | 说明 |
+| Method | Description |
 | ------ | ------ |
-| `Get(ctx, key) (any, error)` | 返回值；未命中或已过期返回 `ErrNotFound` |
-| `Set(ctx, key, value any)` | 写入，使用默认过期时间 |
-| `SetEx(ctx, key, value any, ttl)` | 写入并指定存活时间 `ttl`；`ttl <= 0` 回退默认 |
-| `Delete(ctx, keys...)` | 删除一个或多个 key |
-| `Take(ctx, key, fetch func()(any, error)) (any, error)` | 未命中时调用 `fetch` 获取并写入，并发去重防击穿 |
-| `Increment(ctx, key, delta)` | 将 key 对应数值自增 `delta`；不存在时初始化为 `delta` |
-| `Decrement(ctx, key, delta)` | 将 key 对应数值自减 `delta`；不存在时初始化为 `-delta` |
-| `Expire(ctx, key, ttl)` | 为 key 设置存活时间 `ttl`，到期后自动失效；`ttl <= 0` 立即失效；key 不存在返回 `ErrNotFound` |
+| `Get(ctx, key) (any, error)` | Return the value; returns `ErrNotFound` on a miss or after expiry |
+| `Set(ctx, key, value any)` | Write using the default expiry |
+| `SetEx(ctx, key, value any, ttl)` | Write with an explicit time-to-live `ttl`; `ttl <= 0` falls back to the default |
+| `Delete(ctx, keys...)` | Delete one or more keys |
+| `Take(ctx, key, fetch func()(any, error)) (any, error)` | Call `fetch` on a miss, store the result, and deduplicate concurrent calls to prevent stampedes |
+| `Increment(ctx, key, delta)` | Increment the numeric value at key by `delta`; initializes to `delta` when absent |
+| `Decrement(ctx, key, delta)` | Decrement the numeric value at key by `delta`; initializes to `-delta` when absent |
+| `Expire(ctx, key, ttl)` | Set the time-to-live `ttl` for a key; expires afterwards; `ttl <= 0` expires it immediately; returns `ErrNotFound` when the key is absent |
 
-> 内存实现忽略 `ctx`；Redis 实现通过 `ctx` 传递超时与取消。
-> 接口使用非泛型 `any`：调用方无需为每种值类型实例化缓存。
+> The in-memory implementation ignores `ctx`; the Redis implementation uses `ctx` for timeouts and cancellation.
+> The interface uses non-generic `any`: callers don't need to instantiate a cache per value type.
 
-### ⚠️ Get 的返回类型随后端而不同
+### ⚠️ Get's return type differs between backends
 
-`Get` / `Take` 返回 `any`，但两个后端对同一个值给出的 Go 类型不同：
+`Get` / `Take` return `any`, but the two backends produce different Go types for the same value:
 
-| 写入 | MemCache 读回 | RedisCache 读回 |
+| Written | Read back from MemCache | Read back from RedisCache |
 |------|--------------|----------------|
 | `Set(ctx, "k", 5)` | `int(5)` | `json.Number("5")` |
-| `Set(ctx, "k", u)`（结构体） | `u` 本身 | `map[string]any` |
-| `Set(ctx, "k", int64(2^53+1))` | 精确保留 | 精确保留（`json.Number` 无损保存字面量） |
+| `Set(ctx, "k", u)` (struct) | `u` itself | `map[string]any` |
+| `Set(ctx, "k", int64(2^53+1))` | preserved exactly | preserved exactly (`json.Number` keeps the literal losslessly) |
 
-因此**直接对 `Get` 的返回值做类型断言**（如 `v.(int)`、`v.(float64)`）的代码在切换后端后会 panic。
-Redis 后端用 `json.Decoder.UseNumber()` 解码，数字一律是 `json.Number`
-（字符串别名，保留原始数字字面量，需要时用 `Int64()` / `Float64()` 取值）。
+Consequently, code that **type-asserts directly on the value returned by `Get`** (e.g. `v.(int)`, `v.(float64)`) will panic after switching backends.
+The Redis backend decodes with `json.Decoder.UseNumber()`, so numbers are always `json.Number`
+(a string alias that preserves the original numeric literal; use `Int64()` / `Float64()` to get a value when needed).
 
-需要后端无关的读取时，使用 `GetAs[T]`（统一经 JSON 往返解码到具体类型）：
+For backend-independent reads, use `GetAs[T]` (which round-trips through JSON into a concrete type):
 
 ```go
-n, err := cache.GetAs[int64](ctx, c, "counter")   // 两个后端行为一致
+n, err := cache.GetAs[int64](ctx, c, "counter")   // identical behavior on both backends
 var u User
 u, err = cache.GetAs[User](ctx, c, "user:1")
 ```
 
-> 大整数安全：`json.Number` 无损保留字面量，雪花 ID / 纳秒时间戳这类超过 2^53 的
-> `int64` 在 Redis 后端不会丢精度，`GetAs[int64]` 可完整还原。
-> 若直接使用 `Get` 拿到 `json.Number`，请勿先转 `float64` 再转整数。
+> Big-integer safety: `json.Number` preserves literals losslessly, so `int64` values above 2^53
+> such as snowflake IDs or nanosecond timestamps don't lose precision on the Redis backend, and
+> `GetAs[int64]` restores them exactly.
+> If you use `Get` and get a `json.Number`, don't convert it to `float64` before converting to an integer.
 
-## 计数与过期
+## Counters and expiry
 
-### 数值自增 / 自减
+### Numeric increment / decrement
 
-`Increment` / `Decrement` 用于计数器场景（访问量、库存、点赞等）。key 不存在时自动初始化为 `delta` / `-delta`；内存实现保持原值类型并加锁保证并发安全，Redis 实现走 `INCRBY` 原子操作：
+`Increment` / `Decrement` serve counter scenarios (page views, inventory, likes, etc.). A missing key is auto-initialized to `delta` / `-delta`; the in-memory implementation keeps the original value type and uses a lock for concurrency safety, while the Redis implementation uses the atomic `INCRBY` operation:
 
 ```go
-_ = c.Increment(ctx, "visit:20260828", 1) // 计数 +1，key 不存在则初始化为 1
-_ = c.Decrement(ctx, "stock:sku1", 3)     // 库存 -3，key 不存在则初始化为 -3
+_ = c.Increment(ctx, "visit:20260828", 1) // count +1; initialized to 1 when the key is absent
+_ = c.Decrement(ctx, "stock:sku1", 3)     // stock -3; initialized to -3 when the key is absent
 ```
 
-> 注意：Redis 端自增后，`Get` 取回的是 `json.Number`（非泛型反序列化的既定行为），
-> 用 `GetAs[int64]` 可直接拿回 `int64`；精确整数运算也可直接用 `redisx.IncrBy` 的返回值。
+> Note: after incrementing on the Redis side, `Get` returns a `json.Number` (the established behavior of
+> non-generic deserialization); use `GetAs[int64]` to get an `int64` back directly, or use the return
+> value of `redisx.IncrBy` for exact integer arithmetic.
 
-### 设置存活时间（Expire）
+### Setting a time-to-live (Expire)
 
-为**已有 key** 设置 TTL，到期后自动失效，无需重写整条缓存（常用于续期、临时下架等场景）：
+Sets a TTL on an **existing key** so it lapses automatically, without rewriting the whole cache entry (commonly used for renewal, temporary takedown, and similar cases):
 
 ```go
-_ = c.Set(ctx, "config:v1", cfg)            // 先写入
-_ = c.Expire(ctx, "config:v1", time.Hour)   // 再设置 1 小时后失效
-_ = c.Expire(ctx, "config:v1", 0)           // ttl <= 0：立即失效（等价于删除）
-// key 不存在时返回 cache.ErrNotFound
+_ = c.Set(ctx, "config:v1", cfg)            // write first
+_ = c.Expire(ctx, "config:v1", time.Hour)   // then make it expire after 1 hour
+_ = c.Expire(ctx, "config:v1", 0)           // ttl <= 0: expire immediately (equivalent to delete)
+// returns cache.ErrNotFound when the key is absent
 ```
 
-> 精度差异：内存实现毫秒级、带抖动；Redis `EXPIRE` 为秒级精度，`Expire` 直接透传 `ttl` 不加抖动（避免被截断为 0 秒立即删除）。
+> Precision difference: the in-memory implementation is millisecond-precision and applies jitter; Redis `EXPIRE` has second-level precision, and `Expire` passes `ttl` straight through without jitter (avoiding truncation to 0 seconds and immediate deletion).
 
-## 内存缓存（MemCache）
+## In-memory cache (MemCache)
 
 ```go
-// ctx 由缓存实例持有，用于后台统计日志关联链路信息
+// the ctx is held by the cache instance and used to correlate background statistics logs with traces
 c := cache.NewMemCache(ctx, time.Minute, cache.WithLimit(1000), cache.WithName("user"))
 defer c.Close()
 
 _ = c.Set(ctx, "key", "value")
 v, err := c.Get(ctx, "key")
 if err == nil {
-    fmt.Println(v) // v 为 any，字符串可直接使用
+    fmt.Println(v) // v is any; strings can be used directly
 }
 _ = c.Delete(ctx, "key")
 ```
 
-| 选项 | 说明 |
+| Option | Description |
 | ------ | ------ |
-| `WithLimit(limit)` | 容量上限，超出按 LRU 淘汰；`<= 0` 表示不限制（默认） |
-| `WithName(name)` | 缓存名称，用于统计日志标识 |
+| `WithLimit(limit)` | Capacity cap; LRU eviction once exceeded; `<= 0` means unlimited (default) |
+| `WithName(name)` | Cache name, used to identify the statistics logs |
 
-额外方法（仅 `MemCache`）：`Size()` 当前元素数量；`Close()` 停止后台统计 goroutine。
+Extra methods (`MemCache` only): `Size()` returns the current element count; `Close()` stops the background statistics goroutine.
 
-## Redis 缓存（RedisCache）
+## Redis cache (RedisCache)
 
-值以 JSON 序列化存储到 Redis；除通用特性外额外提供防缓存穿透与快速失败（Redis 故障时不穿透到 DB）。
+Values are serialized as JSON and stored in Redis; besides the common features it adds penetration protection and fast failure (does not fall through to the DB when Redis fails).
 
 ```go
 rds := redisx.MustNew(redisx.Config{Addr: cfg.RedisAddr})
@@ -122,64 +124,65 @@ c := cache.NewRedisCache(rds, cache.WithExpire(time.Minute))
 defer rds.Close()
 
 u, err := c.Take(ctx, "user:1", func() (any, error) {
-    return loadUserFromDB(1) // 防击穿：并发下只执行一次
+    return loadUserFromDB(1) // stampede protection: runs only once under concurrency
 })
 if err == nil {
-    // 去泛型后取回的是 map[string]any（数字为 json.Number），
-    // 需要时用 json.Marshal/Unmarshal 还原为 *User
+    // Without generics the value comes back as map[string]any (numbers as json.Number);
+    // use json.Marshal/Unmarshal to restore it into *User when needed
     var user *User
     _ = json.Unmarshal(mustMarshal(u), &user)
 }
 ```
 
-| 选项 | 说明 |
+| Option | Description |
 | ------ | ------ |
-| `WithExpire(d)` | 默认过期时间；未设置默认 7 天 |
-| `WithNotFoundExpire(d)` | 未命中占位符过期时间；未设置默认 1 分钟 |
-| `WithCacheName(name)` | 缓存名称，用于日志标识 |
+| `WithExpire(d)` | Default expiry; 7 days when unset |
+| `WithNotFoundExpire(d)` | Expiry of the miss placeholder; 1 minute when unset |
+| `WithCacheName(name)` | Cache name, used to identify logs |
 
-**防穿透示例**：`fetch` 返回 `cache.ErrNotFound` 时，会写入短时占位符，此后一段时间内相同的 `Take` 直接返回未命中而不再查询 DB。
+**Penetration protection example**: when `fetch` returns `cache.ErrNotFound`, a short-lived placeholder is written, and for a while afterwards the same `Take` returns a miss directly instead of querying the DB again.
 
-## 防缓存击穿（Take）
+## Stampede protection (Take)
 
-多个协程同时 `Take` 同一个 key 时，底层 `fetch` 只执行一次，结果共享给所有调用者：
+When several goroutines `Take` the same key concurrently, the underlying `fetch` runs only once and the result is shared with all callers:
 
 ```go
 val, err := c.Take(ctx, "user:123", func() (any, error) {
-    return loadUserFromDB(123) // 并发场景下只执行一次
+    return loadUserFromDB(123) // runs only once under concurrency
 })
 if err != nil {
-    // 处理错误；fetch 失败不会写入缓存
+    // handle the error; a failed fetch is not written to the cache
 }
 ```
 
-## 关于类型（非泛型）
+## About types (non-generic)
 
-接口使用 `any` 存储值，调用方无需为每种类型单独实例化缓存，也不必定义泛型类型参数。取值后的处理：
+The interface stores values as `any`, so callers don't need to instantiate a cache per type nor define generic type parameters. Handling the retrieved value:
 
-- **内存缓存（MemCache）**：`Set` 存入的就是原对象，`Get/Take` 返回值类型与存入时一致，可直接断言，例如 `v.(*User)`。
-- **Redis 缓存（RedisCache）**：值以 JSON 序列化存储，`Get` 时因无法得知目标类型，统一反序列化为 `map[string]any`（数字为 `json.Number`，不是 `float64`）；取回具体结构体时可用 `json.Marshal(got)` 后 `json.Unmarshal` 到目标类型，或直接使用 `GetAs[T]`。
-- 标量（string/int/bool 等）可直接使用返回值，无需额外处理。
+- **In-memory cache (MemCache)**: `Set` stores the original object, so `Get`/`Take` return the same type that was stored and you can assert directly, e.g. `v.(*User)`.
+- **Redis cache (RedisCache)**: values are stored as serialized JSON, and since `Get` cannot know the target type it always deserializes into `map[string]any` (numbers are `json.Number`, not `float64`); to get a concrete struct back, use `json.Marshal(got)` followed by `json.Unmarshal` into the target type, or use `GetAs[T]` directly.
+- Scalars (string/int/bool, etc.) can be used as returned, with no extra handling.
 
-> 上述差异意味着**按类型断言使用 `Get` 的代码不具备后端可移植性**。
-> 若同一份业务代码需要在两种后端间切换，请统一使用 `GetAs[T]`：
+> The differences above mean that **code which type-asserts the result of `Get` is not portable across backends**.
+> If the same business code needs to switch between the two backends, use `GetAs[T]` consistently:
 
 ```go
-// 后端无关：两个后端返回一致的 Go 类型
+// backend-independent: both backends return consistent Go types
 n, err := cache.GetAs[int](ctx, c, "count")
 u, err := cache.GetAs[User](ctx, c, "user:1")
 tags, err := cache.GetAs[[]string](ctx, c, "tags")
 
-// 未命中返回 (零值, cache.ErrNotFound)
-// 类型不匹配返回错误，而不是静默零值
+// a miss returns (zero value, cache.ErrNotFound)
+// a type mismatch returns an error instead of silently yielding a zero value
 ```
 
-> 若希望 Redis 缓存取回时直接得到具体类型，可考虑改用填充式 API（如 `Get(ctx, key, &user)`），本包暂未提供，可按需扩展。
+> If you want the Redis cache to return a concrete type directly, consider a fill-style API
+> (such as `Get(ctx, key, &user)`); this package doesn't provide one yet, but it can be extended as needed.
 
-## 注意事项
+## Notes
 
-- `Take` 的 `fetch` 返回错误时不写入缓存，错误原样返回；Redis 实现中返回 `ErrNotFound` 时写入占位符
-- 内存缓存仅**单进程内**共享；跨实例共享请用 `RedisCache`
-- 过期时间实际在 `[0.95, 1.05] * expire` 内随机，避免同时过期
-- `Expire`（Redis）直接透传 `ttl`（EXPIRE 秒级精度），不加抖动；内存实现带抖动
-- 内存实现所有方法并发安全；`Close` 后实例不可再使用
+- When `Take`'s `fetch` returns an error nothing is written to the cache and the error is returned as-is; in the Redis implementation an `ErrNotFound` from fetch writes a placeholder
+- The in-memory cache is shared **within a single process** only; use `RedisCache` for cross-instance sharing
+- The effective expiry is randomized within `[0.95, 1.05] * expire`, avoiding simultaneous expiry
+- `Expire` (Redis) passes `ttl` straight through (EXPIRE has second-level precision) with no jitter; the in-memory implementation applies jitter
+- Every method of the in-memory implementation is concurrency-safe; the instance must not be used after `Close`

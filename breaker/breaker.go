@@ -6,88 +6,99 @@ import (
 	"time"
 )
 
-// ErrServiceUnavailable 熔断器打开（拒绝请求）时返回的错误。
+// ErrServiceUnavailable is returned when the breaker is open (request rejected).
 var ErrServiceUnavailable = errors.New("breaker: service unavailable")
 
-// Acceptable 判断错误是否可接受（不计入失败统计）。
-// 例如 4xx 业务错误通常是调用方问题，不应触发熔断：
+// Acceptable reports whether an error is acceptable (not counted as a failure).
+// For example, 4xx business errors are usually caller mistakes and should not
+// trip the breaker:
 //
 //	b.DoWithAcceptable(req, func(err error) bool {
 //	    return errors.Is(err, ErrNotFound) || errors.Is(err, ErrUnauthorized)
 //	})
 type Acceptable func(err error) bool
 
-// Fallback 熔断器打开时执行的降级逻辑。
+// Fallback is the degradation logic executed when the breaker is open.
 type Fallback func(err error) error
 
-// Promise 由 Breaker.Allow 返回，调用方执行完请求后需回调：
-//   - 成功：调用 Accept()
-//   - 失败：调用 Reject(reason)，reason 用于日志记录失败原因
+// Promise is returned by Breaker.Allow; the caller must report the outcome after
+// the request completes:
+//   - success: call Accept()
+//   - failure: call Reject(reason); reason is logged as the failure cause
 type Promise interface {
-	// Accept 告知熔断器本次调用成功。
+	// Accept tells the breaker that this call succeeded.
 	Accept()
-	// Reject 告知熔断器本次调用失败。
-	// reason 为失败原因，熔断打开时会输出最近若干条失败原因。
+	// Reject tells the breaker that this call failed.
+	// reason is the failure cause; when the breaker opens, the most recent
+	// failure reasons are logged.
 	Reject(reason string)
 }
 
-// Breaker 定义熔断器接口，基于 Google SRE 自适应过载算法。
+// Breaker defines the breaker interface, based on the Google SRE adaptive
+// overload algorithm.
 //
-// 三种状态：
-//   - 关闭（Closed）：错误率低于阈值，正常处理并持续统计
-//   - 打开（Open）：错误率超过阈值，后续请求快速失败（返回 ErrServiceUnavailable）
-//   - 半开（Half-Open）：冷却期后放行探测请求，成功则关闭熔断器
+// Three states:
+//   - Closed: error rate below the threshold; requests are served and counted
+//   - Open: error rate above the threshold; further requests fail fast (ErrServiceUnavailable)
+//   - Half-Open: after a cool-down a probe request is allowed; success closes the breaker
 //
-// 用法：
+// Usage:
 //
 //	b := breaker.NewBreaker(breaker.WithName("payment-gateway"))
 //	err := b.Do(func() error { return callPaymentAPI(req) })
 type Breaker interface {
-	// Name 返回熔断器名称，用于日志与指标区分。
+	// Name returns the breaker name, used to tell breakers apart in logs and metrics.
 	Name() string
 
-	// Allow 检查请求是否允许通过。
-	// 允许时返回 Promise（调用方完成后须 Accept/Reject），
-	// 熔断器打开时返回 ErrServiceUnavailable。
+	// Allow checks whether a request may pass.
+	// On success it returns a Promise (the caller must Accept/Reject it later);
+	// when the breaker is open it returns ErrServiceUnavailable.
 	Allow() (Promise, error)
-	// AllowCtx 同 Allow，但 context 已取消时直接返回 context 错误。
+	// AllowCtx is like Allow, but returns the context error directly when the
+	// context is already cancelled.
 	AllowCtx(ctx context.Context) (Promise, error)
 
-	// Do 执行请求；熔断器打开时立即返回 ErrServiceUnavailable，不执行请求。
-	// 请求 panic 会被视为失败并重新抛出。
+	// Do runs the request; when the breaker is open it returns
+	// ErrServiceUnavailable immediately without running the request.
+	// A panic in the request counts as a failure and is re-panicked.
 	Do(req func() error) error
-	// DoCtx 同 Do，但 context 已取消时直接返回 context 错误。
+	// DoCtx is like Do, but returns the context error directly when the context
+	// is already cancelled.
 	DoCtx(ctx context.Context, req func() error) error
 
-	// DoWithAcceptable 同 Do，但通过 acceptable 精确控制哪些错误计入失败统计。
+	// DoWithAcceptable is like Do, but acceptable decides exactly which errors
+	// count as failures.
 	DoWithAcceptable(req func() error, acceptable Acceptable) error
-	// DoWithAcceptableCtx 同 DoWithAcceptable，支持 context。
+	// DoWithAcceptableCtx is like DoWithAcceptable, with context support.
 	DoWithAcceptableCtx(ctx context.Context, req func() error, acceptable Acceptable) error
 
-	// DoWithFallback 同 Do，但熔断器打开时执行 fallback 降级逻辑。
+	// DoWithFallback is like Do, but runs the fallback logic when the breaker is open.
 	DoWithFallback(req func() error, fallback Fallback) error
-	// DoWithFallbackCtx 同 DoWithFallback，支持 context。
+	// DoWithFallbackCtx is like DoWithFallback, with context support.
 	DoWithFallbackCtx(ctx context.Context, req func() error, fallback Fallback) error
 
-	// DoWithFallbackAcceptable 同 DoWithFallback，并支持自定义错误可接受策略。
+	// DoWithFallbackAcceptable is like DoWithFallback, plus a custom
+	// error-accepting policy.
 	DoWithFallbackAcceptable(req func() error, fallback Fallback, acceptable Acceptable) error
-	// DoWithFallbackAcceptableCtx 同 DoWithFallbackAcceptable，支持 context。
+	// DoWithFallbackAcceptableCtx is like DoWithFallbackAcceptable, with context support.
 	DoWithFallbackAcceptableCtx(ctx context.Context, req func() error, fallback Fallback,
 		acceptable Acceptable) error
 }
 
-// sreConfig Google SRE 自适应节流算法参数。
-// 默认值见 sre.go 中的包常量；通过 Option 可自定义，
-// 例如贴近 SRE 官方文档（Handling Overload 第 21 章 Client-Side Throttling）
-// 推荐的 2 分钟统计窗口、放大系数 K=2，使用 WithSREDefaults()。
+// sreConfig holds the Google SRE adaptive throttling algorithm parameters.
+// Defaults live in the package constants in sre.go; they can be customised via
+// Option, e.g. to match the values recommended by the official SRE book
+// (Handling Overload, chapter 21, Client-Side Throttling): a 2-minute window
+// and amplification factor K=2, via WithSREDefaults().
 type sreConfig struct {
-	window     time.Duration // 统计窗口时长
-	k          float64       // 请求放大系数
-	minK       float64       // 放大系数下限
-	protection int64         // 小流量保护阈值
+	window     time.Duration // statistical window length
+	k          float64       // request amplification factor
+	minK       float64       // lower bound of the amplification factor
+	protection int64         // low-traffic protection threshold
 }
 
-// defaultSREConfig 返回默认的 SRE 算法参数（激进模式：10s 窗口 / K=1.5）。
+// defaultSREConfig returns the default SRE algorithm parameters
+// (aggressive mode: 10s window / K=1.5).
 func defaultSREConfig() sreConfig {
 	return sreConfig{
 		window:     window,
@@ -97,17 +108,18 @@ func defaultSREConfig() sreConfig {
 	}
 }
 
-// Option 用于自定义熔断器。
+// Option customises a breaker.
 type Option func(*circuitBreaker)
 
-// WithName 设置熔断器名称，用于日志与指标区分。
+// WithName sets the breaker name, used to tell breakers apart in logs and metrics.
 func WithName(name string) Option {
 	return func(b *circuitBreaker) { b.name = name }
 }
 
-// WithWindow 设置统计窗口时长。
-// 越小对突发响应越快，但对偶发/低流量客户端越敏感；
-// SRE 官方文档推荐 2 分钟。默认 10 秒。传入非正值时忽略。
+// WithWindow sets the statistical window length.
+// Smaller windows react faster to bursts but are more sensitive to sporadic or
+// low-traffic clients; the official SRE book recommends 2 minutes. Defaults to
+// 10 seconds. Non-positive values are ignored.
 func WithWindow(d time.Duration) Option {
 	return func(b *circuitBreaker) {
 		if d > 0 {
@@ -116,9 +128,10 @@ func WithWindow(d time.Duration) Option {
 	}
 }
 
-// WithK 设置请求放大系数 K：当 requests 达到 K*accepts 时开始按概率拒绝。
-// 减小 K 更激进（拒绝更多），增大 K 更宽松。SRE 官方文档推荐 2。
-// 默认 1.5。传入非正值时忽略。
+// WithK sets the request amplification factor K: requests start to be rejected
+// probabilistically once requests reach K*accepts. Smaller K is more aggressive
+// (more rejections), larger K is more permissive. The official SRE book
+// recommends 2. Defaults to 1.5. Non-positive values are ignored.
 func WithK(k float64) Option {
 	return func(b *circuitBreaker) {
 		if k > 0 {
@@ -127,8 +140,9 @@ func WithK(k float64) Option {
 	}
 }
 
-// WithMinK 设置放大系数下限，防止连续失败时权重过低导致过度激进。
-// 默认 1.1。传入非正值时忽略。
+// WithMinK sets the lower bound of the amplification factor, so that a run of
+// failures cannot drag the weight down far enough to become over-aggressive.
+// Defaults to 1.1. Non-positive values are ignored.
 func WithMinK(k float64) Option {
 	return func(b *circuitBreaker) {
 		if k > 0 {
@@ -137,9 +151,11 @@ func WithMinK(k float64) Option {
 	}
 }
 
-// WithProtection 设置小流量保护阈值：窗口内总请求数低于该值时不被拒绝，
-// 避免偶发/低流量客户端被误伤（对应文档对零星请求客户端的告诫）。
-// 默认 5。传入负值时忽略。
+// WithProtection sets the low-traffic protection threshold: when the total
+// number of requests in the window is below it, no request is rejected, so
+// sporadic or low-traffic clients are not punished (matching the advice in the
+// docs for occasionally-calling clients). Defaults to 5. Negative values are
+// ignored.
 func WithProtection(n int64) Option {
 	return func(b *circuitBreaker) {
 		if n >= 0 {
@@ -148,10 +164,13 @@ func WithProtection(n int64) Option {
 	}
 }
 
-// WithSREDefaults 使用 SRE 官方文档（Handling Overload 第 21 章
-// Client-Side Throttling）推荐的参数：2 分钟统计窗口、放大系数 K=2。
-// 相比默认的激进模式（10s / K=1.5），更贴近原始算法：后端资源浪费略多，
-// 但状态传播更稳，适合流量平稳的服务。可再叠加 WithWindow/WithK 微调。
+// WithSREDefaults uses the parameters recommended by the official SRE book
+// (Handling Overload, chapter 21, Client-Side Throttling): a 2-minute
+// statistical window and amplification factor K=2.
+// Compared with the default aggressive mode (10s / K=1.5) it stays closer to
+// the original algorithm: a little more backend capacity is wasted, but state
+// propagates more steadily, which suits services with steady traffic. It can be
+// combined with WithWindow/WithK for fine-tuning.
 func WithSREDefaults() Option {
 	return func(b *circuitBreaker) {
 		b.sre.window = 2 * time.Minute
@@ -161,7 +180,8 @@ func WithSREDefaults() Option {
 	}
 }
 
-// defaultAcceptable 默认错误可接受策略：仅 nil 错误视为成功。
+// defaultAcceptable is the default error-accepting policy: only a nil error
+// counts as success.
 func defaultAcceptable(err error) bool {
 	return err == nil
 }

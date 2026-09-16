@@ -13,15 +13,20 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// memberPrefix 是进程级唯一前缀，用于生成 Redis 滑动窗口的 ZSET 成员。
+// memberPrefix is a process-unique prefix used to build the ZSET members of the Redis
+// sliding window.
 //
-// 成员必须**跨进程**唯一：滑动窗口用 ZCARD 统计窗口内请求数，而 ZADD 对已存在
-// 的成员只更新 score、不增加基数。旧实现用 `<毫秒>:<进程内原子计数>` 作为成员，
-// 两个进程在同一毫秒各自产生 counter=1 时成员完全相同 → ZADD 覆盖 → ZCARD 低估
-// 真实请求数 → 实际放行量超过 limit（实测：limit=2 时 2 次请求 ZCARD 仍为 1）。
+// Members must be unique **across processes**: the sliding window counts the requests in the
+// window with ZCARD, while ZADD only updates the score of an existing member and does not
+// increase the cardinality. The old implementation used `<millisecond>:<in-process atomic
+// counter>` as the member, so two processes that both produced counter=1 in the same
+// millisecond generated identical members -> ZADD overwrote them -> ZCARD underestimated the
+// real number of requests -> more requests were let through than limit allows (measured:
+// with limit=2, two requests still left ZCARD at 1).
 //
-// 因此成员包含 64 位随机前缀（crypto/rand）；随机源不可用时退化为
-// 主机名 + pid + 启动纳秒，仍可保证跨进程不重复。
+// Members therefore carry a 64-bit random prefix (crypto/rand); when the random source is
+// unavailable it falls back to hostname + pid + start time in nanoseconds, which still
+// guarantees uniqueness across processes.
 var memberPrefix = newMemberPrefix()
 
 func newMemberPrefix() string {
@@ -33,28 +38,29 @@ func newMemberPrefix() string {
 	return fmt.Sprintf("%s-%d-%d", host, os.Getpid(), time.Now().UnixNano())
 }
 
-// memberCounter 用于生成 Redis 滑动窗口中 ZSET 成员的进程内唯一后缀。
-// 与 memberPrefix 组合，保证同进程并发请求不会生成相同成员。
+// memberCounter produces the in-process unique suffix of the ZSET members written by the
+// Redis sliding window. Combined with memberPrefix it guarantees that concurrent requests in
+// the same process never generate the same member.
 var memberCounter uint64
 
-// RedisClient Redis 客户端接口。
-// 兼容 *redis.Client、*redis.ClusterClient 和 *redis.Ring。
+// RedisClient is the Redis client interface.
+// It is compatible with *redis.Client, *redis.ClusterClient and *redis.Ring.
 type RedisClient = redis.UniversalClient
 
-// --- Redis 令牌桶 ---
+// --- Redis token bucket ---
 
-// RedisTokenBucket 基于 Redis 的分布式令牌桶限流器。
-// 使用 Lua 脚本保证原子性，适用于多实例部署场景。
+// RedisTokenBucket is a Redis-based distributed token bucket rate limiter.
+// A Lua script provides atomicity, which suits multi-instance deployments.
 type RedisTokenBucket struct {
 	client RedisClient
 	key    string
-	rate   float64 // 每秒生成令牌数
-	burst  float64 // 桶容量
+	rate   float64 // tokens generated per second
+	burst  float64 // bucket capacity
 }
 
-// NewRedisTokenBucket 创建 Redis 令牌桶限流器。
-// client 为 Redis 客户端，key 为限流键名（应全局唯一）。
-// rate 为每秒生成的令牌数，burst 为桶容量。
+// NewRedisTokenBucket creates a Redis token bucket rate limiter.
+// client is the Redis client and key is the rate limit key (it should be globally unique).
+// rate is the number of tokens generated per second and burst is the bucket capacity.
 func NewRedisTokenBucket(client RedisClient, key string, rate, burst float64) *RedisTokenBucket {
 	return &RedisTokenBucket{
 		client: client,
@@ -64,9 +70,9 @@ func NewRedisTokenBucket(client RedisClient, key string, rate, burst float64) *R
 	}
 }
 
-// tokenBucketScript 令牌桶 Lua 脚本。
-// 参数：KEYS[1]=键名, ARGV[1]=rate, ARGV[2]=burst, ARGV[3]=当前时间戳(秒)
-// 返回：1=允许, 0=限流
+// tokenBucketScript is the token bucket Lua script.
+// Args: KEYS[1]=key, ARGV[1]=rate, ARGV[2]=burst, ARGV[3]=current timestamp (seconds)
+// Returns: 1=allowed, 0=rate limited
 var tokenBucketScript = redis.NewScript(`
 local key = KEYS[1]
 local rate = tonumber(ARGV[1])
@@ -77,7 +83,7 @@ local data = redis.call('hmget', key, 'tokens', 'last_update')
 local tokens = tonumber(data[1]) or burst
 local last_update = tonumber(data[2]) or now
 
--- 计算自上次更新以来生成的令牌
+-- Tokens generated since the last update
 local elapsed = math.max(0, now - last_update)
 tokens = math.min(burst, tokens + elapsed * rate)
 
@@ -87,27 +93,28 @@ if tokens >= 1 then
     allowed = 1
 end
 
--- 保存状态
+-- Persist the state
 redis.call('hmset', key, 'tokens', tokens, 'last_update', now)
--- 设置过期时间为令牌桶填满所需时间 + 1 秒
+-- Expire the key after the time needed to refill the bucket, plus 1 second
 local ttl = math.ceil(burst / rate) + 1
 redis.call('expire', key, ttl)
 
 return allowed
 `)
 
-// Allow 检查是否允许请求通过。
+// Allow reports whether the request is allowed.
 func (tb *RedisTokenBucket) Allow() bool {
 	ok, _ := tb.AllowContext(context.Background())
 	return ok
 }
 
-// RetryAfter 返回建议的重试等待时间：距下一个令牌可用的时长。
+// RetryAfter returns the suggested retry delay: the time until the next token is available.
 //
-// 基于配置的 rate 给出上界估计（不额外访问 Redis）：
-// 桶内令牌状态由服务端脚本维护，客户端无法无开销地得知实时余量，
-// 而“令牌生成一个所需的时间”正是被限流后最早可能成功的时机。
-// 实现 http 层的 Retry-After 语义（RFC 9110 §10.2.3）。
+// It estimates an upper bound from the configured rate (without an extra Redis round trip):
+// the server-side script maintains the token state, so the client cannot learn the live
+// remainder without cost, and "the time needed to generate one token" is exactly when a rate
+// limited request can first succeed.
+// It implements the http-layer Retry-After semantics (RFC 9110 §10.2.3).
 func (tb *RedisTokenBucket) RetryAfter() time.Duration {
 	if tb.rate <= 0 {
 		return 0
@@ -119,7 +126,7 @@ func (tb *RedisTokenBucket) RetryAfter() time.Duration {
 	return wait
 }
 
-// AllowContext 带 context 的检查。
+// AllowContext is the context-aware check.
 func (tb *RedisTokenBucket) AllowContext(ctx context.Context) (bool, error) {
 	now := float64(time.Now().UnixNano()) / 1e9
 	result, err := tokenBucketScript.Run(ctx, tb.client, []string{tb.key},
@@ -130,10 +137,10 @@ func (tb *RedisTokenBucket) AllowContext(ctx context.Context) (bool, error) {
 	return result == 1, nil
 }
 
-// --- Redis 滑动窗口 ---
+// --- Redis sliding window ---
 
-// RedisSlidingWindow 基于 Redis 的分布式滑动窗口限流器。
-// 使用有序集合（ZSET）实现，适用于多实例部署场景。
+// RedisSlidingWindow is a Redis-based distributed sliding window rate limiter.
+// It is built on a sorted set (ZSET) and suits multi-instance deployments.
 type RedisSlidingWindow struct {
 	client RedisClient
 	key    string
@@ -141,9 +148,9 @@ type RedisSlidingWindow struct {
 	window time.Duration
 }
 
-// NewRedisSlidingWindow 创建 Redis 滑动窗口限流器。
-// client 为 Redis 客户端，key 为限流键名（应全局唯一）。
-// limit 为窗口内最大请求数，window 为时间窗口大小。
+// NewRedisSlidingWindow creates a Redis sliding window rate limiter.
+// client is the Redis client and key is the rate limit key (it should be globally unique).
+// limit is the maximum number of requests within the window and window is the window size.
 func NewRedisSlidingWindow(client RedisClient, key string, limit int, window time.Duration) *RedisSlidingWindow {
 	return &RedisSlidingWindow{
 		client: client,
@@ -153,9 +160,10 @@ func NewRedisSlidingWindow(client RedisClient, key string, limit int, window tim
 	}
 }
 
-// slidingWindowScript 滑动窗口 Lua 脚本。
-// 参数：KEYS[1]=键名, ARGV[1]=当前时间戳(毫秒), ARGV[2]=窗口大小(毫秒), ARGV[3]=限制数, ARGV[4]=唯一标识
-// 返回：1=允许, 0=限流
+// slidingWindowScript is the sliding window Lua script.
+// Args: KEYS[1]=key, ARGV[1]=current timestamp (ms), ARGV[2]=window size (ms), ARGV[3]=limit,
+// ARGV[4]=unique identifier
+// Returns: 1=allowed, 0=rate limited
 var slidingWindowScript = redis.NewScript(`
 local key = KEYS[1]
 local now = tonumber(ARGV[1])
@@ -163,17 +171,17 @@ local window_ms = tonumber(ARGV[2])
 local limit = tonumber(ARGV[3])
 local member = ARGV[4]
 
--- 移除窗口外的记录
+-- Remove the records that have left the window
 local cutoff = now - window_ms
 redis.call('zremrangebyscore', key, '-inf', cutoff)
 
--- 统计当前窗口内的请求数
+-- Count the requests in the current window
 local count = redis.call('zcard', key)
 
 if count < limit then
-    -- 添加当前请求
+    -- Add the current request
     redis.call('zadd', key, now, member)
-    -- 设置过期时间
+    -- Set the expiry
     redis.call('pexpire', key, window_ms + 1000)
     return 1
 else
@@ -181,18 +189,20 @@ else
 end
 `)
 
-// Allow 检查是否允许请求通过。
+// Allow reports whether the request is allowed.
 func (sw *RedisSlidingWindow) Allow() bool {
 	ok, _ := sw.AllowContext(context.Background())
 	return ok
 }
 
-// RetryAfter 返回建议的重试等待时间：整个窗口滑过所需的最长时长。
+// RetryAfter returns the suggested retry delay: the longest time needed for the whole window
+// to slide past.
 //
-// 与内存实现不同，Redis 端无法在本地得知窗口内最早记录的时间戳
-// （需额外访问 Redis，而此处正处于限流路径，不应再增加负载），
-// 因此给出保守上界：等满一个窗口后必定有配额可用。
-// 实现 http 层的 Retry-After 语义（RFC 9110 §10.2.3）。
+// Unlike the in-memory implementation, the Redis side cannot know the timestamp of the oldest
+// record locally (that needs an extra Redis round trip, and this is the rate limiting path
+// where extra load should be avoided), so it reports a conservative upper bound: after
+// waiting for a full window, quota is guaranteed to be available.
+// It implements the http-layer Retry-After semantics (RFC 9110 §10.2.3).
 func (sw *RedisSlidingWindow) RetryAfter() time.Duration {
 	if sw.window <= 0 {
 		return 0
@@ -200,12 +210,14 @@ func (sw *RedisSlidingWindow) RetryAfter() time.Duration {
 	return sw.window
 }
 
-// AllowContext 带 context 的检查。
+// AllowContext is the context-aware check.
 func (sw *RedisSlidingWindow) AllowContext(ctx context.Context) (bool, error) {
 	now := time.Now().UnixMilli()
-	// 成员格式：<进程唯一前缀>:<毫秒时间戳>:<进程内计数>
-	// 前缀保证跨进程唯一，计数保证同进程并发唯一，两者缺一都会让 ZADD 覆盖
-	// 已有成员，导致 ZCARD 低估窗口内请求数（限流被突破）。
+	// Member format: <process-unique prefix>:<millisecond timestamp>:<in-process counter>
+	// The prefix guarantees uniqueness across processes and the counter guarantees
+	// uniqueness across concurrent requests in the same process; without either one ZADD
+	// overwrites an existing member, so ZCARD underestimates the requests in the window and
+	// the limit can be bypassed.
 	counter := atomic.AddUint64(&memberCounter, 1)
 	member := memberPrefix + ":" + strconv.FormatInt(now, 10) + ":" + strconv.FormatUint(counter, 10)
 
@@ -217,33 +229,34 @@ func (sw *RedisSlidingWindow) AllowContext(ctx context.Context) (bool, error) {
 	return result == 1, nil
 }
 
-// --- 工厂函数 ---
+// --- Factory functions ---
 
-// StoreType 限流器存储类型。
+// StoreType is the rate limiter storage type.
 type StoreType string
 
 const (
-	// StoreMemory 内存存储（单机）。
+	// StoreMemory is in-memory storage (single node).
 	StoreMemory StoreType = "memory"
-	// StoreRedis Redis 存储（分布式）。
+	// StoreRedis is Redis storage (distributed).
 	StoreRedis StoreType = "redis"
 )
 
-// TokenBucketConfig 令牌桶配置。
+// TokenBucketConfig is the token bucket configuration.
 type TokenBucketConfig struct {
-	Rate  float64 // 每秒生成令牌数
-	Burst float64 // 桶容量
+	Rate  float64 // tokens generated per second
+	Burst float64 // bucket capacity
 }
 
-// SlidingWindowConfig 滑动窗口配置。
+// SlidingWindowConfig is the sliding window configuration.
 type SlidingWindowConfig struct {
-	Limit  int           // 窗口内最大请求数
-	Window time.Duration // 时间窗口大小
+	Limit  int           // maximum number of requests within the window
+	Window time.Duration // window size
 }
 
-// NewTokenBucketWithStore 根据存储类型创建令牌桶限流器。
-// store 为存储类型，client 为 Redis 客户端（StoreRedis 时必须非 nil）。
-// key 为限流键名（StoreRedis 时使用）。
+// NewTokenBucketWithStore creates a token bucket rate limiter for the given storage type.
+// store is the storage type and client is the Redis client (it must be non-nil for
+// StoreRedis).
+// key is the rate limit key (used when store is StoreRedis).
 func NewTokenBucketWithStore(store StoreType, client RedisClient, key string, cfg TokenBucketConfig) Limiter {
 	switch store {
 	case StoreRedis:
@@ -253,9 +266,10 @@ func NewTokenBucketWithStore(store StoreType, client RedisClient, key string, cf
 	}
 }
 
-// NewSlidingWindowWithStore 根据存储类型创建滑动窗口限流器。
-// store 为存储类型，client 为 Redis 客户端（StoreRedis 时必须非 nil）。
-// key 为限流键名（StoreRedis 时使用）。
+// NewSlidingWindowWithStore creates a sliding window rate limiter for the given storage type.
+// store is the storage type and client is the Redis client (it must be non-nil for
+// StoreRedis).
+// key is the rate limit key (used when store is StoreRedis).
 func NewSlidingWindowWithStore(store StoreType, client RedisClient, key string, cfg SlidingWindowConfig) Limiter {
 	switch store {
 	case StoreRedis:

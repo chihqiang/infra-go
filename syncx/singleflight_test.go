@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- SingleFlight 测试 ---
+// --- SingleFlight tests ---
 
 func TestSingleFlight_Do(t *testing.T) {
 	sf := NewSingleFlight[string]()
@@ -35,7 +35,7 @@ func TestSingleFlight_Concurrent(t *testing.T) {
 	var callCount int32
 	var wg sync.WaitGroup
 
-	// 100 个协程同时调用同一个 key
+	// 100 goroutines call the same key at the same time
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		go func() {
@@ -51,7 +51,7 @@ func TestSingleFlight_Concurrent(t *testing.T) {
 	}
 	wg.Wait()
 
-	// fn 应该只被调用一次
+	// fn must have been called exactly once
 	assert.Equal(t, int32(1), atomic.LoadInt32(&callCount))
 }
 
@@ -75,7 +75,7 @@ func TestSingleFlight_DifferentKeys(t *testing.T) {
 	}
 	wg.Wait()
 
-	// 不同 key 各调用一次
+	// Each distinct key triggers one call
 	assert.Equal(t, int32(10), atomic.LoadInt32(&count))
 }
 
@@ -113,7 +113,7 @@ func TestSingleFlight_Forget(t *testing.T) {
 func TestSingleFlight_Panic(t *testing.T) {
 	sf := NewSingleFlight[int]()
 
-	// panic 应向调用方传播
+	// The panic must propagate to the caller
 	func() {
 		defer func() {
 			r := recover()
@@ -124,7 +124,7 @@ func TestSingleFlight_Panic(t *testing.T) {
 		})
 	}()
 
-	// panic 后 key 应已清理，可正常再次执行
+	// After the panic the key has been cleaned up, so it can be used again
 	val, err := sf.Do("key", func() (int, error) { return 42, nil })
 	assert.NoError(t, err)
 	assert.Equal(t, 42, val)
@@ -136,7 +136,7 @@ func TestSingleFlight_PanicDoesNotBlockWaiters(t *testing.T) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 
-	// 第一个调用者 panic
+	// The first caller panics
 	var leaderPanic any
 	wg.Add(1)
 	go func() {
@@ -151,7 +151,8 @@ func TestSingleFlight_PanicDoesNotBlockWaiters(t *testing.T) {
 
 	<-start
 
-	// 等待者应返回而非永久阻塞，并且收到与 leader 相同的 panic
+	// Waiters must return instead of blocking forever, and see the same panic as
+	// the leader
 	done := make(chan struct{})
 	var waiterPanic any
 	go func() {
@@ -171,8 +172,9 @@ func TestSingleFlight_PanicDoesNotBlockWaiters(t *testing.T) {
 		"waiter must see the same panic as the leader instead of a zero-value success")
 }
 
-// TestSingleFlight_PanicNotReportedAsZeroSuccess 回归测试：leader panic 时
-// 等待者不得把失败当作成功返回。旧实现下等待者的 sf.Do 会正常返回 (0, nil)。
+// TestSingleFlight_PanicNotReportedAsZeroSuccess is a regression test: when the
+// leader panics, a waiter must not report the failure as a success. With the old
+// implementation the waiter's sf.Do returned (0, nil) normally.
 func TestSingleFlight_PanicNotReportedAsZeroSuccess(t *testing.T) {
 	sf := NewSingleFlight[int]()
 
@@ -222,8 +224,9 @@ func TestSingleFlight_PanicNotReportedAsZeroSuccess(t *testing.T) {
 	}
 }
 
-// TestSingleFlight_PanicNilValueIsNotSwallowed 验证 fn 内部 panic(nil) 时，
-// 等待者仍能感知失败（Go 1.21+ 会以 *runtime.PanicNilError 呈现）。
+// TestSingleFlight_PanicNilValueIsNotSwallowed verifies that when fn calls
+// panic(nil), waiters still observe the failure (Go 1.21+ surfaces it as
+// *runtime.PanicNilError).
 func TestSingleFlight_PanicNilValueIsNotSwallowed(t *testing.T) {
 	sf := NewSingleFlight[int]()
 
@@ -237,7 +240,7 @@ func TestSingleFlight_PanicNilValueIsNotSwallowed(t *testing.T) {
 		sf.Do("key", func() (int, error) {
 			close(start)
 			time.Sleep(30 * time.Millisecond)
-			panic(nil) //nolint:staticcheck // 验证运行时转换后的 panic 仍会被传播
+			panic(nil) //nolint:staticcheck // verifies the runtime-converted panic is still propagated
 		})
 	}()
 	<-start
@@ -263,7 +266,7 @@ func TestSingleFlight_PanicNilValueIsNotSwallowed(t *testing.T) {
 	}
 }
 
-// --- DoCtx 测试 ---
+// --- DoCtx tests ---
 
 func TestSingleFlight_DoCtx_Success(t *testing.T) {
 	sf := NewSingleFlight[string]()
@@ -299,7 +302,7 @@ func TestSingleFlight_DoCtx_Concurrent(t *testing.T) {
 	}
 	wg.Wait()
 
-	// fn 应只执行一次，所有等待者共享结果
+	// fn must run exactly once and every waiter shares the result
 	assert.Equal(t, int32(1), atomic.LoadInt32(&count))
 }
 
@@ -323,7 +326,7 @@ func TestSingleFlight_DoCtx_WaiterCancelled(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{})
 
-	// leader 调用并阻塞在 fn 内部
+	// The leader calls and blocks inside fn
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -338,7 +341,8 @@ func TestSingleFlight_DoCtx_WaiterCancelled(t *testing.T) {
 	}()
 	<-started
 
-	// 等待者的 context 已取消：应返回错误而不是永久阻塞
+	// The waiter's context is already cancelled: it must return an error instead of
+	// blocking forever
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := sf.DoCtx(ctx, "key", func(ctx context.Context) (string, error) {
@@ -347,7 +351,7 @@ func TestSingleFlight_DoCtx_WaiterCancelled(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "context canceled")
 
-	// 释放 leader，确认其仍能正常完成，且不会卡住
+	// Release the leader and confirm it still completes without getting stuck
 	close(release)
 	wg.Wait()
 }
@@ -361,7 +365,7 @@ func TestSingleFlight_DoCtx_Panic(t *testing.T) {
 		})
 	})
 
-	// panic 后 key 已清理，可再次执行
+	// After the panic the key has been cleaned up, so it can run again
 	val, err := sf.DoCtx(context.Background(), "key", func(ctx context.Context) (int, error) {
 		return 1, nil
 	})
@@ -374,12 +378,14 @@ func TestSingleFlight_DoCtx_ErrorShared(t *testing.T) {
 
 	started := make(chan struct{})
 	release := make(chan struct{})
-	// 缓冲容量必须 ≥ 发送者数量（2），否则后发者在主 goroutine Wait 前会永久阻塞。
+	// The buffer capacity must be >= the number of senders (2), otherwise a late
+	// sender would block forever before the main goroutine Waits.
 	errCh := make(chan error, 2)
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	// leader：进入 fn 后阻塞，确保后续调用者进来时一定作为"等待者"而非自己执行。
+	// Leader: block inside fn so that any later caller is guaranteed to act as a
+	// "waiter" instead of running fn itself.
 	go func() {
 		defer wg.Done()
 		_, err := sf.DoCtx(context.Background(), "key", func(ctx context.Context) (string, error) {
@@ -390,10 +396,11 @@ func TestSingleFlight_DoCtx_ErrorShared(t *testing.T) {
 		errCh <- err
 	}()
 
-	<-started // leader 已持锁并进入 fn
+	<-started // the leader holds the lock and has entered fn
 
-	// waiter：此刻进入必为等待者，应共享 leader 的错误。
-	// 其兜底 fn 同样返回该错误，避免极端调度下（waiter 意外成为 leader）产生 flaky。
+	// Waiter: entering now it must be a waiter and share the leader's error.
+	// Its fallback fn returns the same error, avoiding flakiness under extreme
+	// scheduling (where the waiter could unexpectedly become the leader).
 	go func() {
 		defer wg.Done()
 		_, err := sf.DoCtx(context.Background(), "key", func(ctx context.Context) (string, error) {
@@ -402,7 +409,7 @@ func TestSingleFlight_DoCtx_ErrorShared(t *testing.T) {
 		errCh <- err
 	}()
 
-	// 给 waiter 时间进入等待状态，再放行 leader
+	// Give the waiter time to enter the waiting state, then release the leader
 	time.Sleep(20 * time.Millisecond)
 	close(release)
 

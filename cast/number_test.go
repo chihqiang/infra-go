@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- ToInt 测试 ---
+// --- ToInt tests ---
 
 func TestToInt(t *testing.T) {
 	tests := []struct {
@@ -33,7 +33,7 @@ func TestToInt(t *testing.T) {
 		{"bool_false", false, 0},
 		{"string", "123", 123},
 		{"string_zero_padded", "08", 8},
-		{"string_hex_not_supported", "0xff", 0}, // 十六进制不再被意外接受，统一按十进制解析
+		{"string_hex_not_supported", "0xff", 0}, // hexadecimal is no longer accepted accidentally; parsing is always base 10
 		{"json.Number", json.Number("42"), 42},
 		{"nil", nil, 0},
 	}
@@ -53,7 +53,8 @@ func TestToIntE_Error(t *testing.T) {
 }
 
 func TestToIntE_NonFiniteFloat(t *testing.T) {
-	// NaN 与 Inf 无法安全转换为整数，应返回错误而非未定义值
+	// NaN and Inf cannot be converted to integers safely, so an error must be returned
+	// instead of an undefined value
 	_, err := ToIntE(math.NaN())
 	assert.Error(t, err)
 	_, err = ToIntE(math.Inf(1))
@@ -71,20 +72,21 @@ func TestToIntE_NonFiniteFloat(t *testing.T) {
 }
 
 func TestToIntE_Overflow(t *testing.T) {
-	// uint64 大于 int 最大值时应返回错误，而非静默溢出为负值
+	// uint64 values above math.MaxInt must error instead of overflowing silently
+	// into negative values
 	_, err := ToIntE(uint64(math.MaxUint64))
 	assert.Error(t, err)
 
 	_, err = ToInt64E(uint64(math.MaxUint64))
 	assert.Error(t, err)
 
-	// 边界内的值正常转换
+	// values within bounds convert normally
 	n, err := ToInt64E(uint64(math.MaxInt64))
 	require.NoError(t, err)
 	assert.Equal(t, int64(math.MaxInt64), n)
 }
 
-// --- ToInt64 测试 ---
+// --- ToInt64 tests ---
 
 func TestToInt64(t *testing.T) {
 	assert.Equal(t, int64(42), ToInt64(42))
@@ -99,7 +101,7 @@ func TestToInt64E_LargeNumber(t *testing.T) {
 	assert.Equal(t, int64(9223372036854775807), n)
 }
 
-// --- ToUint 测试 ---
+// --- ToUint tests ---
 
 func TestToUint(t *testing.T) {
 	assert.Equal(t, uint(42), ToUint(uint(42)))
@@ -112,7 +114,7 @@ func TestToUint64E_Negative(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- ToFloat 测试 ---
+// --- Float tests ---
 
 func TestToFloat64(t *testing.T) {
 	assert.Equal(t, float64(3.14), ToFloat64(3.14))
@@ -130,7 +132,7 @@ func TestToFloat64E_Error(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- 补充：E 系列全类型族与失败分支 ---
+// --- Additional coverage: full type family and failure branches of the E-series ---
 
 func TestToInt64E_TypeFamily(t *testing.T) {
 	cases := []struct {
@@ -166,11 +168,11 @@ func TestToInt64E_TypeFamily(t *testing.T) {
 func TestToInt64E_Errors(t *testing.T) {
 	_, err := ToInt64E("abc")
 	assert.Error(t, err)
-	_, err = ToInt64E(json.Number("1e2")) // Int64() 无法解析
+	_, err = ToInt64E(json.Number("1e2")) // Int64() cannot parse it
 	assert.Error(t, err)
 	_, err = ToInt64E([]int{1})
 	assert.Error(t, err)
-	_, err = ToInt64E(uint(math.MaxUint64)) // 溢出
+	_, err = ToInt64E(uint(math.MaxUint64)) // overflow
 	assert.Error(t, err)
 }
 
@@ -206,7 +208,7 @@ func TestToUint64E_TypeFamily(t *testing.T) {
 
 func TestToUint64E_Errors(t *testing.T) {
 	_, err := ToUint64E(nil)
-	assert.NoError(t, err) // nil → 0, 无错误
+	assert.NoError(t, err) // nil → 0, no error
 
 	_, err = ToUint64E(int8(-1))
 	assert.Error(t, err)
@@ -224,7 +226,7 @@ func TestToUint64E_Errors(t *testing.T) {
 
 func TestToUint64(t *testing.T) {
 	assert.Equal(t, uint64(42), ToUint64(uint64(42)))
-	assert.Equal(t, uint64(0), ToUint64("-1")) // 失败返回零值
+	assert.Equal(t, uint64(0), ToUint64("-1")) // failure returns the zero value
 	assert.Equal(t, uint64(42), ToUint64("42"))
 }
 
@@ -266,29 +268,29 @@ func TestToFloat64E_Errors(t *testing.T) {
 }
 
 func TestToIntE_ExtraEdges(t *testing.T) {
-	// uint 溢出（32 位平台边界以 math.MaxInt 判定）
+	// uint overflow (on 32-bit platforms the boundary is decided by math.MaxInt)
 	_, err := ToIntE(uint(math.MaxUint64))
 	assert.Error(t, err)
 
-	// float32 非有限值
+	// non-finite float32
 	_, err = ToIntE(float32(math.Inf(1)))
 	assert.Error(t, err)
 
-	// json.Number Int64 失败
+	// json.Number Int64 failure
 	_, err = ToIntE(json.Number("1.5"))
 	assert.Error(t, err)
 
-	// 负数 json.Number 正常
+	// a negative json.Number works
 	n, err := ToIntE(json.Number("-7"))
 	require.NoError(t, err)
 	assert.Equal(t, -7, n)
 }
 
-// --- 溢出防护（此前会静默返回垃圾值且 err 为 nil）---
+// --- Overflow protection (previously returned garbage values silently with a nil error) ---
 
-// TestToInt64E_FloatOverflow 回归测试：超出 int64 范围的浮点数必须报错。
-// 历史行为：Go 规范下浮点→整数转换为「实现相关」，amd64 上
-// int64(1e30) 得到 -9223372036854775808，且 err 为 nil。
+// TestToInt64E_FloatOverflow is a regression test: floats outside the int64 range must error.
+// Previous behaviour: the Go spec calls an out-of-range float-to-integer conversion
+// "implementation-specific"; on amd64 int64(1e30) produced -9223372036854775808 with a nil error.
 func TestToInt64E_FloatOverflow(t *testing.T) {
 	bad := []float64{1e30, -1e30, math.MaxFloat64, -math.MaxFloat64}
 	for _, f := range bad {
@@ -297,26 +299,26 @@ func TestToInt64E_FloatOverflow(t *testing.T) {
 		assert.Equal(t, int64(0), v)
 	}
 
-	// 边界内的值仍可正常转换
+	// values within bounds still convert normally
 	v, err := ToInt64E(float64(42))
 	require.NoError(t, err)
 	assert.Equal(t, int64(42), v)
 
-	// -2^63 可精确表示，属于合法输入
+	// -2^63 is exactly representable, so it is a valid input
 	v, err = ToInt64E(-9223372036854775808.0)
 	require.NoError(t, err)
 	assert.Equal(t, int64(math.MinInt64), v)
 
-	// 2^63 已超出 int64 上界（float64 无法精确表示 MaxInt64）
+	// 2^63 is above the int64 upper bound (float64 cannot represent MaxInt64 exactly)
 	_, err = ToInt64E(9223372036854775808.0)
 	assert.Error(t, err)
 
-	// NaN / Inf 仍然报错
+	// NaN / Inf still error
 	_, err = ToInt64E(math.NaN())
 	assert.Error(t, err)
 }
 
-// TestToIntE_FloatOverflow 回归测试：ToIntE 同样需要溢出检查。
+// TestToIntE_FloatOverflow is a regression test: ToIntE needs the same overflow check.
 func TestToIntE_FloatOverflow(t *testing.T) {
 	for _, f := range []float64{1e30, -1e30} {
 		v, err := ToIntE(f)
@@ -324,13 +326,13 @@ func TestToIntE_FloatOverflow(t *testing.T) {
 		assert.Equal(t, 0, v)
 	}
 
-	// 正常范围保留原有的「向零截断」语义
+	// the normal range keeps the original truncate-towards-zero semantics
 	v, err := ToIntE(7.9)
 	require.NoError(t, err)
 	assert.Equal(t, 7, v)
 }
 
-// TestToUint64E_FloatOverflow 回归测试：超出 uint64 范围的浮点数必须报错。
+// TestToUint64E_FloatOverflow is a regression test: floats outside the uint64 range must error.
 func TestToUint64E_FloatOverflow(t *testing.T) {
 	for _, f := range []float64{1e30, math.MaxFloat64} {
 		v, err := ToUint64E(f)
@@ -342,13 +344,14 @@ func TestToUint64E_FloatOverflow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, uint64(42), v)
 
-	// 负数仍然报错
+	// negative values still error
 	_, err = ToUint64E(-1.5)
 	assert.Error(t, err)
 }
 
-// TestToUintE_Overflow 验证 uint64 超出 uint 范围时报错。
-// 32 位平台上会真实触发；64 位平台上保证该路径不误报。
+// TestToUintE_Overflow verifies that a uint64 beyond the uint range reports an error.
+// It actually triggers on 32-bit platforms; on 64-bit platforms it ensures that path
+// does not report false positives.
 func TestToUintE_Overflow(t *testing.T) {
 	v, err := ToUintE(uint64(42))
 	require.NoError(t, err)
@@ -357,7 +360,7 @@ func TestToUintE_Overflow(t *testing.T) {
 	big := uint64(math.MaxUint32) + 1
 	v, err = ToUintE(big)
 	if uint64(uint(big)) == big {
-		// 平台 uint 足够宽，应成功
+		// the platform uint is wide enough, so it must succeed
 		require.NoError(t, err)
 		assert.Equal(t, uint(big), v)
 	} else {
@@ -365,8 +368,8 @@ func TestToUintE_Overflow(t *testing.T) {
 	}
 }
 
-// TestToFloat32E_Overflow 回归测试：float64→float32 窄化溢出必须报错。
-// 历史行为：ToFloat32E(1e300) 返回 +Inf 且 err 为 nil。
+// TestToFloat32E_Overflow is a regression test: a narrowing float64→float32 overflow must error.
+// Previous behaviour: ToFloat32E(1e300) returned +Inf with a nil error.
 func TestToFloat32E_Overflow(t *testing.T) {
 	_, err := ToFloat32E(1e300)
 	assert.Error(t, err)
@@ -375,12 +378,12 @@ func TestToFloat32E_Overflow(t *testing.T) {
 	_, err = ToFloat32E(math.MaxFloat64)
 	assert.Error(t, err)
 
-	// 正常值不受影响
+	// normal values are unaffected
 	v, err := ToFloat32E(1.5)
 	require.NoError(t, err)
 	assert.Equal(t, float32(1.5), v)
 
-	// 输入本身是 ±Inf 时透传，不算窄化溢出
+	// an input that is already ±Inf is passed through; not a narrowing overflow
 	v, err = ToFloat32E(math.Inf(1))
 	require.NoError(t, err)
 	assert.True(t, math.IsInf(float64(v), 1))

@@ -1,39 +1,39 @@
 package jwt
 
-// 标准声明键（RFC 7519）。
+// Standard claim keys (RFC 7519).
 const (
-	// ClaimKeyIssuer 签发者。
+	// ClaimKeyIssuer is the issuer claim.
 	ClaimKeyIssuer = "iss"
-	// ClaimKeySubject 主题。
+	// ClaimKeySubject is the subject claim.
 	ClaimKeySubject = "sub"
-	// ClaimKeyAudience 受众。
+	// ClaimKeyAudience is the audience claim.
 	ClaimKeyAudience = "aud"
-	// ClaimKeyExpirationTime 过期时间。
+	// ClaimKeyExpirationTime is the expiration time claim.
 	ClaimKeyExpirationTime = "exp"
-	// ClaimKeyNotBefore 生效时间。
+	// ClaimKeyNotBefore is the not-before claim.
 	ClaimKeyNotBefore = "nbf"
-	// ClaimKeyIssuedAt 签发时间。
+	// ClaimKeyIssuedAt is the issued-at claim.
 	ClaimKeyIssuedAt = "iat"
-	// ClaimKeyJWTID JWT 唯一标识。
+	// ClaimKeyJWTID is the unique JWT identifier claim.
 	ClaimKeyJWTID = "jti"
 )
 
-// 自定义声明键。
+// Custom claim keys.
 const (
-	// ClaimKeyTokenType 令牌类型：access / refresh。
+	// ClaimKeyTokenType is the token type: access / refresh.
 	ClaimKeyTokenType = "token_type"
 )
 
-// 常用业务声明键，可在生成令牌时直接使用。
+// Common business claim keys, usable directly when generating tokens.
 const (
-	// ClaimKeyUserID 用户 ID。
+	// ClaimKeyUserID is the user ID claim.
 	ClaimKeyUserID = "user_id"
-	// ClaimKeyUsername 用户名。
+	// ClaimKeyUsername is the username claim.
 	ClaimKeyUsername = "username"
-	// ClaimKeyRole 角色。
+	// ClaimKeyRole is the role claim.
 	ClaimKeyRole = "role"
-	// ClaimKeyPermissions 权限列表。
+	// ClaimKeyPermissions is the permission list claim.
 	ClaimKeyPermissions = "permissions"
-	// ClaimKeyScopes 作用域列表。
+	// ClaimKeyScopes is the scope list claim.
 	ClaimKeyScopes = "scopes"
 )

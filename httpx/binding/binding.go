@@ -1,11 +1,14 @@
-// Package binding 提供 HTTP 请求数据绑定能力：
-//   - 绑定器接口（Binding/BindingBody/BindingUri）与内置实例（JSON/XML/Form/Query/Header/Uri）
-//   - 常见 Content-Type 的 MIME 常量与 Default 绑定器选择
-//   - 表单/Query/Header/URI → 结构体的反射映射引擎与字段元信息缓存（mapping.go / meta.go / value.go）
-//   - 基于 go-playground/validator 的结构体校验（validator.go）
+// Package binding provides HTTP request data binding capabilities:
+//   - Binder interfaces (Binding/BindingBody/BindingUri) and built-in instances
+//     (JSON/XML/Form/Query/Header/Uri)
+//   - MIME constants for common Content-Types and the Default binder selector
+//   - Reflection-based mapping engine (form/query/header/URI → structs) with field metadata
+//     cache (mapping.go / meta.go / value.go)
+//   - Struct validation based on go-playground/validator (validator.go)
 //
-// httpx 主包的便捷绑定函数（Bind*/MustBind*，见 httpx/request.go）直接调用本包；
-// 绑定器实例、MIME 常量、Default 选择与校验入口均统一由本包提供。
+// The convenience binding helpers of the httpx main package (Bind*/MustBind*, see
+// httpx/request.go) call this package directly; binder instances, MIME constants,
+// the Default selector and the validation entry point are all provided here.
 package binding
 
 import (
@@ -14,9 +17,9 @@ import (
 	"strings"
 )
 
-// --- MIME 类型常量 ---
+// --- MIME type constants ---
 
-// 常见的 Content-Type MIME 类型。
+// Common Content-Type MIME types.
 const (
 	MIMEJSON              = "application/json"
 	MIMEXML               = "application/xml"
@@ -26,60 +29,61 @@ const (
 	MIMEMultipartPOSTForm = "multipart/form-data"
 )
 
-// --- 绑定器接口 ---
+// --- Binder interfaces ---
 
-// Binding 描述将请求数据绑定到结构体的接口。
-// 不同数据来源（JSON body、Query 参数、Form 表单等）实现此接口。
+// Binding describes the interface that binds request data into a struct.
+// Different data sources (JSON body, query parameters, form fields, etc.) implement it.
 type Binding interface {
-	// Name 返回绑定器名称。
+	// Name returns the binder name.
 	Name() string
-	// Bind 将请求数据绑定到 obj 结构体。
+	// Bind binds the request data into the obj struct.
 	Bind(*http.Request, any) error
 }
 
-// BindingBody 扩展 Binding 接口，支持从原始字节绑定。
-// 用于 JSON、XML 等基于 body 的绑定器。
+// BindingBody extends the Binding interface to support binding from raw bytes.
+// It is used by body-based binders such as JSON and XML.
 type BindingBody interface {
 	Binding
-	// BindBody 从字节数组绑定到 obj 结构体。
+	// BindBody binds from a byte slice into the obj struct.
 	BindBody([]byte, any) error
 }
 
-// BindingUri 描述从 URI 路径参数绑定的接口，用于路由形参（如 /users/{id}）。
-// 通过 httpx.BindURI / BindURIWithValues 使用；路径参数以 map 形式传入。
+// BindingUri describes the interface that binds from URI path parameters,
+// used for route path parameters (e.g. /users/{id}).
+// It is used via httpx.BindURI / BindURIWithValues; path parameters are passed as a map.
 type BindingUri interface {
 	Name() string
-	// BindUri 从路径参数 map 绑定到 obj 结构体。
+	// BindUri binds from a path-parameter map into the obj struct.
 	BindUri(map[string][]string, any) error
 }
 
-// --- 内置绑定器实例 ---
+// --- Built-in binder instances ---
 
 var (
-	// JSON 基于 JSON body 的绑定器。
+	// JSON is a binder based on the JSON body.
 	JSON BindingBody = JSONBinding{}
-	// XML 基于 XML body 的绑定器。
+	// XML is a binder based on the XML body.
 	XML BindingBody = XMLBinding{}
-	// Form 基于 Form 表单的绑定器（包含 query 和 post form）。
+	// Form is a binder based on form data (including query and post form).
 	Form Binding = FormBinding{}
-	// Query 基于 URL query 参数的绑定器。
+	// Query is a binder based on URL query parameters.
 	Query Binding = QueryBinding{}
-	// Header 基于 HTTP header 的绑定器。
+	// Header is a binder based on HTTP headers.
 	Header Binding = HeaderBinding{}
-	// Uri 基于 URI 路径参数的绑定器。
+	// Uri is a binder based on URI path parameters.
 	Uri BindingUri = URIBinding{}
 )
 
-// Default 根据请求方法和 Content-Type 返回合适的绑定器。
-// GET 请求固定返回 Form（绑定 query）；其余请求按 Content-Type 匹配：
-// JSON → JSON，XML → XML，form/multipart → Form，无法解析或未知类型 → Form。
+// Default returns a suitable binder based on the request method and Content-Type.
+// GET requests always return Form (binding the query); other requests are matched by Content-Type:
+// JSON → JSON, XML → XML, form/multipart → Form, unparseable or unknown → Form.
 func Default(method, contentType string) Binding {
 	if method == http.MethodGet {
 		return Form
 	}
 
-	// 解析 Content-Type，去除参数（如 ; charset=utf-8）并忽略大小写，
-	// 避免 "application/json; charset=utf-8" 等常见格式匹配失败。
+	// Parse the Content-Type, strip parameters (e.g. ; charset=utf-8) and ignore case,
+	// so that common formats like "application/json; charset=utf-8" still match.
 	mediaType, _, err := mime.ParseMediaType(contentType)
 	if err != nil {
 		return Form
