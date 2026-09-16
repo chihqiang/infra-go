@@ -1,9 +1,20 @@
-# infra-go
+<div align="center">
+<h1>infra-go</h1>
 
-A general-purpose infrastructure wrapper library for Go projects, bundling storage, logging,
-configuration and utility capabilities.
+[![Auth](https://img.shields.io/badge/Auth-chihqiang-ff69b4)](https://github.com/chihqiang)
+[![GitHub Pull Requests](https://img.shields.io/github/issues-pr/chihqiang/infra-go)](https://github.com/chihqiang/infra-go/pulls)
+[![Release](https://img.shields.io/github/release/chihqiang/infra-go.svg?style=flat-square)](https://github.com/chihqiang/infra-go/releases)
+[![GitHub Pull Requests](https://img.shields.io/github/stars/chihqiang/infra-go)](https://github.com/chihqiang/infra-go/stargazers)
+[![HitCount](https://views.whatilearened.today/views/github/chihqiang/infra-go.svg)](https://github.com/chihqiang/infra-go)
+[![GitHub license](https://img.shields.io/github/license/chihqiang/infra-go)](https://github.com/chihqiang/infra-go/blob/main/LICENSE)
 
-> **Requirements**: Go 1.25+ (`go.mod` declares `go 1.25.11`)
+<p>
+ infra-go is an efficient Go infrastructure wrapper library for building services, bundling
+ configuration, logging, database, Redis, HTTP, object storage and utility capabilities that
+ are pluggable, independently importable and production-ready.
+</p>
+
+</div>
 
 ## Quick start
 
