@@ -3,10 +3,10 @@
 A distributed tracing package built on [OpenTelemetry](https://opentelemetry.io), with a concise
 API for propagating and recording trace context between services.
 
-> The **HTTP server tracing middleware** has moved to the `httpx/middleware` subpackage
-> (`middleware.NewTracing`) and is registered conveniently via `httpx.WithTracing` in the main
-> httpx package (see [httpx](./httpx.md)). The `trace` package focuses on: TracerProvider assembly,
-> span management, gRPC/HTTP header propagation, and attribute wrappers.
+> The **HTTP server tracing middleware** lives in `rest/handler` (`TraceHandler`) and can be
+> enabled through `rest.MiddlewaresConf.Trace` (see [rest](./rest.md)). The `trace` package focuses
+> on: TracerProvider assembly, span management, gRPC/HTTP header propagation, and attribute
+> wrappers.
 
 ## Features
 
@@ -30,13 +30,13 @@ API for propagating and recording trace context between services.
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/trace
+go get github.com/chihqiang/infra-go/core/trace
 ```
 
 ## Quick start
 
 ```go
-import "github.com/chihqiang/infra-go/trace"
+import "github.com/chihqiang/infra-go/core/trace"
 
 func main() {
     trace.StartAgent(trace.Config{
@@ -56,8 +56,8 @@ func main() {
 }
 ```
 
-> Automatic instrumentation on the HTTP server: `httpx.WithTracing()` (register it before
-> `WithLogger` so access logs carry `trace_id`).
+> Automatic instrumentation on the HTTP server: `resthandler.TraceHandler()`; enable it through
+> `rest.MiddlewaresConf.Trace` or mount it before the access log so logs carry `trace_id`.
 
 ## Configuration
 
@@ -149,26 +149,30 @@ req, _ := http.NewRequest("GET", "http://example.com", nil)
 trace.InjectHeader(ctx, req.Header) // writes Traceparent
 client.Do(req)
 
-// server: extract from HTTP headers (manual integration for non-httpx frameworks)
+// server: extract from HTTP headers (manual integration for non-http frameworks)
 ctx, spanContext := trace.ExtractHeader(r.Context(), r.Header)
 ```
 
-### HTTP server middleware (moved)
+### HTTP server middleware
 
-The HTTP server tracing middleware now lives in the `httpx/middleware` subpackage; register it
-with `httpx.WithTracing(ignorePaths...)` and it automatically: extracts the upstream span context
-(W3C traceparent) → creates a server span (carrying semantic attributes such as method/path/status)
-→ injects the context so downstream code can correlate `trace_id`:
+The HTTP server tracing middleware lives in `rest/handler` as `TraceHandler`. It extracts the
+upstream span context (W3C traceparent), creates a server span named after the matched route
+template (for example `GET /users/{id}`) with method/path/status attributes, and injects the
+context so downstream code can correlate `trace_id`:
 
 ```go
-// httpx
-server.Use(httpx.WithTracing())                            // trace everything
-server.Use(httpx.WithTracing("/health*", "/metrics/*"))   // skip probes
+import resthandler "github.com/chihqiang/infra-go/rest/handler"
 
-// standard net/http / other frameworks
-import "github.com/chihqiang/infra-go/httpx/middleware"
-handler := middleware.NewTracing("/health*", "/metrics/*").Middleware()(mux)
-http.ListenAndServe(":8080", handler)
+server.Use(resthandler.TraceHandler()) // trace everything
+server.Use(resthandler.TraceHandler(  // skip probes, tag the service
+    resthandler.WithTraceIgnorePaths("/health*", "/metrics/*"),
+    resthandler.WithTraceServiceName("my-service"),
+))
+
+// or let rest assemble it from config
+conf.Middlewares.Trace = true
+conf.Name = "my-service"
+conf.TraceIgnorePaths = []string{"/health*"}
 ```
 
 ### Attributes
@@ -220,8 +224,8 @@ import (
     "net/http"
     "time"
 
-    "github.com/chihqiang/infra-go/logger"
-    "github.com/chihqiang/infra-go/trace"
+    "github.com/chihqiang/infra-go/core/logger"
+    "github.com/chihqiang/infra-go/core/trace"
 )
 
 func main() {

@@ -22,7 +22,7 @@ Configuration loading and parsing package; supports JSON / YAML formats and prov
 ### Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/conf
+go get github.com/chihqiang/infra-go/core/conf
 ```
 
 ### Basic usage
@@ -35,7 +35,7 @@ package main
 import (
     "fmt"
     "time"
-    "github.com/chihqiang/infra-go/conf"
+    "github.com/chihqiang/infra-go/core/conf"
 )
 
 type Config struct {
@@ -168,10 +168,10 @@ conf.MustLoad("config.json", &cfg, conf.UseEnv())
 ```
 
 ```yaml
-# config.yaml — secret falls back to dev-secret when JWT_SECRET is unset
-jwt:
-  secret: ${JWT_SECRET:-dev-secret}
-  issuer: ${JWT_ISSUER:-my-app}
+# config.yaml — secret falls back to dev-secret when TOKEN_SECRET is unset
+token:
+  secret: ${TOKEN_SECRET:-dev-secret}
+  issuer: ${TOKEN_ISSUER:-my-app}
 ```
 
 ```go
@@ -461,7 +461,7 @@ import (
     "time"
     "os"
 
-    "github.com/chihqiang/infra-go/conf"
+    "github.com/chihqiang/infra-go/core/conf"
 )
 
 type Database struct {

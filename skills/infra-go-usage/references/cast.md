@@ -15,7 +15,7 @@ Type-safe conversion toolkit, converting from `any` to the various Go primitive 
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/cast
+go get github.com/chihqiang/infra-go/core/cast
 ```
 
 ## Quick start
@@ -27,7 +27,7 @@ import (
     "fmt"
     "time"
 
-    "github.com/chihqiang/infra-go/cast"
+    "github.com/chihqiang/infra-go/core/cast"
 )
 
 func main() {

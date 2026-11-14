@@ -1,0 +1,54 @@
+package rest
+
+import (
+	"context"
+	"net/http"
+
+	"github.com/chihqiang/infra-go/rest/handler"
+	"github.com/chihqiang/infra-go/rest/internal/binding"
+	"github.com/chihqiang/infra-go/rest/internal/realip"
+)
+
+// Bind decodes the request into dst using the binder for its content type, and
+// runs dst.Validate when implemented. Requests without a body are read from the
+// query string.
+func Bind(r *http.Request, dst any) error {
+	return binding.Bind(r, dst)
+}
+
+// BindQuery decodes the query string into dst using form tags.
+func BindQuery(r *http.Request, dst any) error {
+	return binding.BindQuery(r, dst)
+}
+
+// BindHeader decodes request headers into dst using header tags.
+func BindHeader(r *http.Request, dst any) error {
+	return binding.BindHeader(r, dst)
+}
+
+// BindPath decodes path parameters into dst using path tags.
+func BindPath(r *http.Request, dst any) error {
+	return binding.BindPath(r, dst)
+}
+
+// ClientIP returns the client address of r, honouring X-Forwarded-For and
+// X-Real-IP when they hold a valid address.
+func ClientIP(r *http.Request) string {
+	return realip.FromRequest(r)
+}
+
+// RequestID returns the ID assigned by handler.RequestIDHandler, or an empty
+// string when the middleware is not part of the chain.
+func RequestID(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	return RequestIDFromContext(r.Context())
+}
+
+// RequestIDFromContext returns the request ID stored in ctx by
+// handler.RequestIDHandler, or an empty string when absent.
+func RequestIDFromContext(ctx context.Context) string {
+	id, _ := handler.RequestIDFromContext(ctx)
+	return id
+}

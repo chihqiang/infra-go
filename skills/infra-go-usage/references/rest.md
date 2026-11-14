@@ -1,0 +1,316 @@
+# rest
+
+HTTP server toolkit: configuration, routing, middleware chain, request binding, response
+helpers, JWT based authentication and a set of ready-to-use handlers.
+
+## Module structure
+
+```text
+rest/
+├── config.go        — Config / MiddlewaresConf / DefaultConfig / Validate
+├── server.go        — Server: routing, middleware assembly, start and graceful shutdown
+├── route.go         — Route / RouteOption / RouteGroup / Routes listing
+├── options.go       — server Option: CORS, TLS, rate limit, breaker, signature
+├── response.go      — WriteJSON / OkJSON / CreatedJSON / NoContent / Error, BaseResponse envelope, XML/HTML writers
+├── errors.go        — error sentinels, StatusCoder, StatusOf, CodeMsg
+├── chain/           — Middleware type and immutable middleware chain
+├── router/          — http.ServeMux wrapper, 404/405 detection, path helpers
+├── handler/         — middleware implementations (all return chain.Middleware)
+├── token/           — JWT issuing and verification (Parser)
+└── internal/        — cors, realip, pathmatch, response writers, binding
+```
+
+- `chain` has no dependency on the rest of `rest`, so middleware can be reused anywhere.
+- `handler` only depends on `chain` + `internal`, so individual handlers can be used without a
+  `rest.Server`.
+- `internal/*` is not importable from other modules; its behaviour is exposed through `handler`
+  and `rest` options.
+
+## Features
+
+- **Routing**: Go 1.22 method-aware patterns (`GET /users/{id}`), nested groups, group middleware
+- **Middleware chain**: recovery, request ID, tracing, access log, concurrency limit, timeout,
+  body limit, gzip, circuit breaker, rate limit, body signature, JWT auth, CORS
+- **Binding**: JSON / XML / form / multipart / query / header / path with self-validation
+- **Responses**: `BaseResponse` envelope with `request_id`, JSON/XML/HTML writers, error-to-status mapping
+- **Lifecycle**: `Start` / `Serve` / `Shutdown` / `Stop`, compatible with `service.AsService`
+
+## Installation
+
+```bash
+go get github.com/chihqiang/infra-go/rest
+```
+
+## Quick start
+
+```go
+package main
+
+import (
+    "net/http"
+
+    "github.com/chihqiang/infra-go/rest"
+)
+
+type helloRequest struct {
+    Name string `json:"name"`
+}
+
+func (r *helloRequest) Validate() error {
+    if r.Name == "" {
+        return rest.ErrBadRequest
+    }
+    return nil
+}
+
+func main() {
+    server, err := rest.NewServer(rest.DefaultConfig())
+    if err != nil {
+        panic(err)
+    }
+
+    server.Group("/api").AddRoute(rest.Route{
+        Method: http.MethodPost,
+        Path:   "/hello",
+        Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            var req helloRequest
+            if err := rest.Bind(r, &req); err != nil {
+                _ = rest.Error(w, err) // binding failures map to 400/415
+                return
+            }
+            _ = rest.OkJSON(w, map[string]string{"msg": "hello, " + req.Name})
+        }),
+    })
+
+    if err := server.Start(); err != nil {
+        panic(err)
+    }
+}
+```
+
+`rest.DefaultConfig()` fills host/port, timeouts, `MaxBodyBytes` and the default middleware
+switches. A zero `Config` is also valid and starts with all middleware disabled.
+
+The package name `rest` does not collide with `net/http`, so handlers can import both directly.
+
+## Configuration
+
+```go
+type Config struct {
+    Name             string        `json:",optional"` // service name for spans and access logs
+    Host            string        `json:",default=0.0.0.0"`
+    Port            int           `json:",default=8080,range=[0:65535]"`
+    CertFile        string        `json:",optional"`
+    KeyFile         string        `json:",optional"`
+    ReadTimeout     time.Duration `json:",default=10s"`
+    WriteTimeout    time.Duration `json:",default=10s"`
+    IdleTimeout     time.Duration `json:",default=120s"`
+    ShutdownTimeout time.Duration `json:",default=10s"`
+    MaxHeaderBytes  int           `json:",default=1048576"`
+    MaxBodyBytes    int64         `json:",default=1048576"`
+    Middlewares      MiddlewaresConf
+    TraceIgnorePaths []string `json:",optional"`
+    LogSkipPaths     []string `json:",optional"`
+}
+
+type MiddlewaresConf struct {
+    Recovery  bool          `json:",default=true"`
+    RequestID bool          `json:",default=true"`
+    Trace     bool          `json:",default=false"`
+    Log       bool          `json:",default=true"`
+    MaxConns  int           `json:",default=0"`
+    Timeout   time.Duration `json:",default=0"`
+    Gunzip    bool          `json:",default=false"`
+}
+```
+
+Tags are consumed by `core/conf` and `core/mapping`, so the same struct works for YAML/JSON files
+and environment expansion. `Config.Validate()` rejects an out-of-range port, half-configured TLS
+and negative limits.
+
+Middleware execution order is fixed by the server:
+
+```text
+Recover → RequestID → Trace → Log → MaxConns → Timeout → MaxBodyBytes → Gunzip → Use(...) → route
+```
+
+CORS wraps the whole chain, so 404/405 responses carry CORS headers too.
+
+## Server
+
+| Method | Purpose |
+|--------|---------|
+| `NewServer(conf Config, opts ...Option) (*Server, error)` | Build a server, validating config |
+| `Handle(method, path string, h http.Handler)` / `HandleFunc` | Register a single route |
+| `AddRoute(Route, ...RouteOption)` / `AddRoutes(...Route)` | Register routes with options |
+| `Group(prefix string) *RouteGroup` | Route group, embeddable/nestable, with `Use` |
+| `Use(chain.Middleware)` | Append a server-wide middleware |
+| `SetNotFoundHandler` / `SetNotAllowedHandler` | Custom 404 / 405 handlers |
+| `Start()` | Listen on the configured address (TLS when cert+key are set) |
+| `Serve(net.Listener)` | Serve a caller-provided listener (supports port `:0` tests) |
+| `Shutdown(ctx)` / `Stop()` / `Close()` | Graceful / graceful-with-timeout / immediate shutdown |
+| `Addr()`, `Router()`, `ServeHTTP` | Introspection and `httptest` usage |
+
+```go
+server, _ := rest.NewServer(rest.Config{
+    Host: "127.0.0.1",
+    Port: 0,
+    Middlewares: rest.MiddlewaresConf{Recovery: true, RequestID: true},
+})
+
+api := server.Group("/api")          // "/api"
+v1 := api.Group("/v1")               // "/api/v1"
+v1.Use(resthandler.TimeoutHandler(time.Second))
+v1.HandleFunc(http.MethodGet, "/users/{id}", handler)
+```
+
+Group middleware applies to routes registered after `Use` and is inherited by child groups.
+
+## Server options
+
+```go
+server, _ := rest.NewServer(conf,
+    rest.WithCors("https://example.com"),
+    rest.WithCorsHeaders("X-Token"),
+)
+```
+
+| Option | Effect |
+|--------|--------|
+| `WithCors(origins ...string)` | Allow the given origins (all origins when empty, no credentials) |
+| `WithCorsHeaders(headers ...string)` | Append allowed request headers |
+| `WithCustomCors(headerFn, notAllowedFn, origins...)` | Customise headers and the rejected-request body |
+
+Preflight `OPTIONS` requests are answered with 204 before reaching a route.
+
+## Route options
+
+```go
+parser, _ := token.NewParser(token.Config{Secret: "a-long-enough-secret"})
+
+server.AddRoute(rest.Route{
+    Method:  http.MethodGet,
+    Path:    "/profile",
+    Handler: profileHandler,
+}, rest.WithRouteAuth(parser))
+```
+
+| Option | Effect |
+|--------|--------|
+| `WithRouteMiddleware(mw ...chain.Middleware)` | Wrap only this route handler |
+| `WithRouteAuth(parser *token.Parser, opts ...handler.AuthorizeOption)` | Require a valid bearer token |
+
+## Responses
+
+```go
+rest.WriteJSON(w, http.StatusAccepted, body) // explicit status
+rest.OkJSON(w, body)                         // 200
+rest.CreatedJSON(w, body)                    // 201
+rest.NoContent(w)                            // 204, no body
+rest.Error(w, err)                           // HTTP status from StatusOf(err)
+```
+
+`rest.Error` hides details for 5xx (body keeps `code`/`msg`, the real error is logged) and echoes
+the message for 4xx.
+
+Status resolution order in `StatusOf`:
+
+1. `StatusCoder` (`StatusCode() int`) implemented by the error chain
+2. Sentinels: `ErrBadRequest`, `ErrUnauthorized`, `ErrForbidden`, `ErrNotFound`, `ErrConflict`,
+   `ErrTooManyRequests`, `ErrServiceUnavailable`
+3. Anything else → 500
+
+Decode failures are wrapped in an internal error that implements `StatusCoder`, so `rest.Error` maps
+them to 400 and unsupported content types to 415 automatically.
+
+## Binding
+
+```go
+var payload CreateUser
+err := rest.Bind(r, &payload)        // content-type driven, query when there is no body
+err = rest.BindQuery(r, &payload)    // query string only
+err = rest.BindHeader(r, &payload)   // headers only
+err = rest.BindPath(r, &payload)     // path parameters only
+```
+
+| Source | Tag | Notes |
+|--------|-----|-------|
+| JSON | `json` | rejects empty and malformed bodies |
+| XML | `xml` | `application/xml`, `text/xml` |
+| Form | `form` | query merged with body, body wins; also multipart |
+| Query | `form` | single values and repeated keys (`[]string`) |
+| Header | `header` | case-insensitive matching |
+| Path | `path` (falls back to `json`) | reads `Request.PathValue` |
+
+Field presence, defaults and `optional` follow the `core/mapping` tag engine, e.g.
+`form:"limit,optional,default=20,range=[1:100]"`.
+
+Implement `Validate() error` on the destination to run validation after decoding:
+
+```go
+func (r *CreateUser) Validate() error {
+    if r.Email == "" {
+        return fmt.Errorf("%w: email is required", rest.ErrBadRequest)
+    }
+    return nil
+}
+```
+
+## handler package
+
+Every handler is a `chain.Middleware`, i.e. `func(http.HandlerFunc) http.HandlerFunc`, and can be
+used without a `rest.Server`:
+
+| Handler | Behaviour |
+|---------|-----------|
+| `RecoverHandler` | Recovers panics → 500, re-panics `http.ErrAbortHandler` |
+| `RequestIDHandler` | Keeps a safe `X-Request-ID` or generates a UUID; `RequestIDFromContext` |
+| `TraceHandler(opts...)` | OTel server span; `WithTraceServiceName`, `WithTraceIgnorePaths` |
+| `LogHandler(opts...)` / `LogHandlerWith(log, opts...)` | Access log via `core/logger` with method/pattern/status/duration/ip/request_id; `WithLogSkipPaths`, `WithLogServiceName` |
+| `MaxConnsHandler(n)` | Cap in-flight requests → 503 |
+| `TimeoutHandler(d)` | Bound handler time → 503, discards late writes |
+| `MaxBytesHandler(n)` | 413 for oversized bodies, `http.MaxBytesReader` for streaming |
+| `GunzipHandler` | Transparently decompresses `Content-Encoding: gzip` |
+| `RateLimitHandler(limiter)` / `RateLimitPerSecondHandler(rate, burst)` | 429 via `core/ratelimit` |
+| `BreakerHandler(br)` | Circuit breaker; 5xx responses count as failures → 503 when open |
+| `SignatureHandler(cfg)` | HMAC-signed body check with key rotation and timestamp TTL |
+| `Authorize(parser, opts...)` | Bearer token check; `WithUnauthorizedCallback` |
+
+## token package
+
+```go
+parser, err := token.NewParser(token.Config{
+    Secret:     "a-long-enough-secret", // >= 8 chars
+    PrevSecret: "the-previous-secret",  // optional, accepted while rotating keys
+    Expire:     24 * time.Hour,
+    Issuer:     "demo",
+})
+
+signed, err := parser.Generate("user-1", map[string]any{"role": "admin"})
+claims, err := parser.Parse(signed)      // Subject / Issuer / ExpiresAt / Data
+```
+
+`handler.Authorize` stores the verified claims in the request context:
+
+```go
+claims, ok := token.ClaimsFrom(r.Context())
+```
+
+## Service integration
+
+`*rest.Server` has `Start() error` and `Stop() error`, so it plugs straight into
+`core/service`:
+
+```go
+sg := service.NewServiceGroup()
+sg.Add(service.AsService(server))
+sg.Start()
+```
+
+## Notes
+
+- `Server.Stop()` waits `Config.ShutdownTimeout` before forcing connections closed.
+- Custom 404/405 handlers keep `http.ServeMux`'s method-aware behaviour: a path match with a
+  wrong method stays 405 instead of falling through to 404.
+- `internal/response` provides `HeaderOnceWriter`, `StatusWriter`, `DeferredWriter` and
+  `BufferedWriter`; they power CORS, logging, timeouts and custom fallbacks.

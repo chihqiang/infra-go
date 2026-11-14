@@ -3,10 +3,9 @@
 Rate limiter implementations with two storage backends, in-memory and Redis: token
 bucket, sliding window, concurrency limit, and chained limiting — freely interchangeable.
 
-> The **HTTP rate limiting middleware** is not provided by this package: it now lives in the
-> `httpx/middleware` subpackage (`middleware.NewRateLimit`), and is registered conveniently via
-> `httpx.WithRateLimit` in the main httpx package. This package only provides the various
-> `Limiter` types.
+> The **HTTP rate limiting middleware** lives in `rest/handler` as
+> `resthandler.RateLimitHandler`, and is registered conveniently via `rest.WithRateLimit`.
+> This package only provides the `Limiter` types.
 
 ## Features
 
@@ -22,7 +21,7 @@ bucket, sliding window, concurrency limit, and chained limiting — freely inter
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/ratelimit
+go get github.com/chihqiang/infra-go/core/ratelimit
 ```
 
 ## Limiters
@@ -84,94 +83,73 @@ if chain.Allow() { /* both limiters passed */ }
 
 ## HTTP rate limiting middleware
 
-The HTTP rate limiting middleware has moved to the `httpx/middleware` subpackage:
-`middleware.NewRateLimit(limiter, skipPaths...)` (object-oriented, returning a standard
-`func(http.Handler) http.Handler` that gin/echo and others can reuse); the main httpx package
-ships the `httpx.WithRateLimit` convenience registration. The `limiter` parameter type
-`middleware.RateLimiter` has the same method set as this package's `Limiter`, so any limiter
-here can be passed directly.
+`rest/handler.RateLimitHandler(limiter)` wraps any `Limiter` from this package into a
+`chain.Middleware`, and `rest.WithRateLimit(limiter)` mounts it at server level:
 
-Features:
+```go
+import resthandler "github.com/chihqiang/infra-go/rest/handler"
 
-- Throttled requests get **429 Too Many Requests**, plus **`Retry-After`** per RFC 6585 §4
-- Reuses the request context through `AllowContext`, so Redis limiters get timeout control
-  automatically
-- When the limiter itself fails, requests are **failed open** and an error is logged, so a
-  flaky Redis cannot drag the service down
-- `skipPaths` skips paths such as health checks (exact match or `*` prefix wildcard, same as
-  `httpx.WithLogger`)
-- A nil `limiter` degrades to no limiting and logs a warning (no panic)
+server, _ := rest.NewServer(conf, rest.WithRateLimit(ratelimit.NewTokenBucket(100, 200)))
+// or mount it manually to control ordering
+server.Use(resthandler.RateLimitHandler(ratelimit.NewSlidingWindow(10, time.Minute)))
+```
 
-### Retry-After (suggested retry interval)
+Behaviour:
 
-Every limiter in this package implements `RetryAfter() time.Duration`, which the HTTP
-middleware uses to build `Retry-After` (RFC 9110 §10.2.3), letting clients retry at the right
-moment instead of backing off blindly:
+- Throttled requests get **429 Too Many Requests**
+- **`Retry-After`** is set when the limiter implements `RetryAfter() time.Duration` (all
+  limiters in this package do); values are rounded up to whole seconds and never below `1`.
+  Limiters without a hint omit the header instead of inventing a value
+- The limiter is called through `AllowContext`, so Redis limiters get request-context control
+- A limiter **error** produces **503 Service Unavailable** and skips the handler; use
+  `MaxConnsHandler` alongside it if you prefer capacity-based rejection
+- A nil limiter disables the middleware entirely (no panic)
 
 | Limiter | Meaning of `RetryAfter()` |
 |--------|------------------|
-| `TokenBucket` | Time until the next token is available (derived from the live token count and `rate`) |
+| `TokenBucket` | Time until the next token is available |
 | `SlidingWindow` | When the oldest record slides out of the window |
-| `RedisTokenBucket` | How long it takes to generate one token (estimated from `rate`) |
-| `RedisSlidingWindow` | The whole window duration (a conservative upper bound, avoiding another Redis round trip on the throttling path) |
-| `Concurrency` | **Not implemented** — the hold duration is unpredictable and any invented value would mislead clients |
+| `RedisTokenBucket` | How long it takes to generate one token |
+| `RedisSlidingWindow` | The whole window duration (conservative, avoids another round trip) |
+| `Concurrency` | **Not implemented** — the hold duration is unpredictable |
 
 ```http
 HTTP/1.1 429 Too Many Requests
 Retry-After: 2
 ```
 
-> If a custom limiter does not implement `RetryAfter()`, use
-> `middleware.NewRateLimit(lim).WithRetryAfter(d)` to supply a fixed value;
-> when neither exists, **omit the header** rather than sending an invented duration.
->
-> Values are always **rounded up to whole seconds**; anything under 1 second still emits `1`,
-> avoiding `Retry-After: 0`.
-
-### Usage with httpx
+### Usage with a plain net/http handler
 
 ```go
-server.Use(httpx.WithRateLimit(ratelimit.NewTokenBucket(100, 200)))          // 100 QPS, burst 200
-server.Use(httpx.WithRateLimit(ratelimit.NewSlidingWindow(10, time.Minute))) // 10 per minute
-server.Use(httpx.WithRateLimit(redisLimiter, "/healthz", "/metrics"))        // skip probes
-```
-
-### Usage with standard net/http / other frameworks
-
-```go
-import "github.com/chihqiang/infra-go/httpx/middleware"
-
-limiter := ratelimit.NewRedisTokenBucket(rdb, "api:limit", 100, 200)
-handler := middleware.NewRateLimit(limiter).Middleware()(http.HandlerFunc(apiHandler))
+limiter := ratelimit.NewTokenBucket(100, 200)
+handler := resthandler.RateLimitHandler(limiter)(apiHandler)
 http.ListenAndServe(":8080", handler)
 ```
 
 ### Per-user / per-IP fine-grained limiting
 
-`httpx.WithRateLimit` is a global limiter (the whole service shares one instance). When you
+`resthandler.RateLimitHandler` is a global limiter (the whole service shares one instance). When you
 need independent counters per user, IP, route, and so on, build a limiter from a dimension key
-and wrap it yourself (get the client IP with `x.ClientIP`, which already handles reverse
+and wrap it yourself (get the client IP with `rest.ClientIP`, which already handles reverse
 proxies/XFF — do not hand-roll `net.SplitHostPort`):
 
 ```go
-import "github.com/chihqiang/infra-go/httpx/x"
-
-func RateLimitByIP(rdb *redis.Client, rate, burst float64) func(http.Handler) http.Handler {
-    return func(next http.Handler) http.Handler {
-        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-            ip := x.ClientIP(r) // real client IP (resolves reverse proxies / trusted proxies)
-            key := fmt.Sprintf("rate_limit:ip:%s", ip)
+func RateLimitByIP(rdb redis.UniversalClient, rate, burst float64) chain.Middleware {
+    return func(next http.HandlerFunc) http.HandlerFunc {
+        return func(w http.ResponseWriter, r *http.Request) {
+            key := fmt.Sprintf("rate_limit:ip:%s", rest.ClientIP(r))
             limiter := ratelimit.NewRedisTokenBucket(rdb, key, rate, burst)
-            if !limiter.Allow() {
-                w.WriteHeader(http.StatusTooManyRequests)
-                _, _ = w.Write([]byte(`{"code":429,"msg":"too many requests"}`))
+            if allowed, _ := limiter.AllowContext(r.Context()); !allowed {
+                _ = rest.WriteJSON(w, http.StatusTooManyRequests, rest.WrapBaseResponse(rest.ErrTooManyRequests))
                 return
             }
-            next.ServeHTTP(w, r)
-        })
+            next(w, r)
+        }
     }
 }
 ```
+
+`rest.ClientIP` already resolves reverse proxies / XFF — do not hand-roll `net.SplitHostPort`.
 
 ## Interface
 

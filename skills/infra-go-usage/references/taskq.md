@@ -18,8 +18,8 @@ import (
     "context"
     "time"
 
-    "github.com/chihqiang/infra-go/logger"
-    "github.com/chihqiang/infra-go/taskq"
+    "github.com/chihqiang/infra-go/core/logger"
+    "github.com/chihqiang/infra-go/core/taskq"
     "github.com/hibiken/asynq"
 )
 

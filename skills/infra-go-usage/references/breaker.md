@@ -15,7 +15,7 @@ Circuit breaker based on Google's SRE adaptive overload algorithm; protects down
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/breaker
+go get github.com/chihqiang/infra-go/core/breaker
 ```
 
 ## Basic usage

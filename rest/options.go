@@ -1,0 +1,101 @@
+package rest
+
+import (
+	"crypto/tls"
+	"net/http"
+
+	"github.com/chihqiang/infra-go/core/breaker"
+	"github.com/chihqiang/infra-go/core/ratelimit"
+	"github.com/chihqiang/infra-go/rest/chain"
+	resthandler "github.com/chihqiang/infra-go/rest/handler"
+	"github.com/chihqiang/infra-go/rest/internal/cors"
+)
+
+// Option customizes a Server during construction.
+type Option func(*Server)
+
+// WithMiddleware appends middleware after the config-driven built-ins.
+func WithMiddleware(middlewares ...chain.Middleware) Option {
+	return func(s *Server) {
+		s.extraMiddlewares = append(s.extraMiddlewares, middlewares...)
+	}
+}
+
+// WithRateLimit installs a rate limiter in front of the built-in handlers.
+func WithRateLimit(limiter ratelimit.Limiter) Option {
+	return WithMiddleware(resthandler.RateLimitHandler(limiter))
+}
+
+// WithBreaker wraps route handlers with the given circuit breaker.
+func WithBreaker(br breaker.Breaker) Option {
+	return WithMiddleware(resthandler.BreakerHandler(br))
+}
+
+// WithSignature requires an HMAC-signed body on every request.
+func WithSignature(cfg resthandler.SignatureConfig) Option {
+	return WithMiddleware(resthandler.SignatureHandler(cfg))
+}
+
+// WithTLSConfig applies cfg to the underlying http.Server. It takes effect when
+// both CertFile and KeyFile are configured.
+func WithTLSConfig(cfg *tls.Config) Option {
+	return func(s *Server) {
+		s.tlsConfig = cfg
+	}
+}
+
+type corsSetting struct {
+	origins      []string
+	headers      []string
+	headerFn     func(http.Header)
+	notAllowedFn func(http.ResponseWriter)
+}
+
+// WithCors enables CORS for the given origins, or all origins when none are given.
+func WithCors(origins ...string) Option {
+	return func(s *Server) {
+		setting := s.cors
+		if setting == nil {
+			setting = &corsSetting{}
+		}
+		setting.origins = append([]string(nil), origins...)
+		s.cors = setting
+	}
+}
+
+// WithCorsHeaders adds extra allowed request headers to CORS responses.
+func WithCorsHeaders(headers ...string) Option {
+	return func(s *Server) {
+		if s.cors == nil {
+			s.cors = &corsSetting{}
+		}
+		s.cors.headers = append(s.cors.headers, headers...)
+	}
+}
+
+// WithCustomCors enables CORS with custom header and rejection callbacks.
+func WithCustomCors(headerFn func(http.Header), notAllowedFn func(http.ResponseWriter), origins ...string) Option {
+	return func(s *Server) {
+		s.cors = &corsSetting{
+			origins:      append([]string(nil), origins...),
+			headerFn:     headerFn,
+			notAllowedFn: notAllowedFn,
+		}
+	}
+}
+
+func (c *corsSetting) headersFn() func(http.Header) {
+	if c == nil {
+		return nil
+	}
+	if len(c.headers) == 0 {
+		return c.headerFn
+	}
+
+	return func(header http.Header) {
+		if c.headerFn != nil {
+			c.headerFn(header)
+		}
+		cors.AddAllowHeaders(header, c.headers...)
+	}
+}

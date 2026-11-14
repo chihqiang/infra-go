@@ -17,7 +17,7 @@ strategies, plus custom retry conditions and callbacks.
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/retry
+go get github.com/chihqiang/infra-go/core/retry
 ```
 
 ## Quick start
@@ -30,7 +30,7 @@ import (
     "fmt"
     "time"
 
-    "github.com/chihqiang/infra-go/retry"
+    "github.com/chihqiang/infra-go/core/retry"
 )
 
 func main() {
