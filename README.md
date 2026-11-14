@@ -20,8 +20,7 @@
 
 A minimal HTTP service example (configuration `conf` + logging `logger` + HTTP `rest` +
 lifecycle orchestration `service`) that needs no external services; add `orm` / `redisx` only
-when you need a database or Redis (see [Dependency footprint](#dependency-footprint) below for
-the dependency scope):
+when you need a database or Redis:
 
 ```go
 package main
@@ -113,7 +112,7 @@ The documentation of each module is maintained centrally in
 | ------ | ------ |
 | [conf](./skills/infra-go-usage/references/conf.md) | Configuration parsing with JSON/YAML support, defaults, environment variables and parameter validation |
 | [logger](./skills/infra-go-usage/references/logger.md) | Logging wrapper built on zap + lumberjack with rolling log files |
-| [orm](./skills/infra-go-usage/references/orm.md) | ORM wrapper built on gorm, supporting MySQL/PostgreSQL/SQLite (all three drivers are compiled into this package, see "Dependency footprint") |
+| [orm](./skills/infra-go-usage/references/orm.md) | ORM wrapper built on gorm, supporting MySQL/PostgreSQL/SQLite |
 | [redisx](./skills/infra-go-usage/references/redisx.md) | Redis client wrapper: connection pool, health check, distributed lock |
 | [cache](./skills/infra-go-usage/references/cache.md) | Unified cache interface with two implementations: in-memory (LRU eviction, hit-rate statistics) and Redis (protection against cache breakdown and penetration) |
 | [rest](./skills/infra-go-usage/references/rest.md) | HTTP toolkit: config (`Config`), method-aware routing, route groups, middleware chain, request binding and graceful shutdown. Handlers live in `rest/handler` (recovery, request ID, tracing, access log, concurrency/timeout/body limits, gzip, breaker, rate limit, JWT auth, body signature) as `chain.Middleware`, so they can be reused outside a `rest.Server`; binding is exposed as `rest.Bind*`, and JSON/XML responses plus the `code/msg/data` envelope live in `rest` itself (`OkJSON` / `JSONBaseResponse` / `Error`); CORS comes from `rest.WithCors` |
@@ -121,13 +120,13 @@ The documentation of each module is maintained centrally in
 | [breaker](./skills/infra-go-usage/references/breaker.md) | Circuit breaker using the Google SRE algorithm: fail fast, degrade and prevent cascading failures |
 | [retry](./skills/infra-go-usage/references/retry.md) | Retry mechanism: exponential backoff, fixed delay and jitter |
 | [hash](./skills/infra-go-usage/references/hash.md) | Hashing and encryption: MD5/SHA/Bcrypt/HMAC, AES-GCM encryption, HMAC signing/verification |
-| [trace](./skills/infra-go-usage/references/trace.md) | Tracing built on OpenTelemetry: agent / span management / gRPC and HTTP header propagation / attribute helpers. HTTP server instrumentation is `rest/handler.TraceHandler` (all four exporters are compiled into this package, see "Dependency footprint") |
+| [trace](./skills/infra-go-usage/references/trace.md) | Tracing built on OpenTelemetry: agent / span management / gRPC and HTTP header propagation / attribute helpers. HTTP server instrumentation is `rest/handler.TraceHandler` |
 | [mapping](./skills/infra-go-usage/references/mapping.md) | map → struct deserialisation with a struct tag parsing engine |
 | [cast](./skills/infra-go-usage/references/cast.md) | Type-safe conversion covering basic types, time, slices and generics |
 | [syncx](./skills/infra-go-usage/references/syncx.md) | Concurrency helpers: SingleFlight/ConcurrentMap/Semaphore |
 | [service](./skills/infra-go-usage/references/service.md) | Service group that starts and stops several Services concurrently, with sync.Once guaranteeing a single stop |
 | [taskq](./skills/infra-go-usage/references/taskq.md) | Asynchronous task queue built on asynq with a producer/consumer pattern |
-| [storage](./skills/infra-go-usage/references/storage.md) | Unified object storage interface supporting local files, Alibaba Cloud OSS, Tencent Cloud COS and Qiniu KODO; provides write/read/exists/delete/URL building (all three SDKs are compiled into this package, see "Dependency footprint"). |
+| [storage](./skills/infra-go-usage/references/storage.md) | Unified object storage interface supporting local files, Alibaba Cloud OSS, Tencent Cloud COS and Qiniu KODO; provides write/read/exists/delete/URL building |
 | [ws](./skills/infra-go-usage/references/ws.md) | WebSocket service wrapper built on gorilla/websocket: event driven, room broadcast and heartbeat detection |
 | [stringx](./skills/infra-go-usage/references/stringx.md) | String toolkit with common helpers for random generation, predicates, conversion, splitting and joining |
 
@@ -138,50 +137,11 @@ The documentation of each module is maintained centrally in
 - **Controlled dependencies**: modules are imported independently, and modules you do not use
   **never** enter your `go.mod` / `go.sum` (Go 1.17+ module graph pruning). The lightweight
   toolkits (`cast` / `stringx` / `syncx` / `retry` / `mapping`) have zero third-party
-  dependencies; but when sibling implementations are packed into one package you cannot pick
-  just one of them, see "Dependency footprint" below
-- **Type safety**: generics are used extensively (`Response[T]`, `cast.To[T]`)
+  dependencies
+- **Type safety**: generics are used extensively (`BaseResponse[T]`, `cast.To[T]`)
 - **Testable**: every module has complete unit tests and supports `-race` detection
 - **Dependency governance**: the dependency baseline is maintained centrally and upgraded
   regularly (currently Go 1.25 / gorm 1.31 / OpenTelemetry 1.44 and so on)
-
-### Dependency footprint
-
-Module graph pruning guarantees that **modules you do not import never enter the consumer
-build**: when you only import `stringx`, for example, the consumer's
-`go.mod` contains a single require for infra-go itself, `go.sum` has just 8 lines, and the
-resulting binary contains no cloud SDK / gorm / asynq symbols.
-
-However, **sibling implementations inside the same package are compiled in together**, so you
-cannot pick just one of them. The number of third-party modules each module actually pulls in:
-
-| Module | Third-party modules | Description |
-| ------ | ------------------- | ----------- |
-| `cast` `mapping` `retry` `stringx` `syncx` | 0 | standard library only |
-| `conf` `hash` | 1 | yaml.v3 / x/crypto |
-| `breaker` `logger` `ratelimit` `service` | 3 | |
-| `cache` `redisx` | 6 | go-redis |
-| `ws` | 7 | |
-| `jwt` | 11 | |
-| `storage` | 12 | Alibaba Cloud OSS + Tencent Cloud COS + Qiniu KODO SDKs, **all of them** |
-| `taskq` | 12 | asynq + go-redis + cron |
-| `orm` | 14 | all three MySQL + PostgreSQL + SQLite drivers, **in full** (including `mattn/go-sqlite3`) |
-| `rest` | 16 | |
-| `trace` | 17 | all four exporters: OTLP gRPC / OTLP HTTP / stdout / Zipkin, **in full** |
-
-The quick-start example (`conf` + `logger` + `rest` + `service`) actually pulls in 17
-third-party modules, but **excludes** cloud vendor SDKs,
-gorm drivers, asynq and OTel exporters.
-
-> ⚠️ **`storage` / `trace` / `orm` currently cannot pull in a single implementation only**:
-> importing `orm` alone (and using MySQL only) still compiles in the postgres and sqlite
-> drivers, which grows the consumer's `go.sum` from 8 lines to 56 and the binary from 2.5M to
-> 7.5M.
->
-> - It still builds with `CGO_ENABLED=0` (`mattn/go-sqlite3` ships a non-cgo stub), but sqlite
->   is unusable at runtime.
-> - If the artefact size matters, bypass the wrapper and import `gorm.io/driver/*` or
->   `go.opentelemetry.io/otel/exporters/*` directly, or use the cloud vendor's official SDK.
 
 ## Skill installation
 
