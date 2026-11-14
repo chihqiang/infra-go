@@ -67,15 +67,20 @@ func WithCors(origins ...string) Option {
 			setting = &corsSetting{}
 		}
 		setting.origins = append([]string(nil), origins...)
+		setting.headers = append(setting.headers, s.pendingCorsHeaders...)
+		s.pendingCorsHeaders = nil
 		s.cors = setting
 	}
 }
 
-// WithCorsHeaders adds extra allowed request headers to CORS responses.
+// WithCorsHeaders adds extra allowed request headers to CORS responses. It only
+// configures headers: CORS still has to be enabled with WithCors or
+// WithCustomCors.
 func WithCorsHeaders(headers ...string) Option {
 	return func(s *Server) {
 		if s.cors == nil {
-			s.cors = &corsSetting{}
+			s.pendingCorsHeaders = append(s.pendingCorsHeaders, headers...)
+			return
 		}
 		s.cors.headers = append(s.cors.headers, headers...)
 	}
@@ -86,9 +91,11 @@ func WithCustomCors(headerFn func(http.Header), notAllowedFn func(http.ResponseW
 	return func(s *Server) {
 		s.cors = &corsSetting{
 			origins:      append([]string(nil), origins...),
+			headers:      append([]string(nil), s.pendingCorsHeaders...),
 			headerFn:     headerFn,
 			notAllowedFn: notAllowedFn,
 		}
+		s.pendingCorsHeaders = nil
 	}
 }
 

@@ -43,6 +43,14 @@ func SignatureHandler(cfg SignatureConfig) chain.Middleware {
 
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
+			// Validate the timestamp before reading the body: a stale or missing
+			// timestamp must not cost a full body read.
+			timestamp, err := signedTimestamp(r, cfg)
+			if err != nil {
+				writeStatusJSON(w, http.StatusUnauthorized, err.Error())
+				return
+			}
+
 			body, err := readSignedBody(r, cfg.MaxBody)
 			if err != nil {
 				var maxBytesErr *http.MaxBytesError
@@ -54,12 +62,6 @@ func SignatureHandler(cfg SignatureConfig) chain.Middleware {
 				return
 			}
 			r.Body = io.NopCloser(bytes.NewReader(body))
-
-			timestamp, err := signedTimestamp(r, cfg)
-			if err != nil {
-				writeStatusJSON(w, http.StatusUnauthorized, err.Error())
-				return
-			}
 
 			payload := fmt.Sprintf("%d.%s", timestamp, body)
 			signature := r.Header.Get(HeaderSignature)

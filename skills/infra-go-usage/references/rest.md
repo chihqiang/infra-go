@@ -185,7 +185,7 @@ server, _ := rest.NewServer(conf,
 | Option | Effect |
 |--------|--------|
 | `WithCors(origins ...string)` | Allow the given origins (all origins when empty, no credentials). Entries with a scheme match exactly; a scheme-less host also allows its subdomains |
-| `WithCorsHeaders(headers ...string)` | Append allowed request headers |
+| `WithCorsHeaders(headers ...string)` | Append allowed request headers; it only configures them, CORS still has to be enabled with `WithCors` / `WithCustomCors` |
 | `WithCustomCors(headerFn, notAllowedFn, origins...)` | Customise headers and the rejected-request body |
 
 A real preflight (`OPTIONS` with both `Origin` and `Access-Control-Request-Method`) is answered
@@ -316,7 +316,7 @@ used without a `rest.Server`:
 | `GunzipHandler` | Transparently decompresses `Content-Encoding: gzip` |
 | `RateLimitHandler(limiter)` / `RateLimitPerSecondHandler(rate, burst)` | 429 via `core/ratelimit` |
 | `BreakerHandler(br)` | Circuit breaker; 5xx responses count as failures → 503 when open |
-| `SignatureHandler(cfg)` | HMAC-signed body check with key rotation and timestamp TTL |
+| `SignatureHandler(cfg)` | HMAC-signed body check with key rotation and timestamp TTL; the timestamp is checked before the body is read |
 | `Authorize(parser, opts...)` | Bearer token check; `WithUnauthorizedCallback` |
 
 ## token package
@@ -370,6 +370,6 @@ sg.Start()
   a valid address. Set `Config.TrustedProxies` (access log) or use `ClientIPTrusted` (application
   code) to only trust the headers from known proxies; otherwise treat the value as
   client-controlled.
-- A group root route (`Group("/api").Handle("/")`) is registered as `/api`; requesting `/api/`
-  does not match it. Register the trailing-slash path explicitly if clients send it.
+- A group root route (`Group("/api").Handle("/")`) is served for both `/api` and the exact
+  trailing-slash form `/api/`; deeper paths such as `/api/unknown` still return 404.
 - `service.AsService` treats `http.ErrServerClosed` as a normal shutdown rather than an error.

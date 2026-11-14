@@ -117,7 +117,10 @@ func (g *RouteGroup) Use(middlewares ...chain.Middleware) {
 
 // Handle registers a handler under the group's prefix.
 func (g *RouteGroup) Handle(method, routePath string, handler http.Handler) {
-	g.server.Handle(method, router.JoinPath(g.prefix, routePath), g.wrap(handler))
+	wrapped := g.wrap(handler)
+	routePath = router.JoinPath(g.prefix, routePath)
+	g.server.Handle(method, routePath, wrapped)
+	g.registerRootAlias(method, routePath, wrapped)
 }
 
 // HandleFunc registers a handler function under the group's prefix.
@@ -131,6 +134,19 @@ func (g *RouteGroup) AddRoute(route Route, opts ...RouteOption) {
 	route.Path = router.JoinPath(g.prefix, route.Path)
 	route.Handler = g.wrap(route.Handler)
 	g.server.AddRoute(route)
+	g.registerRootAlias(route.Method, route.Path, route.Handler)
+}
+
+// registerRootAlias also serves the trailing-slash form of a group root route
+// ("/api/" for Group("/api").Handle("/")). The mux pattern "{$}" keeps the
+// match exact, so unknown paths below the prefix still return 404 instead of
+// falling through to the root handler.
+func (g *RouteGroup) registerRootAlias(method, routePath string, handler http.Handler) {
+	prefix := strings.TrimSuffix(g.prefix, "/")
+	if prefix == "" || routePath != prefix {
+		return
+	}
+	g.server.register(method, routePath+"/{$}", handler, false)
 }
 
 // AddRoutes registers multiple routes under the group's prefix.

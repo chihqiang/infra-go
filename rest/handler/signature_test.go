@@ -156,11 +156,44 @@ func TestSignatureHandlerMapsReadErrorToBadRequest(t *testing.T) {
 	)
 	request := httptest.NewRequest(http.MethodPost, "/pay", nil)
 	request.Body = failingBody{}
+	request.Header.Set(HeaderTimestamp, strconv.FormatInt(time.Now().Unix(), 10))
 	recorder := httptest.NewRecorder()
 
 	handlerFn.ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", recorder.Code)
+	}
+}
+
+type trackingBody struct {
+	read bool
+}
+
+func (b *trackingBody) Read([]byte) (int, error) {
+	b.read = true
+	return 0, io.EOF
+}
+
+func (b *trackingBody) Close() error { return nil }
+
+func TestSignatureHandlerChecksTimestampBeforeReadingBody(t *testing.T) {
+	body := &trackingBody{}
+	handlerFn := SignatureHandler(SignatureConfig{
+		Keys: [][]byte{[]byte("signing-key")},
+		TTL:  time.Minute,
+	})(func(http.ResponseWriter, *http.Request) {})
+
+	request := httptest.NewRequest(http.MethodPost, "/pay", nil)
+	request.Body = body
+	request.Header.Set(HeaderTimestamp, strconv.FormatInt(time.Now().Add(-2*time.Minute).Unix(), 10))
+	recorder := httptest.NewRecorder()
+	handlerFn.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", recorder.Code)
+	}
+	if body.read {
+		t.Fatal("stale timestamp should be rejected before reading the body")
 	}
 }

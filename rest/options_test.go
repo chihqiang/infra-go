@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/chihqiang/infra-go/core/ratelimit"
@@ -189,5 +190,50 @@ func TestWithCorsForwardsPlainOptionsToRoute(t *testing.T) {
 	}
 	if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "https://example.com" {
 		t.Fatalf("allow origin = %q", got)
+	}
+}
+
+func TestWithCorsHeadersAloneDoesNotEnableCors(t *testing.T) {
+	server, err := NewServer(Config{}, WithCorsHeaders("X-Token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.HandleFunc(http.MethodGet, "/users", func(http.ResponseWriter, *http.Request) {})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/users", nil)
+	request.Header.Set("Origin", "https://example.com")
+	server.ServeHTTP(recorder, request)
+
+	if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("allow origin = %q, want empty: WithCorsHeaders must not enable CORS", got)
+	}
+}
+
+func TestWithCorsHeadersBeforeWithCorsIsApplied(t *testing.T) {
+	server, err := NewServer(Config{},
+		WithCorsHeaders("X-Token"),
+		WithCors("https://example.com"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.HandleFunc(http.MethodGet, "/users", func(http.ResponseWriter, *http.Request) {})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodOptions, "/users", nil)
+	request.Header.Set("Origin", "https://example.com")
+	request.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	server.ServeHTTP(recorder, request)
+
+	values := recorder.Header().Values("Access-Control-Allow-Headers")
+	found := false
+	for _, value := range values {
+		if strings.Contains(value, "X-Token") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("allow headers = %v, want X-Token", values)
 	}
 }

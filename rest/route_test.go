@@ -283,3 +283,49 @@ func TestRouteGroupInheritsMiddlewareAddedAfterChildCreation(t *testing.T) {
 		t.Fatalf("late parent middleware header = %q, want applied", got)
 	}
 }
+
+func TestRouteGroupRootMatchesTrailingSlash(t *testing.T) {
+	server, err := NewServer(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Group("/api").HandleFunc(http.MethodGet, "/", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("root"))
+	})
+	server.Group("/api/v1").AddRoute(Route{
+		Method: http.MethodGet,
+		Path:   "/",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("v1"))
+		}),
+	})
+	server.Group("/trailing/").HandleFunc(http.MethodGet, "/", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("trailing"))
+	})
+
+	for _, test := range []struct {
+		path string
+		body string
+	}{
+		{path: "/api", body: "root"},
+		{path: "/api/", body: "root"},
+		{path: "/api/v1", body: "v1"},
+		{path: "/api/v1/", body: "v1"},
+		{path: "/trailing", body: "trailing"},
+		{path: "/trailing/", body: "trailing"},
+	} {
+		recorder := httptest.NewRecorder()
+		server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, test.path, nil))
+		if recorder.Code != http.StatusOK || recorder.Body.String() != test.body {
+			t.Fatalf("%s: response = %d %q, want 200 %q",
+				test.path, recorder.Code, recorder.Body.String(), test.body)
+		}
+	}
+
+	// The alias is exact: unknown paths below the prefix must stay 404.
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/unknown", nil))
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("/api/unknown: status = %d, want 404", recorder.Code)
+	}
+}

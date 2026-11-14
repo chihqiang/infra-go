@@ -21,22 +21,23 @@ import (
 
 // Server is an HTTP server with a method-aware router.
 type Server struct {
-	router           *router.Router
-	httpServer       *http.Server
-	certFile         string
-	keyFile          string
-	shutdownTimeout  time.Duration
-	handlerMu        sync.RWMutex
-	handler          http.Handler
-	frontMiddlewares []chain.Middleware
-	outerMiddlewares []chain.Middleware
-	tailMiddlewares  []chain.Middleware
-	cors             *corsSetting
-	routesMu         sync.RWMutex
-	routes           []Route
-	addrMu           sync.RWMutex
-	addr             string
-	tlsConfig        *tls.Config
+	router             *router.Router
+	httpServer         *http.Server
+	certFile           string
+	keyFile            string
+	shutdownTimeout    time.Duration
+	handlerMu          sync.RWMutex
+	handler            http.Handler
+	frontMiddlewares   []chain.Middleware
+	outerMiddlewares   []chain.Middleware
+	tailMiddlewares    []chain.Middleware
+	cors               *corsSetting
+	pendingCorsHeaders []string
+	routesMu           sync.RWMutex
+	routes             []Route
+	addrMu             sync.RWMutex
+	addr               string
+	tlsConfig          *tls.Config
 }
 
 // NewServer creates a server using the given configuration.
@@ -132,7 +133,17 @@ func buildMiddlewares(conf Config, trustedProxies []netip.Prefix) (front, tail [
 
 // Handle registers a handler for the given method and path pattern.
 func (s *Server) Handle(method, routePath string, handler http.Handler) {
+	s.register(method, routePath, handler, true)
+}
+
+// register adds a route to the mux and optionally records it for Routes and
+// PrintRoutes. Aliases such as the exact "/path/{$}" form are registered but not
+// recorded.
+func (s *Server) register(method, routePath string, handler http.Handler, record bool) {
 	s.router.Handle(method, routePath, handler)
+	if !record {
+		return
+	}
 
 	s.routesMu.Lock()
 	defer s.routesMu.Unlock()
