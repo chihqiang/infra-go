@@ -1,6 +1,7 @@
 package binding
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 )
@@ -35,6 +36,20 @@ func (e *Error) StatusCode() int {
 
 func badRequest(format string, args ...any) error {
 	return &Error{Status: http.StatusBadRequest, Err: fmt.Errorf(format, args...)}
+}
+
+// requestError classifies a failure raised while reading the request body.
+// http.MaxBytesReader reports an oversized body as a *http.MaxBytesError; that
+// is a size limit, not malformed input, so it maps to 413 instead of 400.
+func requestError(format string, err error) error {
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		return &Error{
+			Status: http.StatusRequestEntityTooLarge,
+			Err:    fmt.Errorf("rest/binding: request body too large: %w", err),
+		}
+	}
+	return badRequest(format, err)
 }
 
 func badRequestErr(err error) error {

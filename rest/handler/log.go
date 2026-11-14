@@ -79,35 +79,45 @@ func LogHandlerWith(log AccessLogger, opts ...LogOption) chain.Middleware {
 
 			start := time.Now()
 			recorder := response.NewStatusWriter(w)
+			completed := false
+			// Log from a defer so a panicking handler still leaves an access-log
+			// line before the stack unwinds to RecoverHandler (which will answer
+			// with 500).
+			defer func() {
+				status := recorder.Status()
+				if !completed {
+					status = http.StatusInternalServerError
+				}
+				fields := []logger.Field{
+					logger.String("method", r.Method),
+					logger.String("path", r.URL.Path),
+					logger.Int("status", status),
+					logger.Duration("duration", time.Since(start)),
+					logger.String("ip", realip.FromRequest(r)),
+				}
+				if options.serviceName != "" {
+					fields = append(fields, logger.String("service", options.serviceName))
+				}
+				if pattern := PatternFromContext(r.Context()); pattern != "" {
+					fields = append(fields, logger.String("pattern", pattern))
+				}
+				if id, ok := RequestIDFromContext(r.Context()); ok {
+					fields = append(fields, logger.String("request_id", id))
+				}
+
+				message := "http request"
+				switch {
+				case status >= http.StatusInternalServerError:
+					log.ErrorCtx(r.Context(), message, fields...)
+				case status >= http.StatusBadRequest:
+					log.WarnCtx(r.Context(), message, fields...)
+				default:
+					log.InfoCtx(r.Context(), message, fields...)
+				}
+			}()
+
 			next(recorder, r)
-
-			status := recorder.Status()
-			fields := []logger.Field{
-				logger.String("method", r.Method),
-				logger.String("path", r.URL.Path),
-				logger.Int("status", status),
-				logger.Duration("duration", time.Since(start)),
-				logger.String("ip", realip.FromRequest(r)),
-			}
-			if options.serviceName != "" {
-				fields = append(fields, logger.String("service", options.serviceName))
-			}
-			if pattern := PatternFromContext(r.Context()); pattern != "" {
-				fields = append(fields, logger.String("pattern", pattern))
-			}
-			if id, ok := RequestIDFromContext(r.Context()); ok {
-				fields = append(fields, logger.String("request_id", id))
-			}
-
-			message := "http request"
-			switch {
-			case status >= http.StatusInternalServerError:
-				log.ErrorCtx(r.Context(), message, fields...)
-			case status >= http.StatusBadRequest:
-				log.WarnCtx(r.Context(), message, fields...)
-			default:
-				log.InfoCtx(r.Context(), message, fields...)
-			}
+			completed = true
 		}
 	}
 }

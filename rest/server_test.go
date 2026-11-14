@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -249,6 +250,80 @@ func TestServerMaxBodyBytesFromConfig(t *testing.T) {
 	}
 }
 
+func TestServerMaxBodyBytesChunkedRequest(t *testing.T) {
+	server, err := NewServer(Config{MaxBodyBytes: 16, Middlewares: MiddlewaresConf{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.HandleFunc(http.MethodPost, "/json", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Name string `json:"name"`
+		}
+		if err := Bind(r, &payload); err != nil {
+			_ = Error(w, err)
+			return
+		}
+		_ = OkJSON(w, payload)
+	})
+
+	// A chunked request has no Content-Length, so the size can only be
+	// enforced while reading; that must still surface as 413, not 400.
+	body := `{"name":"` + strings.Repeat("a", 1024) + `"}`
+	request := httptest.NewRequest(http.MethodPost, "/json", io.NopCloser(strings.NewReader(body)))
+	request.ContentLength = -1
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusRequestEntityTooLarge)
+	}
+}
+
+func TestServerMaxBodyBytesAppliesAfterGunzip(t *testing.T) {
+	server, err := NewServer(Config{
+		MaxBodyBytes: 2048,
+		Middlewares:  MiddlewaresConf{Gunzip: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.HandleFunc(http.MethodPost, "/json", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Name string `json:"name"`
+		}
+		if err := Bind(r, &payload); err != nil {
+			_ = Error(w, err)
+			return
+		}
+		_ = OkJSON(w, payload)
+	})
+
+	payload := `{"name":"` + strings.Repeat("a", 1024*1024) + `"}`
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write([]byte(payload)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if compressed.Len() >= 2048 {
+		t.Fatalf("test payload did not compress below the limit: %d bytes", compressed.Len())
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/json", bytes.NewReader(compressed.Bytes()))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Content-Encoding", "gzip")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d (decompressed body exceeds the limit)",
+			recorder.Code, http.StatusRequestEntityTooLarge)
+	}
+}
+
 func TestServerTimeoutFromConfig(t *testing.T) {
 	server, err := NewServer(Config{Middlewares: MiddlewaresConf{Timeout: 10 * time.Millisecond}})
 	if err != nil {
@@ -413,5 +488,32 @@ func TestWithBreakerWrapsRequests(t *testing.T) {
 
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", recorder.Code)
+	}
+}
+
+func TestServerDefaultsShutdownTimeout(t *testing.T) {
+	server, err := NewServer(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.shutdownTimeout != defaultShutdownTimeout {
+		t.Fatalf("shutdown timeout = %v, want %v", server.shutdownTimeout, defaultShutdownTimeout)
+	}
+}
+
+func TestServerUseNilMiddlewareIsNoOp(t *testing.T) {
+	server, err := NewServer(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Use(nil)
+	server.HandleFunc(http.MethodGet, "/ok", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/ok", nil))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "ok" {
+		t.Fatalf("response = %d %q", recorder.Code, recorder.Body.String())
 	}
 }

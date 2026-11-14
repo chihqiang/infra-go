@@ -3,6 +3,7 @@ package binding
 import (
 	"bytes"
 	"encoding/xml"
+	"errors"
 	"io"
 	"net/http"
 )
@@ -35,8 +36,17 @@ func decodeXML(reader io.Reader, dst any) error {
 	if reader == nil {
 		return badRequest("rest/binding: xml body is empty")
 	}
-	if err := xml.NewDecoder(reader).Decode(dst); err != nil {
-		return badRequest("rest/binding: decode xml: %v", err)
+	decoder := xml.NewDecoder(reader)
+	if err := decoder.Decode(dst); err != nil {
+		return requestError("rest/binding: decode xml: %w", err)
+	}
+	// Like the JSON binder, reject data after the first document instead of
+	// silently ignoring it.
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return badRequest("rest/binding: xml body contains trailing data: %v", err)
+		}
+		return badRequest("rest/binding: xml body contains trailing data")
 	}
 	return nil
 }

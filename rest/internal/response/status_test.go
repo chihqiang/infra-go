@@ -47,3 +47,21 @@ func TestStatusWriterUnwrap(t *testing.T) {
 		t.Fatal("Unwrap() did not return the wrapped writer")
 	}
 }
+
+func TestStatusWriterDelegatesFlushAndHijack(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writer := NewStatusWriter(recorder)
+
+	flusher, ok := any(writer).(http.Flusher)
+	if !ok {
+		t.Fatal("StatusWriter does not implement http.Flusher")
+	}
+	flusher.Flush()
+	if !recorder.Flushed {
+		t.Fatal("Flush did not reach the underlying writer")
+	}
+
+	if _, ok := any(writer).(http.Hijacker); !ok {
+		t.Fatal("StatusWriter does not implement http.Hijacker")
+	}
+}

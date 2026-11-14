@@ -15,14 +15,19 @@ const defaultMemory = 32 << 20
 var timeType = reflect.TypeOf(time.Time{})
 var durationType = reflect.TypeOf(time.Duration(0))
 var fileHeaderType = reflect.TypeOf((*multipart.FileHeader)(nil))
+var textUnmarshalerType = reflect.TypeOf((*encoding.TextUnmarshaler)(nil)).Elem()
 
 // mapByTag fills dst from values, reading key names from the given struct tag
-// with a json tag fallback.
+// with a json tag fallback. Nested structs are addressed with dotted keys, for
+// example "profile.name" for a Profile field tagged json:"profile".
 func mapByTag(dst any, values map[string][]string, tag string) error {
 	if err := checkDestination(dst); err != nil {
 		return err
 	}
-	if _, err := fill(reflect.ValueOf(dst), values, nil, tag); err != nil {
+	if reflect.ValueOf(dst).Kind() == reflect.Struct {
+		return badRequest("rest/binding: destination must be a pointer to struct")
+	}
+	if _, err := fill(reflect.ValueOf(dst), values, nil, tag, ""); err != nil {
 		return err
 	}
 	return validate(dst)
@@ -33,35 +38,39 @@ func mapWithFiles(dst any, values map[string][]string, files map[string][]*multi
 	if err := checkDestination(dst); err != nil {
 		return err
 	}
-	if _, err := fill(reflect.ValueOf(dst), values, files, tag); err != nil {
+	if reflect.ValueOf(dst).Kind() == reflect.Struct {
+		return badRequest("rest/binding: destination must be a pointer to struct")
+	}
+	if _, err := fill(reflect.ValueOf(dst), values, files, tag, ""); err != nil {
 		return err
 	}
 	return validate(dst)
 }
 
 // fill walks value and assigns every matching field, reporting whether anything
-// was set. It allocates nil pointers on demand.
-func fill(value reflect.Value, values map[string][]string, files map[string][]*multipart.FileHeader, tag string) (bool, error) {
+// was set. It allocates nil pointers on demand. prefix is prepended to the key
+// of every field below value (nested structs use "field." prefixes).
+func fill(value reflect.Value, values map[string][]string, files map[string][]*multipart.FileHeader, tag, prefix string) (bool, error) {
 	switch value.Kind() {
 	case reflect.Pointer:
 		if value.IsNil() {
 			created := reflect.New(value.Type().Elem())
-			set, err := fill(created.Elem(), values, files, tag)
+			set, err := fill(created.Elem(), values, files, tag, prefix)
 			if err != nil || !set {
 				return false, err
 			}
 			value.Set(created)
 			return true, nil
 		}
-		return fill(value.Elem(), values, files, tag)
+		return fill(value.Elem(), values, files, tag, prefix)
 	case reflect.Struct:
-		return fillStruct(value, values, files, tag)
+		return fillStruct(value, values, files, tag, prefix)
 	default:
 		return false, nil
 	}
 }
 
-func fillStruct(value reflect.Value, values map[string][]string, files map[string][]*multipart.FileHeader, tag string) (bool, error) {
+func fillStruct(value reflect.Value, values map[string][]string, files map[string][]*multipart.FileHeader, tag, prefix string) (bool, error) {
 	structType := value.Type()
 	setAny := false
 
@@ -72,8 +81,10 @@ func fillStruct(value reflect.Value, values map[string][]string, files map[strin
 			continue
 		}
 
+		// Embedded fields are flattened into the parent's key space, matching
+		// the behaviour of encoding/json.
 		if field.Anonymous {
-			set, err := fill(fieldValue, values, files, tag)
+			set, err := fill(fieldValue, values, files, tag, prefix)
 			if err != nil {
 				return false, err
 			}
@@ -85,8 +96,30 @@ func fillStruct(value reflect.Value, values map[string][]string, files map[strin
 		if !ok {
 			continue
 		}
+		fullKey := key
+		if prefix != "" {
+			fullKey = prefix + key
+		}
 
-		set, err := setField(fieldValue, field, key, values, files)
+		if isNestedStruct(fieldValue.Type()) {
+			if hasNestedKeys(values, files, fullKey+".") {
+				set, err := fill(fieldValue, values, files, tag, fullKey+".")
+				if err != nil {
+					return false, err
+				}
+				setAny = setAny || set
+				continue
+			}
+			// A scalar value aimed at a struct field is a mapping error, not a
+			// silent no-op (Dot-separated keys are the supported form).
+			if _, ok := values[fullKey]; ok {
+				return false, badRequest("rest/binding: field %q: unsupported type %s",
+					fullKey, fieldValue.Type())
+			}
+			continue
+		}
+
+		set, err := setField(fieldValue, field, fullKey, values, files)
 		if err != nil {
 			return false, err
 		}
@@ -94,6 +127,34 @@ func fillStruct(value reflect.Value, values map[string][]string, files map[strin
 	}
 
 	return setAny, nil
+}
+
+// isNestedStruct reports whether t is a struct that has to be filled through
+// nested keys instead of a scalar conversion. time.Time and TextUnmarshaler
+// structs are scalar values.
+func isNestedStruct(t reflect.Type) bool {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct || t == timeType {
+		return false
+	}
+	return !reflect.PointerTo(t).Implements(textUnmarshalerType)
+}
+
+// hasNestedKeys reports whether any key lives under prefix ("field.").
+func hasNestedKeys(values map[string][]string, files map[string][]*multipart.FileHeader, prefix string) bool {
+	for key := range values {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	for key := range files {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // fieldKey resolves the lookup key for a field, honouring "-" as skip.
@@ -167,6 +228,13 @@ func setScalar(value reflect.Value, key, raw string) (bool, error) {
 		}
 		value.Set(created)
 		return true, nil
+	}
+
+	// time.Time implements encoding.TextUnmarshaler with an RFC 3339-only parser.
+	// Route it through setTime so values, pointers and slices all accept the same
+	// layouts (RFC 3339 and "2006-01-02").
+	if value.Type() == timeType {
+		return setTime(value, key, raw)
 	}
 
 	if value.CanAddr() {

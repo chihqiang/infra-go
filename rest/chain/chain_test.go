@@ -52,3 +52,17 @@ func TestChain_ThenFuncWithNilHandler(t *testing.T) {
 		t.Fatal("fallback handler wrote no status")
 	}
 }
+
+func TestChain_SkipsNilMiddleware(t *testing.T) {
+	called := false
+	handler := New(nil, func(next http.HandlerFunc) http.HandlerFunc {
+		return next
+	}, nil).ThenFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	})
+
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	if !called {
+		t.Fatal("handler was not called with nil middlewares in the chain")
+	}
+}

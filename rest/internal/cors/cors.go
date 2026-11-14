@@ -3,6 +3,7 @@ package cors
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/chihqiang/infra-go/rest/internal/response"
@@ -38,6 +39,10 @@ func AddAllowHeaders(header http.Header, headers ...string) {
 
 // Middleware adds CORS headers to responses. With no origins configured, all
 // origins are allowed without credentials. A nil headerFn is ignored.
+//
+// Only a real preflight (OPTIONS with both Origin and
+// Access-Control-Request-Method) is answered locally; plain OPTIONS requests
+// still reach the route, so handlers can implement their own OPTIONS semantics.
 func Middleware(headerFn func(http.Header), origins ...string) func(http.HandlerFunc) http.HandlerFunc {
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -46,7 +51,7 @@ func Middleware(headerFn func(http.Header), origins ...string) func(http.Handler
 				headerFn(w.Header())
 			}
 
-			if r.Method == http.MethodOptions {
+			if isPreflight(r) {
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
@@ -66,11 +71,19 @@ func NotAllowedHandler(fn func(http.ResponseWriter), origins ...string) http.Han
 		}
 
 		status := http.StatusNotFound
-		if r.Method == http.MethodOptions {
+		if isPreflight(r) {
 			status = http.StatusNoContent
 		}
 		writer.Flush(status)
 	})
+}
+
+// isPreflight reports whether r is a CORS preflight request: an OPTIONS request
+// that announces both the requesting origin and the intended method.
+func isPreflight(r *http.Request) bool {
+	return r.Method == http.MethodOptions &&
+		r.Header.Get(headerOrigin) != "" &&
+		r.Header.Get(headerRequestMethod) != ""
 }
 
 func writeHeaders(w http.ResponseWriter, r *http.Request, origins []string) {
@@ -96,11 +109,24 @@ func writeHeaders(w http.ResponseWriter, r *http.Request, origins []string) {
 
 func setVary(w http.ResponseWriter, r *http.Request) {
 	header := w.Header()
-	header.Add(headerVary, headerOrigin)
+	addVary(header, headerOrigin)
 	if r.Method == http.MethodOptions {
-		header.Add(headerVary, headerRequestMethod)
-		header.Add(headerVary, headerRequestHeaders)
+		addVary(header, headerRequestMethod)
+		addVary(header, headerRequestHeaders)
 	}
+}
+
+// addVary appends value unless it is already present, so CORS running both as
+// middleware and as the not-found fallback does not duplicate Vary entries.
+func addVary(header http.Header, value string) {
+	for _, existing := range header.Values(headerVary) {
+		for _, part := range strings.Split(existing, ",") {
+			if strings.EqualFold(strings.TrimSpace(part), value) {
+				return
+			}
+		}
+	}
+	header.Add(headerVary, value)
 }
 
 func allowedOrigin(origins []string, origin string) string {
@@ -120,10 +146,42 @@ func allowedOrigin(origins []string, origin string) string {
 }
 
 func matchesOrigin(allowed, origin string) bool {
-	allowed = strings.ToLower(strings.TrimSuffix(allowed, "/"))
-	origin = strings.ToLower(strings.TrimSuffix(origin, "/"))
+	allowed = normalizeOrigin(allowed)
+	origin = normalizeOrigin(origin)
 	if allowed == "" || origin == "" {
 		return false
 	}
-	return origin == allowed || strings.HasSuffix(origin, "."+allowed)
+	if origin == allowed {
+		return true
+	}
+	// Entries with a scheme are matched exactly (case-insensitively). Subdomain
+	// wildcards require the scheme-less host form, e.g. "example.com" matches
+	// "https://api.example.com" but not an unrelated host.
+	if strings.Contains(allowed, "://") {
+		return false
+	}
+	// Refuse bare top-level labels such as "com": the suffix check below would
+	// otherwise allow every ".com" origin.
+	if !strings.Contains(allowed, ".") {
+		return false
+	}
+
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" {
+		return false
+	}
+	return host == allowed || strings.HasSuffix(host, "."+allowed)
+}
+
+// normalizeOrigin makes origin comparisons case-insensitive and ignores a
+// single trailing slash.
+func normalizeOrigin(value string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(value), "/"))
 }

@@ -12,7 +12,9 @@ const (
 	encodingGzip          = "gzip"
 )
 
-// GunzipHandler transparently decompresses gzip-encoded request bodies.
+// GunzipHandler transparently decompresses gzip-encoded request bodies. Place it
+// before MaxBytesHandler so the body limit is applied to the decompressed data
+// instead of the (possibly tiny) compressed payload.
 func GunzipHandler(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.Header.Get(headerContentEncoding), encodingGzip) {

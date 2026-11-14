@@ -46,10 +46,24 @@ func decodeJSON(decoder *json.Decoder, dst any) error {
 		if errors.Is(err, io.EOF) {
 			return badRequest("rest/binding: json body is empty")
 		}
-		return badRequest("rest/binding: decode json: %v", err)
+		return requestError("rest/binding: decode json: %w", err)
 	}
-	if decoder.More() {
-		return badRequest("rest/binding: json body contains trailing data")
+	if err := ensureJSONEOF(decoder); err != nil {
+		return err
 	}
 	return nil
+}
+
+// ensureJSONEOF rejects anything after the top-level JSON value. json.Decoder.More
+// is not enough: it reports false for a trailing '}' or ']', silently accepting
+// malformed documents such as `{"a":1}}`.
+func ensureJSONEOF(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err != nil {
+		return badRequest("rest/binding: json body contains trailing data: %v", err)
+	}
+	return badRequest("rest/binding: json body contains trailing data: %v", token)
 }

@@ -8,6 +8,7 @@ package binding
 import (
 	"mime"
 	"net/http"
+	"reflect"
 	"strings"
 )
 
@@ -133,6 +134,10 @@ func normalizeMediaType(value string) string {
 func checkDestination(dst any) error {
 	if dst == nil {
 		return badRequest("rest/binding: destination must not be nil")
+	}
+	value := reflect.ValueOf(dst)
+	if value.Kind() == reflect.Pointer && value.IsNil() {
+		return badRequest("rest/binding: destination must be a non-nil pointer")
 	}
 	return nil
 }

@@ -219,3 +219,27 @@ func TestLogHandlerGlobalLoggerLevels(t *testing.T) {
 		t.Fatalf("infos = %d, want 1", counter.infos)
 	}
 }
+
+func TestLogRecordsPanickingRequestAndRepanics(t *testing.T) {
+	log := &recordingLogger{}
+	handlerFn := LogHandlerWith(log)(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	})
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != "boom" {
+				t.Fatalf("panic = %v, want boom", recovered)
+			}
+		}()
+		handlerFn.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/users", nil))
+	}()
+
+	if len(log.entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(log.entries))
+	}
+	entry := log.entries[0]
+	if entry.level != "error" || entry.fields["status"] != int64(http.StatusInternalServerError) {
+		t.Fatalf("entry = %+v, want 500 error record", entry)
+	}
+}

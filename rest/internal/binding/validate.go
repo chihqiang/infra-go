@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 
 	"github.com/go-playground/validator/v10"
 )
@@ -40,6 +41,10 @@ func validate(dst any) error {
 
 // defaultValidator runs go-playground/validator using the "binding" tag.
 type defaultValidator struct {
+	// once guards the lazy construction of engine. Bind is called from every
+	// request goroutine, so building the engine without synchronization races on
+	// the first concurrent requests.
+	once   sync.Once
 	engine *validator.Validate
 }
 
@@ -101,9 +106,10 @@ func (v *defaultValidator) Engine() any {
 }
 
 func (v *defaultValidator) validator() *validator.Validate {
-	if v.engine == nil {
-		v.engine = validator.New()
-		v.engine.SetTagName("binding")
-	}
+	v.once.Do(func() {
+		engine := validator.New()
+		engine.SetTagName("binding")
+		v.engine = engine
+	})
 	return v.engine
 }

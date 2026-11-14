@@ -102,3 +102,26 @@ func TestBreakerHandlerFailsFastWhenOpen(t *testing.T) {
 		t.Fatalf("status = %d, want 503", recorder.Code)
 	}
 }
+
+func TestBreakerHandlerRejectsPanickingRequest(t *testing.T) {
+	br := &fakeBreaker{promise: &fakePromise{}}
+	handlerFn := BreakerHandler(br)(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	})
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != "boom" {
+				t.Fatalf("panic = %v, want boom", recovered)
+			}
+		}()
+		handlerFn.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	}()
+
+	if br.promise.accepted {
+		t.Fatal("panicking request must not be accepted")
+	}
+	if br.promise.rejected == "" {
+		t.Fatal("panicking request did not reject the breaker promise")
+	}
+}

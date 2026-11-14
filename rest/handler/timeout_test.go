@@ -71,6 +71,56 @@ func TestTimeoutCancelsHandlerContext(t *testing.T) {
 	}
 }
 
+func TestTimeoutRecoversHandlerPanicOnCallerGoroutine(t *testing.T) {
+	handler := RecoverHandler(TimeoutHandler(time.Second)(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	}))
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", recorder.Code)
+	}
+}
+
+func TestTimeoutPropagatesHandlerPanic(t *testing.T) {
+	handler := TimeoutHandler(time.Second)(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	})
+
+	defer func() {
+		if recovered := recover(); recovered != "boom" {
+			t.Fatalf("panic = %v, want boom", recovered)
+		}
+	}()
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+}
+
+func TestTimeoutContainsPanicAfterTimeout(t *testing.T) {
+	returned := make(chan struct{})
+	handler := TimeoutHandler(5 * time.Millisecond)(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+		close(returned)
+		panic("late boom")
+	})
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", recorder.Code)
+	}
+
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not run after the timeout")
+	}
+	// Give the worker goroutine a chance to panic; a regression crashes the
+	// test process instead of failing an assertion.
+	time.Sleep(20 * time.Millisecond)
+}
+
 func TestTimeoutNonPositiveDisablesMiddleware(t *testing.T) {
 	called := false
 	handler := TimeoutHandler(0)(func(http.ResponseWriter, *http.Request) {

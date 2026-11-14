@@ -39,6 +39,11 @@ func (c Chain) Then(h http.Handler) http.Handler {
 
 	next := http.HandlerFunc(h.ServeHTTP)
 	for i := len(c.middlewares) - 1; i >= 0; i-- {
+		// Skip nil entries so a conditional middleware (or Use(nil)) degrades to
+		// a no-op instead of panicking on the first request.
+		if c.middlewares[i] == nil {
+			continue
+		}
 		next = c.middlewares[i](next)
 	}
 	return next

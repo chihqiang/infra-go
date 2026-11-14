@@ -102,9 +102,21 @@ func (p *Parser) Parse(token string) (*Claims, error) {
 }
 
 func (p *Parser) parseWithSecret(token, secret string) (*Claims, error) {
+	options := []jwtlib.ParserOption{
+		jwtlib.WithValidMethods([]string{jwtlib.SigningMethodHS256.Alg()}),
+		// Generate always sets exp, so require it here as well; this also rejects
+		// tokens minted elsewhere without an expiry.
+		jwtlib.WithExpirationRequired(),
+	}
+	if p.conf.Issuer != "" {
+		// Without this check tokens signed with the same secret by another
+		// service (a different iss) would be accepted.
+		options = append(options, jwtlib.WithIssuer(p.conf.Issuer))
+	}
+
 	parsed, err := jwtlib.Parse(token, func(*jwtlib.Token) (any, error) {
 		return []byte(secret), nil
-	}, jwtlib.WithValidMethods([]string{jwtlib.SigningMethodHS256.Alg()}))
+	}, options...)
 	if err != nil {
 		return nil, err
 	}

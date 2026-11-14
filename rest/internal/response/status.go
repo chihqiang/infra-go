@@ -1,6 +1,10 @@
 package response
 
-import "net/http"
+import (
+	"bufio"
+	"net"
+	"net/http"
+)
 
 // StatusWriter records the response status while delegating to the inner writer.
 type StatusWriter struct {
@@ -40,4 +44,16 @@ func (s *StatusWriter) Status() int {
 // Unwrap exposes the underlying writer to http.ResponseController.
 func (s *StatusWriter) Unwrap() http.ResponseWriter {
 	return s.ResponseWriter
+}
+
+// Flush implements http.Flusher so streaming handlers (SSE, long polling) keep
+// working behind logging, tracing and breaker middleware.
+func (s *StatusWriter) Flush() {
+	_ = http.NewResponseController(s.ResponseWriter).Flush()
+}
+
+// Hijack implements http.Hijacker so protocol upgrades (WebSocket, CONNECT)
+// keep working behind logging, tracing and breaker middleware.
+func (s *StatusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return http.NewResponseController(s.ResponseWriter).Hijack()
 }

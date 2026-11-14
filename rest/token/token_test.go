@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	jwtlib "github.com/golang-jwt/jwt/v5"
 )
 
 const testSecret = "a-sufficiently-long-secret"
@@ -97,5 +99,39 @@ func TestParseAcceptsPreviousSecret(t *testing.T) {
 	rotated := newParser(t, Config{Secret: "the-new-signing-secret", PrevSecret: testSecret, Expire: time.Hour})
 	if _, err := rotated.Parse(token); err != nil {
 		t.Fatalf("previous secret should still verify: %v", err)
+	}
+}
+
+func TestNewRejectsShortPreviousSecret(t *testing.T) {
+	_, err := NewParser(Config{Secret: testSecret, PrevSecret: "short"})
+	if !errors.Is(err, ErrShortPrevSecret) {
+		t.Fatalf("error = %v, want ErrShortPrevSecret", err)
+	}
+}
+
+func TestParseRejectsForeignIssuer(t *testing.T) {
+	issuerA := newParser(t, Config{Issuer: "service-a", Expire: time.Hour})
+	signed, err := issuerA.Generate("user-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	issuerB := newParser(t, Config{Issuer: "service-b", Expire: time.Hour})
+	if _, err := issuerB.Parse(signed); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("error = %v, want ErrInvalidToken", err)
+	}
+}
+
+func TestParseRejectsTokenWithoutExpiry(t *testing.T) {
+	parser := newParser(t, Config{Expire: time.Hour})
+
+	raw, err := jwtlib.NewWithClaims(jwtlib.SigningMethodHS256, jwtlib.MapClaims{
+		"sub": "user-1",
+	}).SignedString([]byte(testSecret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parser.Parse(raw); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("error = %v, want ErrInvalidToken", err)
 	}
 }

@@ -20,6 +20,7 @@ func TestWithCorsAppliesHeadersAndPreflight(t *testing.T) {
 	preflight := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodOptions, "/users", nil)
 	request.Header.Set("Origin", "https://example.com")
+	request.Header.Set("Access-Control-Request-Method", http.MethodGet)
 	server.ServeHTTP(preflight, request)
 	if preflight.Code != http.StatusNoContent {
 		t.Fatalf("preflight status = %d, want %d", preflight.Code, http.StatusNoContent)
@@ -160,6 +161,31 @@ func TestCustomCorsOverridesUnmatchedResponse(t *testing.T) {
 
 	if recorder.Code != http.StatusNotFound || recorder.Body.String() != "blocked" {
 		t.Fatalf("response = %d %q, want the CORS rejection response", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "https://example.com" {
+		t.Fatalf("allow origin = %q", got)
+	}
+}
+
+func TestWithCorsForwardsPlainOptionsToRoute(t *testing.T) {
+	server, err := NewServer(Config{}, WithCors("https://example.com"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	server.HandleFunc(http.MethodOptions, "/users", func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.Header().Set("Allow", "GET, OPTIONS")
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodOptions, "/users", nil)
+	request.Header.Set("Origin", "https://example.com")
+	server.ServeHTTP(recorder, request)
+
+	if !called {
+		t.Fatal("plain OPTIONS request did not reach the route handler")
 	}
 	if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "https://example.com" {
 		t.Fatalf("allow origin = %q", got)

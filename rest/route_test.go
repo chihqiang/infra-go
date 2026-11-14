@@ -260,3 +260,26 @@ func TestRouteGroupAddRoutes(t *testing.T) {
 		}
 	}
 }
+
+func TestRouteGroupInheritsMiddlewareAddedAfterChildCreation(t *testing.T) {
+	server, err := NewServer(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parent := server.Group("/api")
+	child := parent.Group("/v1")
+	parent.Use(func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Late", "applied")
+			next(w, r)
+		}
+	})
+	child.HandleFunc(http.MethodGet, "/users", func(http.ResponseWriter, *http.Request) {})
+
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/users", nil))
+	if got := recorder.Header().Get("X-Late"); got != "applied" {
+		t.Fatalf("late parent middleware header = %q, want applied", got)
+	}
+}

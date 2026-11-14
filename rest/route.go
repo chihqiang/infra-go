@@ -75,8 +75,9 @@ func (s *Server) PrintRoutes(w io.Writer) error {
 		return nil
 	}
 
-	lines := make([]string, 0, len(s.Routes()))
-	for _, route := range s.Routes() {
+	routes := s.Routes()
+	lines := make([]string, 0, len(routes))
+	for _, route := range routes {
 		lines = append(lines, strings.TrimSpace(route.Method+" "+route.Path))
 	}
 	sort.Strings(lines)
@@ -89,6 +90,7 @@ func (s *Server) PrintRoutes(w io.Writer) error {
 type RouteGroup struct {
 	server      *Server
 	prefix      string
+	parent      *RouteGroup
 	middlewares []chain.Middleware
 }
 
@@ -97,12 +99,14 @@ func (s *Server) Group(prefix string) *RouteGroup {
 	return &RouteGroup{server: s, prefix: router.NormalizePath(prefix)}
 }
 
-// Group creates a nested route group under the current prefix.
+// Group creates a nested route group under the current prefix. Middleware is
+// resolved when a route is registered, so a Use call on the parent also applies
+// to routes added through an already-created child group.
 func (g *RouteGroup) Group(prefix string) *RouteGroup {
 	return &RouteGroup{
-		server:      g.server,
-		prefix:      router.JoinPath(g.prefix, prefix),
-		middlewares: append([]chain.Middleware(nil), g.middlewares...),
+		server: g.server,
+		prefix: router.JoinPath(g.prefix, prefix),
+		parent: g,
 	}
 }
 
@@ -137,8 +141,22 @@ func (g *RouteGroup) AddRoutes(routes ...Route) {
 }
 
 func (g *RouteGroup) wrap(handler http.Handler) http.Handler {
-	if handler == nil || len(g.middlewares) == 0 {
+	middlewares := g.middlewareChain()
+	if handler == nil || len(middlewares) == 0 {
 		return handler
 	}
-	return chain.New(g.middlewares...).Then(handler)
+	return chain.New(middlewares...).Then(handler)
+}
+
+// middlewareChain resolves inherited middleware at registration time so a
+// parent's later Use call is not lost in already-created child groups.
+func (g *RouteGroup) middlewareChain() []chain.Middleware {
+	var inherited []chain.Middleware
+	if g.parent != nil {
+		inherited = g.parent.middlewareChain()
+	}
+	middlewares := make([]chain.Middleware, 0, len(inherited)+len(g.middlewares))
+	middlewares = append(middlewares, inherited...)
+	middlewares = append(middlewares, g.middlewares...)
+	return middlewares
 }

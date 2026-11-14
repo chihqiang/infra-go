@@ -221,6 +221,20 @@ type errDatabase struct{}
 
 func (errDatabase) Error() string { return "database exploded" }
 
+func TestErrorKeepsBusinessCodeMessage(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	if err := Error(recorder, New(4001, "invalid order")); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", recorder.Code)
+	}
+	envelope := decodeEnvelope(t, recorder.Body.Bytes())
+	if envelope["code"] != float64(4001) || envelope["msg"] != "invalid order" {
+		t.Fatalf("envelope = %v", envelope)
+	}
+}
+
 func TestJSONBaseResponseCtxCarriesRequestID(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	var body []byte

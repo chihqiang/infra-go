@@ -16,10 +16,10 @@ func (formBinding) Name() string { return "form" }
 // Bind merges the query string with the request body, body values winning.
 func (formBinding) Bind(req *http.Request, dst any) error {
 	if err := req.ParseForm(); err != nil {
-		return badRequest("rest/binding: parse form: %v", err)
+		return requestError("rest/binding: parse form: %w", err)
 	}
 	if err := req.ParseMultipartForm(defaultMemory); err != nil && !errors.Is(err, http.ErrNotMultipart) {
-		return badRequest("rest/binding: parse multipart form: %v", err)
+		return requestError("rest/binding: parse multipart form: %w", err)
 	}
 
 	values := make(map[string][]string, len(req.Form))
@@ -43,7 +43,7 @@ func (formPostBinding) Name() string { return "form-urlencoded" }
 // Bind reads only the request body values.
 func (formPostBinding) Bind(req *http.Request, dst any) error {
 	if err := req.ParseForm(); err != nil {
-		return badRequest("rest/binding: parse form: %v", err)
+		return requestError("rest/binding: parse form: %w", err)
 	}
 	return mapByTag(dst, req.PostForm, "form")
 }
@@ -59,7 +59,7 @@ func (formBodyBinding) Bind(req *http.Request, dst any) error {
 	}
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
-		return badRequest("rest/binding: read form body: %v", err)
+		return requestError("rest/binding: read form body: %w", err)
 	}
 	values, err := url.ParseQuery(string(body))
 	if err != nil {
@@ -73,7 +73,7 @@ func (formMultipartBinding) Name() string { return "multipart/form-data" }
 // Bind reads multipart values and uploaded files.
 func (formMultipartBinding) Bind(req *http.Request, dst any) error {
 	if err := req.ParseMultipartForm(defaultMemory); err != nil {
-		return badRequest("rest/binding: parse multipart form: %v", err)
+		return requestError("rest/binding: parse multipart form: %w", err)
 	}
 
 	values := make(map[string][]string, len(req.URL.Query()))

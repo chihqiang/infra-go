@@ -58,6 +58,7 @@ func TestMiddlewareAnswersPreflightWithoutCallingNext(t *testing.T) {
 	}))
 	request := httptest.NewRequest(http.MethodOptions, "/users", nil)
 	request.Header.Set("Origin", "https://example.com")
+	request.Header.Set("Access-Control-Request-Method", http.MethodPost)
 	recorder := httptest.NewRecorder()
 
 	handler.ServeHTTP(recorder, request)
@@ -67,6 +68,27 @@ func TestMiddlewareAnswersPreflightWithoutCallingNext(t *testing.T) {
 	}
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNoContent)
+	}
+}
+
+func TestMiddlewarePassesPlainOptionsToNext(t *testing.T) {
+	called := false
+	handler := Middleware(nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// An OPTIONS request without Origin/Request-Method is not a preflight and
+	// must reach the route handler.
+	request := httptest.NewRequest(http.MethodOptions, "/users", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if !called {
+		t.Fatal("plain OPTIONS request did not reach the next handler")
+	}
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
 	}
 }
 
@@ -98,5 +120,29 @@ func TestAddAllowHeaders(t *testing.T) {
 
 	if got := header.Values("Access-Control-Allow-Headers"); len(got) != 1 || got[0] != "X-Token, X-Trace" {
 		t.Fatalf("allow headers = %v", got)
+	}
+}
+
+func TestMatchesOrigin(t *testing.T) {
+	tests := []struct {
+		allowed string
+		origin  string
+		want    bool
+	}{
+		{allowed: "https://example.com", origin: "https://example.com", want: true},
+		{allowed: "https://example.com", origin: "https://api.example.com", want: false},
+		{allowed: "example.com", origin: "https://example.com", want: true},
+		{allowed: "example.com", origin: "https://api.example.com", want: true},
+		{allowed: "example.com", origin: "http://api.example.com:8080", want: true},
+		{allowed: "com", origin: "https://evil.com", want: false},
+		{allowed: "example.com", origin: "https://notexample.com", want: false},
+		{allowed: "example.com", origin: "ftp://api.example.com", want: false},
+		{allowed: "", origin: "https://example.com", want: false},
+	}
+	for _, test := range tests {
+		if got := matchesOrigin(test.allowed, test.origin); got != test.want {
+			t.Errorf("matchesOrigin(%q, %q) = %v, want %v",
+				test.allowed, test.origin, got, test.want)
+		}
 	}
 }

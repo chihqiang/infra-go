@@ -1,7 +1,9 @@
 package service
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 
 	"github.com/chihqiang/infra-go/core/logger"
@@ -282,7 +284,10 @@ type errorServiceAdapter[T interface {
 }
 
 func (a errorServiceAdapter[T]) Start() {
-	if err := a.s.Start(); err != nil {
+	err := a.s.Start()
+	// http.Server.Serve returns ErrServerClosed after Shutdown/Close; that is a
+	// normal graceful stop, not an error worth logging.
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("service: managed service start returned error",
 			logger.Err(err),
 			logger.String("type", fmt.Sprintf("%T", a.s)))

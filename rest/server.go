@@ -42,11 +42,15 @@ func NewServer(conf Config, opts ...Option) (*Server, error) {
 	}
 
 	routes := router.New()
+	shutdownTimeout := conf.ShutdownTimeout
+	if shutdownTimeout <= 0 {
+		shutdownTimeout = defaultShutdownTimeout
+	}
 	server := &Server{
 		router:          routes,
 		certFile:        conf.CertFile,
 		keyFile:         conf.KeyFile,
-		shutdownTimeout: conf.ShutdownTimeout,
+		shutdownTimeout: shutdownTimeout,
 		addr:            net.JoinHostPort(conf.Host, strconv.Itoa(conf.Port)),
 	}
 	server.middlewares = buildMiddlewares(conf)
@@ -97,11 +101,14 @@ func buildMiddlewares(conf Config) []chain.Middleware {
 	if conf.Middlewares.Timeout > 0 {
 		middlewares = append(middlewares, resthandler.TimeoutHandler(conf.Middlewares.Timeout))
 	}
-	if conf.MaxBodyBytes > 0 {
-		middlewares = append(middlewares, resthandler.MaxBytesHandler(conf.MaxBodyBytes))
-	}
+	// Gunzip must run before MaxBodyBytes: the limit has to apply to the
+	// decompressed payload, otherwise a small gzip body can expand without
+	// bound (decompression bomb).
 	if conf.Middlewares.Gunzip {
 		middlewares = append(middlewares, resthandler.GunzipHandler)
+	}
+	if conf.MaxBodyBytes > 0 {
+		middlewares = append(middlewares, resthandler.MaxBytesHandler(conf.MaxBodyBytes))
 	}
 
 	return middlewares
@@ -189,17 +196,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // Start serves requests until the server is stopped or encounters an error.
 // The bound address is recorded so Addr reports the real port, including when
-// Port is 0.
+// Port is 0 and when TLS is enabled.
 func (s *Server) Start() error {
-	if s.certFile != "" && s.keyFile != "" {
-		return s.httpServer.ListenAndServeTLS(s.certFile, s.keyFile)
-	}
-
 	listener, err := net.Listen("tcp", s.httpServer.Addr)
 	if err != nil {
 		return err
 	}
-	return s.Serve(listener)
+	if err := s.Serve(listener); err != nil {
+		// http.Server closes plain listeners itself, but ServeTLS can return
+		// before taking ownership (for example when the certificate is invalid).
+		_ = listener.Close()
+		return err
+	}
+	return nil
 }
 
 // Serve serves requests on the supplied listener and records its address so

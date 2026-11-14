@@ -30,7 +30,8 @@ func StatusOf(err error) int {
 
 	var coder StatusCoder
 	if errors.As(err, &coder) {
-		if status := coder.StatusCode(); status != 0 {
+		// Ignore out-of-range values: passing them to WriteHeader would panic.
+		if status := coder.StatusCode(); status >= 100 && status <= 999 {
 			return status
 		}
 	}
@@ -64,6 +65,21 @@ type CodeMsg struct {
 // Error renders the code and message.
 func (c *CodeMsg) Error() string {
 	return fmt.Sprintf("code: %d, msg: %s", c.Code, c.Msg)
+}
+
+// StatusCode maps the business code onto an HTTP status so the error can be
+// passed to Error: codes that already are HTTP 4xx/5xx statuses are used as-is,
+// every other business code is treated as a client-side failure (400). This
+// keeps the business message visible instead of turning every CodeMsg into a
+// hidden 500.
+func (c *CodeMsg) StatusCode() int {
+	if c == nil {
+		return 0
+	}
+	if c.Code >= 400 && c.Code <= 599 {
+		return c.Code
+	}
+	return http.StatusBadRequest
 }
 
 // New creates a CodeMsg error carrying a business code.

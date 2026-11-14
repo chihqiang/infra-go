@@ -131,9 +131,10 @@ and negative limits.
 Middleware execution order is fixed by the server:
 
 ```text
-Recover → RequestID → Trace → Log → MaxConns → Timeout → MaxBodyBytes → Gunzip → Use(...) → route
+Recover → RequestID → Trace → Log → MaxConns → Timeout → Gunzip → MaxBodyBytes → Use(...) → route
 ```
 
+`Gunzip` runs before `MaxBodyBytes` so the body limit applies to the decompressed payload.
 CORS wraps the whole chain, so 404/405 responses carry CORS headers too.
 
 ## Server
@@ -177,11 +178,13 @@ server, _ := rest.NewServer(conf,
 
 | Option | Effect |
 |--------|--------|
-| `WithCors(origins ...string)` | Allow the given origins (all origins when empty, no credentials) |
+| `WithCors(origins ...string)` | Allow the given origins (all origins when empty, no credentials). Entries with a scheme match exactly; a scheme-less host also allows its subdomains |
 | `WithCorsHeaders(headers ...string)` | Append allowed request headers |
 | `WithCustomCors(headerFn, notAllowedFn, origins...)` | Customise headers and the rejected-request body |
 
-Preflight `OPTIONS` requests are answered with 204 before reaching a route.
+A real preflight (`OPTIONS` with both `Origin` and `Access-Control-Request-Method`) is answered
+with 204 before reaching a route. Plain `OPTIONS` requests still reach the route handler, so custom
+OPTIONS semantics keep working.
 
 ## Route options
 
@@ -215,13 +218,16 @@ the message for 4xx.
 
 Status resolution order in `StatusOf`:
 
-1. `StatusCoder` (`StatusCode() int`) implemented by the error chain
-2. Sentinels: `ErrBadRequest`, `ErrUnauthorized`, `ErrForbidden`, `ErrNotFound`, `ErrConflict`,
+1. `StatusCoder` (`StatusCode() int`) implemented by the error chain; values outside 100–999 are
+   ignored
+2. `CodeMsg`: a code in the HTTP 4xx/5xx range is used as-is, any other business code becomes 400
+   so the message is preserved
+3. Sentinels: `ErrBadRequest`, `ErrUnauthorized`, `ErrForbidden`, `ErrNotFound`, `ErrConflict`,
    `ErrTooManyRequests`, `ErrServiceUnavailable`
-3. Anything else → 500
+4. Anything else → 500
 
 Decode failures are wrapped in an internal error that implements `StatusCoder`, so `rest.Error` maps
-them to 400 and unsupported content types to 415 automatically.
+them to 400, unsupported content types to 415 and oversized bodies to 413 automatically.
 
 ## Binding
 
@@ -247,9 +253,20 @@ Every mapper falls back to the `json` tag when the source tag is absent, and
 `"-"` skips a field.
 
 Supported field types: `string`, `bool`, numbers, `[]byte`, `time.Time`
-(RFC 3339 or `2006-01-02`), `time.Duration`, slices of the above,
-`encoding.TextUnmarshaler` and nested/embedded structs (pointers are allocated
-on demand).
+(RFC 3339 or `2006-01-02`, including pointers and slices), `time.Duration`, slices of the above,
+`encoding.TextUnmarshaler` and nested/embedded structs (pointers are allocated on demand).
+
+Nested structs are addressed with dotted keys based on the field tag; embedded fields are
+flattened:
+
+```go
+type Request struct {
+    Profile Profile `json:"profile"`
+    Owner   *Owner  `json:"owner"`
+}
+
+// ?profile.name=ada&owner.email=ada@example.com
+```
 
 ## Validation
 
@@ -288,7 +305,7 @@ used without a `rest.Server`:
 | `TraceHandler(opts...)` | OTel server span; `WithTraceServiceName`, `WithTraceIgnorePaths` |
 | `LogHandler(opts...)` / `LogHandlerWith(log, opts...)` | Access log via `core/logger` with method/pattern/status/duration/ip/request_id; `WithLogSkipPaths`, `WithLogServiceName` |
 | `MaxConnsHandler(n)` | Cap in-flight requests → 503 |
-| `TimeoutHandler(d)` | Bound handler time → 503, discards late writes |
+| `TimeoutHandler(d)` | Bound handler time → 503, discards late writes; handler panics are re-raised on the caller goroutine so recovery middleware still handles them |
 | `MaxBytesHandler(n)` | 413 for oversized bodies, `http.MaxBytesReader` for streaming |
 | `GunzipHandler` | Transparently decompresses `Content-Encoding: gzip` |
 | `RateLimitHandler(limiter)` / `RateLimitPerSecondHandler(rate, burst)` | 429 via `core/ratelimit` |
@@ -310,6 +327,9 @@ signed, err := parser.Generate("user-1", map[string]any{"role": "admin"})
 claims, err := parser.Parse(signed)      // Subject / Issuer / ExpiresAt / Data
 ```
 
+`Parse` verifies `iss` when `Issuer` is configured and requires the `exp` claim. `PrevSecret`
+must satisfy the same 8-character minimum as `Secret`.
+
 `handler.Authorize` stores the verified claims in the request context:
 
 ```go
@@ -329,8 +349,14 @@ sg.Start()
 
 ## Notes
 
-- `Server.Stop()` waits `Config.ShutdownTimeout` before forcing connections closed.
+- `Server.Stop()` waits `Config.ShutdownTimeout` before forcing connections closed; a zero value
+  falls back to 10s instead of closing connections immediately.
 - Custom 404/405 handlers keep `http.ServeMux`'s method-aware behaviour: a path match with a
   wrong method stays 405 instead of falling through to 404.
-- `internal/response` provides `HeaderOnceWriter`, `StatusWriter`, `DeferredWriter` and
-  `BufferedWriter`; they power CORS, logging, timeouts and custom fallbacks.
+- `internal/response` provides `StatusWriter`, `DeferredWriter` and `BufferedWriter`; they power
+  CORS, logging, timeouts and custom fallbacks. `StatusWriter` also forwards `Flush`/`Hijack`, so
+  streaming and protocol upgrades survive the logging/tracing/breaker middleware.
+- `service.AsService` treats `http.ErrServerClosed` as a normal shutdown rather than an error.
+- `ClientIP` and the access-log `ip` field trust `X-Forwarded-For` / `X-Real-IP` when they contain
+  a valid address. Terminate them at a trusted proxy that overwrites the headers, otherwise treat
+  the value as client-controlled.

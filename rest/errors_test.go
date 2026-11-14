@@ -12,6 +12,11 @@ type codedError struct{}
 func (codedError) Error() string   { return "gone" }
 func (codedError) StatusCode() int { return http.StatusGone }
 
+type invalidCodedError struct{}
+
+func (invalidCodedError) Error() string   { return "bad status" }
+func (invalidCodedError) StatusCode() int { return 42 }
+
 func TestStatusOf(t *testing.T) {
 	tests := []struct {
 		name string
@@ -27,6 +32,10 @@ func TestStatusOf(t *testing.T) {
 		{name: "too many requests", err: ErrTooManyRequests, want: http.StatusTooManyRequests},
 		{name: "unavailable", err: ErrServiceUnavailable, want: http.StatusServiceUnavailable},
 		{name: "status coder", err: codedError{}, want: http.StatusGone},
+		{name: "invalid status coder falls back", err: invalidCodedError{}, want: http.StatusInternalServerError},
+		{name: "code msg business code", err: New(4001, "invalid order"), want: http.StatusBadRequest},
+		{name: "code msg http code", err: New(http.StatusConflict, "conflict"), want: http.StatusConflict},
+		{name: "code msg typed nil", err: (*CodeMsg)(nil), want: http.StatusInternalServerError},
 		{name: "unknown", err: errors.New("boom"), want: http.StatusInternalServerError},
 	}
 

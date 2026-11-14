@@ -112,3 +112,25 @@ func TestTraceHandlerSkipsWildcardPaths(t *testing.T) {
 		t.Fatalf("spans = %d, want none for a wildcard-ignored path", len(spans))
 	}
 }
+
+func TestTraceHandlerEndsSpanOnPanic(t *testing.T) {
+	handlerFn := TraceHandler()(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	})
+
+	spans := captureSpans(t, func() {
+		defer func() { _ = recover() }()
+		handlerFn.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/users", nil))
+	})
+
+	if len(spans) != 1 {
+		t.Fatalf("spans = %d, want 1", len(spans))
+	}
+	attrs := map[string]string{}
+	for _, attr := range spans[0].Attributes {
+		attrs[string(attr.Key)] = attr.Value.Emit()
+	}
+	if attrs["http.response.status_code"] != "500" {
+		t.Fatalf("status attribute = %q, want 500", attrs["http.response.status_code"])
+	}
+}

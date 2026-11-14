@@ -58,16 +58,26 @@ func TraceHandler(opts ...TraceOption) chain.Middleware {
 				oteltrace.WithSpanKind(oteltrace.SpanKindServer),
 				oteltrace.WithAttributes(requestAttributes(r, options.serviceName)...),
 			)
-			defer span.End()
 
 			recorder := response.NewStatusWriter(w)
-			next(recorder, r.WithContext(ctx))
+			completed := false
+			// Finish the span from a defer so a panicking handler still ends it.
+			// A panic is recorded as a 500: the outer RecoverHandler answers with
+			// one, but its recovery is invisible to this middleware.
+			defer func() {
+				status := recorder.Status()
+				if !completed {
+					status = http.StatusInternalServerError
+					span.SetStatus(codes.Error, "handler panic")
+				} else if status >= http.StatusInternalServerError {
+					span.SetStatus(codes.Error, http.StatusText(status))
+				}
+				span.SetAttributes(attribute.Int("http.response.status_code", status))
+				span.End()
+			}()
 
-			status := recorder.Status()
-			span.SetAttributes(attribute.Int("http.response.status_code", status))
-			if status >= http.StatusInternalServerError {
-				span.SetStatus(codes.Error, http.StatusText(status))
-			}
+			next(recorder, r.WithContext(ctx))
+			completed = true
 		}
 	}
 }

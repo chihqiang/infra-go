@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -76,7 +77,10 @@ func TestJSONBindAndBindBody(t *testing.T) {
 }
 
 func TestJSONRejectsBadInput(t *testing.T) {
-	for _, body := range []string{`{"name":`, "", `{"name":"a"}{"name":"b"}`} {
+	for _, body := range []string{
+		`{"name":`, "", `{"name":"a"}{"name":"b"}`,
+		`{"name":"a"}}`, `{"name":"a"}]`,
+	} {
 		err := JSON.Bind(jsonRequest(body), &jsonPayload{})
 		if err == nil {
 			t.Fatalf("body %q should fail", body)
@@ -88,6 +92,46 @@ func TestJSONRejectsBadInput(t *testing.T) {
 
 	if err := JSON.Bind(jsonRequest(`{}`), nil); err == nil {
 		t.Fatal("nil destination should fail")
+	}
+}
+
+func TestDefaultValidatorInitializationIsConcurrentSafe(t *testing.T) {
+	previous := Validator
+	Validator = &defaultValidator{}
+	defer func() { Validator = previous }()
+
+	payload := struct {
+		Name string `json:"name" binding:"required"`
+	}{}
+
+	const goroutines = 32
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			target := payload
+			if err := JSON.BindBody([]byte(`{"name":"ada"}`), &target); err != nil {
+				t.Errorf("bind: %v", err)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+}
+
+func TestJSONTooLargeBodyMapsTo413(t *testing.T) {
+	req := jsonRequest(`{"name":"ada"}`)
+	req.Body = http.MaxBytesReader(httptest.NewRecorder(), req.Body, 4)
+
+	err := JSON.Bind(req, &jsonPayload{})
+	if err == nil {
+		t.Fatal("oversized body should fail")
+	}
+	if statusOf(t, err) != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", statusOf(t, err))
 	}
 }
 
@@ -110,6 +154,13 @@ func TestXMLBind(t *testing.T) {
 
 	if err := XML.BindBody([]byte(`<payload>`), &xmlPayload{}); err == nil {
 		t.Fatal("malformed xml should fail")
+	}
+
+	trailing := httptest.NewRequest(http.MethodPost, "/",
+		strings.NewReader(`<payload><name>ada</name></payload><payload><name>bob</name></payload>`))
+	trailing.Header.Set("Content-Type", MIMEXML)
+	if err := XML.Bind(trailing, &xmlPayload{}); err == nil {
+		t.Fatal("trailing XML document should fail")
 	}
 }
 
@@ -639,5 +690,92 @@ func TestSliceOfPointers(t *testing.T) {
 	}
 	if len(payload.Values) != 2 || *payload.Values[1] != 2 {
 		t.Fatalf("values = %v", payload.Values)
+	}
+}
+
+func TestBindRejectsTypedNilDestination(t *testing.T) {
+	type target struct {
+		Name string `json:"name"`
+	}
+	var typedNil *target
+
+	if err := Query.Bind(httptest.NewRequest(http.MethodGet, "/?name=ada", nil), typedNil); err == nil {
+		t.Fatal("typed nil destination should fail")
+	} else if statusOf(t, err) != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", statusOf(t, err))
+	}
+
+	if err := JSON.Bind(jsonRequest(`{"name":"ada"}`), typedNil); err == nil {
+		t.Fatal("typed nil destination should fail for JSON")
+	}
+}
+
+func TestNestedStructBinding(t *testing.T) {
+	type profile struct {
+		Name string `json:"name"`
+		Age  int    `json:"age"`
+	}
+	var payload struct {
+		Profile profile  `json:"profile"`
+		Owner   *profile `json:"owner"`
+		Absent  *profile `json:"absent"`
+	}
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/?profile.name=ada&profile.age=36&owner.name=bob", nil)
+	if err := Query.Bind(req, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Profile.Name != "ada" || payload.Profile.Age != 36 {
+		t.Fatalf("profile = %+v", payload.Profile)
+	}
+	if payload.Owner == nil || payload.Owner.Name != "bob" {
+		t.Fatalf("owner = %+v", payload.Owner)
+	}
+	if payload.Absent != nil {
+		t.Fatalf("absent = %+v, want nil", payload.Absent)
+	}
+}
+
+func TestTimeVariantsAcceptDateOnly(t *testing.T) {
+	var payload struct {
+		Times []time.Time `json:"times"`
+		Ptr   *time.Time  `json:"ptr"`
+	}
+	req := httptest.NewRequest(http.MethodGet, "/?times=2024-01-02&times=2024-01-03&ptr=2024-01-04", nil)
+	if err := Query.Bind(req, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Times) != 2 || payload.Times[0].Format("2006-01-02") != "2024-01-02" ||
+		payload.Times[1].Format("2006-01-02") != "2024-01-03" {
+		t.Fatalf("times = %v", payload.Times)
+	}
+	if payload.Ptr == nil || payload.Ptr.Format("2006-01-02") != "2024-01-04" {
+		t.Fatalf("ptr = %v", payload.Ptr)
+	}
+}
+
+func TestNestedStructDoesNotAcceptFlatKey(t *testing.T) {
+	var payload struct {
+		Profile struct {
+			Name string `json:"name"`
+		} `json:"profile"`
+	}
+	err := Query.Bind(httptest.NewRequest(http.MethodGet, "/?profile=ada", nil), &payload)
+	if err == nil || statusOf(t, err) != http.StatusBadRequest {
+		t.Fatalf("error = %v, want 400", err)
+	}
+}
+
+func TestFormTooLargeBodyMapsTo413(t *testing.T) {
+	req := formRequest("/", "name=ada&limit=3")
+	req.Body = http.MaxBytesReader(httptest.NewRecorder(), req.Body, 4)
+
+	err := Form.Bind(req, &formPayload{})
+	if err == nil {
+		t.Fatal("oversized form body should fail")
+	}
+	if statusOf(t, err) != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", statusOf(t, err))
 	}
 }

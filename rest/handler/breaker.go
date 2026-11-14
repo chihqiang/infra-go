@@ -25,7 +25,17 @@ func BreakerHandler(br breaker.Breaker) chain.Middleware {
 			}
 
 			recorder := response.NewStatusWriter(w)
+			completed := false
+			// A panicking handler must still resolve the breaker promise,
+			// otherwise the request is counted but never classified.
+			defer func() {
+				if !completed {
+					promise.Reject("handler panic")
+				}
+			}()
+
 			next(recorder, r)
+			completed = true
 
 			status := recorder.Status()
 			if status >= http.StatusInternalServerError {

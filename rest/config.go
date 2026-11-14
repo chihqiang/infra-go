@@ -11,6 +11,10 @@ var (
 	ErrIncompleteTLSFiles = errors.New("rest: cert file and key file must be configured together")
 )
 
+// defaultShutdownTimeout is used when Config.ShutdownTimeout is zero, so Stop
+// remains graceful instead of forcing connections closed immediately.
+const defaultShutdownTimeout = 10 * time.Second
+
 // Config configures an HTTP server.
 type Config struct {
 	// Name identifies the service in trace spans and access logs.
@@ -51,7 +55,7 @@ func DefaultConfig() Config {
 		ReadTimeout:     10 * time.Second,
 		WriteTimeout:    10 * time.Second,
 		IdleTimeout:     120 * time.Second,
-		ShutdownTimeout: 10 * time.Second,
+		ShutdownTimeout: defaultShutdownTimeout,
 		MaxHeaderBytes:  1 << 20,
 		MaxBodyBytes:    1 << 20,
 		Middlewares: MiddlewaresConf{
