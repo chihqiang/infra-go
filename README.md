@@ -205,4 +205,9 @@ from.
 
 ## License
 
-[Apache-2.0](./LICENSE)
+Released under the [Apache License 2.0](./LICENSE), Copyright 2026 chihqiang.
+
+You may use, modify and redistribute infra-go - including in commercial and closed-source
+projects - provided the copyright and license notices are preserved. The complete terms,
+including the patent grant and the redistribution requirements, are in the
+[LICENSE](./LICENSE) file.
