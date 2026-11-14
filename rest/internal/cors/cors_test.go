@@ -146,3 +146,41 @@ func TestMatchesOrigin(t *testing.T) {
 		}
 	}
 }
+
+func TestMiddlewareKeepsPreflightHeadersOffActualResponses(t *testing.T) {
+	handler := Middleware(nil, "https://example.com")(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+
+	request := httptest.NewRequest(http.MethodGet, "/users", nil)
+	request.Header.Set("Origin", "https://example.com")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "https://example.com" {
+		t.Fatalf("allow origin = %q", got)
+	}
+	for _, name := range []string{
+		"Access-Control-Allow-Methods",
+		"Access-Control-Allow-Headers",
+		"Access-Control-Max-Age",
+	} {
+		if got := recorder.Header().Get(name); got != "" {
+			t.Fatalf("%s = %q, want empty on an actual response", name, got)
+		}
+	}
+
+	preflight := httptest.NewRequest(http.MethodOptions, "/users", nil)
+	preflight.Header.Set("Origin", "https://example.com")
+	preflight.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	preflightRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(preflightRecorder, preflight)
+
+	for _, name := range []string{
+		"Access-Control-Allow-Methods",
+		"Access-Control-Allow-Headers",
+		"Access-Control-Max-Age",
+	} {
+		if got := preflightRecorder.Header().Get(name); got == "" {
+			t.Fatalf("%s is missing on a preflight response", name)
+		}
+	}
+}

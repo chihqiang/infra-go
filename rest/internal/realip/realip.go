@@ -41,14 +41,14 @@ func FromRequest(r *http.Request) string {
 // walked from right to left, skipping trusted proxies, so client-supplied
 // entries cannot spoof the address.
 //
-// An empty trusted list keeps the legacy behaviour of trusting the headers from
-// any peer.
+// An empty trusted list trusts no proxy: only the direct peer address is
+// returned. Configure trusted proxies explicitly when running behind one.
 func FromRequestTrusted(r *http.Request, trusted []netip.Prefix) string {
 	if r == nil {
 		return ""
 	}
 	if len(trusted) == 0 {
-		return FromRequest(r)
+		return remoteHost(r.RemoteAddr)
 	}
 
 	peer, ok := parseIP(remoteHost(r.RemoteAddr))

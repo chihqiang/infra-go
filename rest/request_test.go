@@ -9,13 +9,16 @@ import (
 	"github.com/chihqiang/infra-go/rest/handler"
 )
 
-func TestClientIPPrefersProxyHeader(t *testing.T) {
+func TestClientIPUsesDirectPeerByDefault(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	request.RemoteAddr = "10.0.0.1:5678"
 	request.Header.Set("X-Forwarded-For", "203.0.113.9")
 
-	if got := ClientIP(request); got != "203.0.113.9" {
-		t.Fatalf("client IP = %q, want 203.0.113.9", got)
+	if got := ClientIP(request); got != "10.0.0.1" {
+		t.Fatalf("client IP = %q, want the direct peer", got)
+	}
+	if got := ClientIPFromHeaders(request); got != "203.0.113.9" {
+		t.Fatalf("legacy client IP = %q, want 203.0.113.9", got)
 	}
 }
 
@@ -104,5 +107,36 @@ func TestClientIPTrustedIgnoresSpoofedHeaders(t *testing.T) {
 
 	if got := ClientIPTrusted(request, trusted); got != "203.0.113.5" {
 		t.Fatalf("client IP = %q, want the direct peer", got)
+	}
+}
+
+func TestBindPathNestedStructWithRouteWildcard(t *testing.T) {
+	server, err := NewServer(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type org struct {
+		ID string `path:"org_id"`
+	}
+	var got string
+	server.HandleFunc(http.MethodGet, "/orgs/{org_id}", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Org org `path:"org"`
+		}
+		if err := BindPath(r, &payload); err != nil {
+			_ = Error(w, err)
+			return
+		}
+		got = payload.Org.ID
+	})
+
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/orgs/42", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %q", recorder.Code, recorder.Body.String())
+	}
+	if got != "42" {
+		t.Fatalf("nested path id = %q, want 42", got)
 	}
 }

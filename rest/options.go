@@ -99,18 +99,21 @@ func WithCustomCors(headerFn func(http.Header), notAllowedFn func(http.ResponseW
 	}
 }
 
-func (c *corsSetting) headersFn() func(http.Header) {
+func (c *corsSetting) headersFn() func(http.Header, *http.Request) {
 	if c == nil {
 		return nil
 	}
-	if len(c.headers) == 0 {
-		return c.headerFn
+	if len(c.headers) == 0 && c.headerFn == nil {
+		return nil
 	}
 
-	return func(header http.Header) {
+	return func(header http.Header, r *http.Request) {
 		if c.headerFn != nil {
 			c.headerFn(header)
 		}
-		cors.AddAllowHeaders(header, c.headers...)
+		// Extra allowed request headers only belong on a preflight response.
+		if len(c.headers) > 0 && cors.IsPreflight(r) {
+			cors.AddAllowHeaders(header, c.headers...)
+		}
 	}
 }

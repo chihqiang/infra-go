@@ -27,6 +27,9 @@ func TestMaxBytesHandlerRejectsKnownOversizedBody(t *testing.T) {
 	if recorder.Header().Get("Content-Type") != "application/json; charset=utf-8" {
 		t.Fatalf("content type = %q, want JSON", recorder.Header().Get("Content-Type"))
 	}
+	if got := recorder.Header().Get("Connection"); got != "close" {
+		t.Fatalf("connection header = %q, want close", got)
+	}
 }
 
 func TestMaxBytesHandlerLimitsUnknownLengthBody(t *testing.T) {
@@ -37,11 +40,15 @@ func TestMaxBytesHandlerLimitsUnknownLengthBody(t *testing.T) {
 		_, readErr = io.ReadAll(r.Body)
 	})
 
-	handler.ServeHTTP(httptest.NewRecorder(), request)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
 
 	var maxErr *http.MaxBytesError
 	if !errors.As(readErr, &maxErr) {
 		t.Fatalf("body read error = %v, want *http.MaxBytesError", readErr)
+	}
+	if got := recorder.Header().Get("Connection"); got != "close" {
+		t.Fatalf("connection header = %q, want close", got)
 	}
 }
 

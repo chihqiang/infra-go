@@ -33,8 +33,8 @@ type Config struct {
 	MaxBodyBytes    int64         `json:",default=1048576"`
 	Middlewares     MiddlewaresConf
 	// TrustedProxies lists IPs or CIDR ranges whose X-Forwarded-For / X-Real-IP
-	// headers are trusted by the access log. Empty keeps the legacy behaviour of
-	// trusting those headers from any peer.
+	// headers are trusted by the access log. Empty ignores those headers and
+	// logs the direct peer address.
 	TrustedProxies []string `json:",optional"`
 	// TraceIgnorePaths skips spans for these request paths.
 	TraceIgnorePaths []string `json:",optional"`

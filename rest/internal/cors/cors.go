@@ -43,12 +43,12 @@ func AddAllowHeaders(header http.Header, headers ...string) {
 // Only a real preflight (OPTIONS with both Origin and
 // Access-Control-Request-Method) is answered locally; plain OPTIONS requests
 // still reach the route, so handlers can implement their own OPTIONS semantics.
-func Middleware(headerFn func(http.Header), origins ...string) func(http.HandlerFunc) http.HandlerFunc {
+func Middleware(headerFn func(http.Header, *http.Request), origins ...string) func(http.HandlerFunc) http.HandlerFunc {
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			writeHeaders(w, r, origins)
 			if headerFn != nil {
-				headerFn(w.Header())
+				headerFn(w.Header(), r)
 			}
 
 			if isPreflight(r) {
@@ -78,8 +78,12 @@ func NotAllowedHandler(fn func(http.ResponseWriter), origins ...string) http.Han
 	})
 }
 
-// isPreflight reports whether r is a CORS preflight request: an OPTIONS request
+// IsPreflight reports whether r is a CORS preflight request: an OPTIONS request
 // that announces both the requesting origin and the intended method.
+func IsPreflight(r *http.Request) bool {
+	return isPreflight(r)
+}
+
 func isPreflight(r *http.Request) bool {
 	return r.Method == http.MethodOptions &&
 		r.Header.Get(headerOrigin) != "" &&
@@ -96,10 +100,14 @@ func writeHeaders(w http.ResponseWriter, r *http.Request, origins []string) {
 
 	header := w.Header()
 	header.Set(headerAllowOrigin, origin)
-	header.Set(headerAllowMethods, allowMethods)
-	header.Set(headerAllowHeaders, allowHeaders)
 	header.Set(headerExposeHeaders, exposeHeaders)
-	header.Set(headerMaxAge, maxAgeSeconds)
+	// Methods, allowed request headers and max-age are only meaningful on a
+	// preflight response; keep them off ordinary responses.
+	if isPreflight(r) {
+		header.Set(headerAllowMethods, allowMethods)
+		header.Set(headerAllowHeaders, allowHeaders)
+		header.Set(headerMaxAge, maxAgeSeconds)
+	}
 	if origin == allowAnyOrigin {
 		header.Del(headerAllowCredentials)
 	} else {

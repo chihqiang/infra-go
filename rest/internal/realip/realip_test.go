@@ -119,13 +119,14 @@ func TestFromRequestTrustedFallsBackToRealIP(t *testing.T) {
 	}
 }
 
-func TestFromRequestTrustedEmptyKeepsLegacyBehaviour(t *testing.T) {
+func TestFromRequestTrustedEmptyIgnoresForwardingHeaders(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	request.RemoteAddr = "203.0.113.50:1234"
 	request.Header.Set("X-Forwarded-For", "1.2.3.4")
+	request.Header.Set("X-Real-IP", "5.6.7.8")
 
-	if got := FromRequestTrusted(request, nil); got != "1.2.3.4" {
-		t.Fatalf("ip = %q, want legacy forwarded address", got)
+	if got := FromRequestTrusted(request, nil); got != "203.0.113.50" {
+		t.Fatalf("ip = %q, want the direct peer address", got)
 	}
 	if got := FromRequestTrusted(nil, nil); got != "" {
 		t.Fatalf("nil request ip = %q, want empty", got)

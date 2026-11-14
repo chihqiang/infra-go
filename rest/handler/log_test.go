@@ -259,3 +259,20 @@ func TestLogHandlerClientIPOverride(t *testing.T) {
 		t.Fatalf("ip = %v, want the configured resolver", got)
 	}
 }
+
+func TestLogHandlerIgnoresForwardingHeadersByDefault(t *testing.T) {
+	log := &recordingLogger{}
+	handlerFn := LogHandlerWith(log)(func(http.ResponseWriter, *http.Request) {})
+
+	request := httptest.NewRequest(http.MethodGet, "/users", nil)
+	request.RemoteAddr = "10.0.0.1:1234"
+	request.Header.Set("X-Forwarded-For", "203.0.113.9")
+	handlerFn.ServeHTTP(httptest.NewRecorder(), request)
+
+	if len(log.entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(log.entries))
+	}
+	if got := log.entries[0].fields["ip"]; got != "10.0.0.1" {
+		t.Fatalf("ip = %v, want the direct peer", got)
+	}
+}

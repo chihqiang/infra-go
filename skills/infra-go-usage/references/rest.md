@@ -131,8 +131,10 @@ invalid trusted proxies and negative limits.
 
 `TrustedProxies` accepts IPs and CIDR ranges. When it is set, the access log only honours
 `X-Forwarded-For` / `X-Real-IP` if the direct peer is in the list, and walks the forwarded chain
-right-to-left; when it is empty the legacy behaviour (trust the headers from any peer) is kept.
-`ClientIPTrusted` / `ParseTrustedProxies` expose the same logic for application code.
+right-to-left; when it is empty the forwarding headers are ignored and the direct peer address is
+used. `ClientIP` returns the direct peer as well; `ClientIPFromHeaders` keeps the legacy
+trust-any-peer behaviour, and `ClientIPTrusted` / `ParseTrustedProxies` expose the proxy-aware
+logic for application code.
 
 Middleware execution order is fixed by the server:
 
@@ -190,7 +192,8 @@ server, _ := rest.NewServer(conf,
 
 A real preflight (`OPTIONS` with both `Origin` and `Access-Control-Request-Method`) is answered
 with 204 before reaching a route. Plain `OPTIONS` requests still reach the route handler, so custom
-OPTIONS semantics keep working.
+OPTIONS semantics keep working. `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers` and
+`Access-Control-Max-Age` are only emitted on preflight responses.
 
 ## Route options
 
@@ -253,7 +256,7 @@ err = rest.BindPath(r, &payload)     // path parameters (path tags)
 | Multipart | `form` | values plus `[]*multipart.FileHeader` fields |
 | Query | `form` | single values and repeated keys (`[]string`) |
 | Header | `header` | case-insensitive matching |
-| Path | `path` | reads `Request.PathValue` |
+| Path | `path` | reads `Request.PathValue`; nested fields use their leaf wildcard name |
 
 Every mapper falls back to the `json` tag when the source tag is absent, and
 `"-"` skips a field.
@@ -272,6 +275,18 @@ type Request struct {
 }
 
 // ?profile.name=ada&owner.email=ada@example.com
+```
+
+Path wildcard names must be Go identifiers, so they cannot contain dots. Nested path fields are
+therefore declared with their leaf name and mapped back to the dotted key:
+
+```go
+type Request struct {
+    Org Org `path:"org"`
+}
+type Org struct {
+    ID string `path:"id"` // route: /orgs/{id}
+}
 ```
 
 ## Validation
@@ -312,7 +327,7 @@ used without a `rest.Server`:
 | `LogHandler(opts...)` / `LogHandlerWith(log, opts...)` | Access log via `core/logger` with method/pattern/status/duration/ip/request_id; `WithLogSkipPaths`, `WithLogServiceName` |
 | `MaxConnsHandler(n)` | Cap in-flight requests → 503 |
 | `TimeoutHandler(d)` | Bound handler time → 503, discards late writes; handler panics are re-raised on the caller goroutine so recovery middleware still handles them |
-| `MaxBytesHandler(n)` | 413 for oversized bodies, `http.MaxBytesReader` for streaming |
+| `MaxBytesHandler(n)` | 413 for oversized bodies, `http.MaxBytesReader` for streaming, sets `Connection: close` |
 | `GunzipHandler` | Transparently decompresses `Content-Encoding: gzip` |
 | `RateLimitHandler(limiter)` / `RateLimitPerSecondHandler(rate, burst)` | 429 via `core/ratelimit` |
 | `BreakerHandler(br)` | Circuit breaker; 5xx responses count as failures → 503 when open |
@@ -364,12 +379,12 @@ sg.Start()
   streaming and protocol upgrades survive the logging/tracing/breaker middleware.
 - `WithBreaker` is inserted between the observability middleware and `Timeout`, so a timeout 503 is
   reported to the breaker while the request is still logged and traced.
-- An oversized streamed body is answered with 413, but the connection is not force-closed: the
-  middleware writers hide the unexported hook net/http uses for that.
-- `ClientIP` and the access-log `ip` field trust `X-Forwarded-For` / `X-Real-IP` when they contain
-  a valid address. Set `Config.TrustedProxies` (access log) or use `ClientIPTrusted` (application
-  code) to only trust the headers from known proxies; otherwise treat the value as
-  client-controlled.
+- An oversized streamed body is answered with 413 and the response carries `Connection: close`, so
+  the connection is not reused for another request.
+- `ClientIP` and the access-log `ip` field use the direct peer address and ignore forwarding
+  headers by default. Set `Config.TrustedProxies` (access log) or use `ClientIPTrusted`
+  (application code) to trust them from known proxies; `ClientIPFromHeaders` is the legacy
+  trust-any-peer helper.
 - A group root route (`Group("/api").Handle("/")`) is served for both `/api` and the exact
   trailing-slash form `/api/`; deeper paths such as `/api/unknown` still return 404.
 - `service.AsService` treats `http.ErrServerClosed` as a normal shutdown rather than an error.

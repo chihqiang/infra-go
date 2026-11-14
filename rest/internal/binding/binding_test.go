@@ -801,3 +801,29 @@ func TestFormPostTooLargeMapsTo413(t *testing.T) {
 		t.Fatalf("status = %d, want 413", statusOf(t, err))
 	}
 }
+
+func TestPathBindNestedStructUsesLeafWildcardName(t *testing.T) {
+	type org struct {
+		ID   string `path:"org_id"`
+		Name string `path:"name"`
+	}
+	var payload struct {
+		ID  string `path:"id"`
+		Org org    `path:"org"`
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/orgs/42", nil)
+	request.SetPathValue("id", "root")
+	request.SetPathValue("org_id", "42")
+	request.SetPathValue("name", "acme")
+
+	if err := Path.Bind(request, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.ID != "root" {
+		t.Fatalf("top-level id = %q, want root", payload.ID)
+	}
+	if payload.Org.ID != "42" || payload.Org.Name != "acme" {
+		t.Fatalf("org = %+v", payload.Org)
+	}
+}

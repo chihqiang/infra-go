@@ -33,16 +33,22 @@ func BindPath(r *http.Request, dst any) error {
 	return binding.BindPath(r, dst)
 }
 
-// ClientIP returns the client address of r, honouring X-Forwarded-For and
-// X-Real-IP when they hold a valid address. The headers are trusted from any
-// peer; use ClientIPTrusted when r may come directly from clients.
+// ClientIP returns the direct peer address of r. Forwarding headers are ignored
+// because they can be spoofed by the client; use ClientIPTrusted behind a proxy
+// or ClientIPFromHeaders when the headers come from a trusted network.
 func ClientIP(r *http.Request) string {
+	return realip.FromRequestTrusted(r, nil)
+}
+
+// ClientIPFromHeaders is the legacy behaviour: it trusts X-Forwarded-For and
+// X-Real-IP from any peer. Only use it when every caller is a trusted proxy.
+func ClientIPFromHeaders(r *http.Request) string {
 	return realip.FromRequest(r)
 }
 
 // ClientIPTrusted returns the client address of r, honouring X-Forwarded-For
 // and X-Real-IP only when the direct peer is inside trusted. An empty trusted
-// list keeps the legacy behaviour of ClientIP.
+// list ignores the headers.
 //
 // The trusted list can be built with ParseTrustedProxies or supplied through
 // Config.TrustedProxies.

@@ -135,5 +135,7 @@ func clientIP(r *http.Request, options logOptions) string {
 	if options.clientIP != nil {
 		return options.clientIP(r)
 	}
-	return realip.FromRequest(r)
+	// Default to the direct peer: forwarding headers are only trusted when a
+	// resolver is configured (for example via Config.TrustedProxies).
+	return realip.FromRequestTrusted(r, nil)
 }
