@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -141,4 +142,25 @@ func TestSignatureHandlerRequiresKey(t *testing.T) {
 	}()
 
 	SignatureHandler(SignatureConfig{})
+}
+
+type failingBody struct{}
+
+func (failingBody) Read([]byte) (int, error) { return 0, errors.New("read failed") }
+
+func (failingBody) Close() error { return nil }
+
+func TestSignatureHandlerMapsReadErrorToBadRequest(t *testing.T) {
+	handlerFn := SignatureHandler(SignatureConfig{Keys: [][]byte{[]byte("signing-key")}})(
+		func(http.ResponseWriter, *http.Request) {},
+	)
+	request := httptest.NewRequest(http.MethodPost, "/pay", nil)
+	request.Body = failingBody{}
+	recorder := httptest.NewRecorder()
+
+	handlerFn.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", recorder.Code)
+	}
 }

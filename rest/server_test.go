@@ -3,6 +3,7 @@ package rest
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/tls"
 	"errors"
 	"io"
@@ -515,5 +516,86 @@ func TestServerUseNilMiddlewareIsNoOp(t *testing.T) {
 	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/ok", nil))
 	if recorder.Code != http.StatusOK || recorder.Body.String() != "ok" {
 		t.Fatalf("response = %d %q", recorder.Code, recorder.Body.String())
+	}
+}
+
+type recordingPromise struct {
+	accepted bool
+	rejected string
+}
+
+func (p *recordingPromise) Accept() { p.accepted = true }
+
+func (p *recordingPromise) Reject(reason string) { p.rejected = reason }
+
+type recordingBreaker struct {
+	promise *recordingPromise
+}
+
+func (b *recordingBreaker) Name() string { return "recording" }
+
+func (b *recordingBreaker) Allow() (breaker.Promise, error) {
+	return b.AllowCtx(context.Background())
+}
+
+func (b *recordingBreaker) AllowCtx(context.Context) (breaker.Promise, error) {
+	return b.promise, nil
+}
+
+func (b *recordingBreaker) Do(func() error) error { return nil }
+
+func (b *recordingBreaker) DoCtx(context.Context, func() error) error { return nil }
+
+func (b *recordingBreaker) DoWithAcceptable(func() error, breaker.Acceptable) error { return nil }
+
+func (b *recordingBreaker) DoWithAcceptableCtx(
+	context.Context, func() error, breaker.Acceptable,
+) error {
+	return nil
+}
+
+func (b *recordingBreaker) DoWithFallback(func() error, breaker.Fallback) error { return nil }
+
+func (b *recordingBreaker) DoWithFallbackCtx(
+	context.Context, func() error, breaker.Fallback,
+) error {
+	return nil
+}
+
+func (b *recordingBreaker) DoWithFallbackAcceptable(
+	func() error, breaker.Fallback, breaker.Acceptable,
+) error {
+	return nil
+}
+
+func (b *recordingBreaker) DoWithFallbackAcceptableCtx(
+	context.Context, func() error, breaker.Fallback, breaker.Acceptable,
+) error {
+	return nil
+}
+
+func TestWithBreakerCountsTimeoutResponses(t *testing.T) {
+	br := &recordingBreaker{promise: &recordingPromise{}}
+	server, err := NewServer(Config{
+		Middlewares: MiddlewaresConf{Timeout: 5 * time.Millisecond},
+	}, WithBreaker(br))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.HandleFunc(http.MethodGet, "/slow", func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	})
+
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/slow", nil))
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", recorder.Code)
+	}
+	if br.promise.accepted {
+		t.Fatal("timeout response must not be accepted by the breaker")
+	}
+	if br.promise.rejected != "http status 503" {
+		t.Fatalf("rejection = %q, want http status 503", br.promise.rejected)
 	}
 }

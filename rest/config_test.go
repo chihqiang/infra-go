@@ -39,3 +39,15 @@ func TestConfigValidateRejectsBadValues(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigValidateTrustedProxies(t *testing.T) {
+	valid := Config{TrustedProxies: []string{"127.0.0.1", "10.0.0.0/8", "2001:db8::/32"}}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid trusted proxies rejected: %v", err)
+	}
+
+	invalid := Config{TrustedProxies: []string{"not-an-ip"}}
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("invalid trusted proxy should fail validation")
+	}
+}

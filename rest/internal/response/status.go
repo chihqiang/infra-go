@@ -17,11 +17,13 @@ func NewStatusWriter(w http.ResponseWriter) *StatusWriter {
 	return &StatusWriter{ResponseWriter: w}
 }
 
-// WriteHeader records the first status and forwards it.
+// WriteHeader records the first status and forwards it. Later calls are
+// dropped, avoiding "superfluous response.WriteHeader" noise from the server.
 func (s *StatusWriter) WriteHeader(status int) {
-	if s.status == 0 {
-		s.status = status
+	if s.status != 0 {
+		return
 	}
+	s.status = status
 	s.ResponseWriter.WriteHeader(status)
 }
 

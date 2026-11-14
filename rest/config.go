@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/chihqiang/infra-go/rest/internal/realip"
 )
 
 var (
@@ -30,6 +32,10 @@ type Config struct {
 	MaxHeaderBytes  int           `json:",default=1048576"`
 	MaxBodyBytes    int64         `json:",default=1048576"`
 	Middlewares     MiddlewaresConf
+	// TrustedProxies lists IPs or CIDR ranges whose X-Forwarded-For / X-Real-IP
+	// headers are trusted by the access log. Empty keeps the legacy behaviour of
+	// trusting those headers from any peer.
+	TrustedProxies []string `json:",optional"`
 	// TraceIgnorePaths skips spans for these request paths.
 	TraceIgnorePaths []string `json:",optional"`
 	// LogSkipPaths omits these request paths from the access log.
@@ -82,6 +88,9 @@ func (c Config) Validate() error {
 	}
 	if c.ReadTimeout < 0 || c.WriteTimeout < 0 || c.IdleTimeout < 0 || c.ShutdownTimeout < 0 {
 		return errors.New("rest: server timeouts must not be negative")
+	}
+	if _, err := realip.ParseTrustedProxies(c.TrustedProxies); err != nil {
+		return fmt.Errorf("rest: %w", err)
 	}
 	return nil
 }

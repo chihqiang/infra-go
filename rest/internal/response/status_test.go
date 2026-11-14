@@ -65,3 +65,25 @@ func TestStatusWriterDelegatesFlushAndHijack(t *testing.T) {
 		t.Fatal("StatusWriter does not implement http.Hijacker")
 	}
 }
+
+type countingHeaderWriter struct {
+	http.ResponseWriter
+	headers int
+}
+
+func (w *countingHeaderWriter) WriteHeader(status int) {
+	w.headers++
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func TestStatusWriterForwardsOnlyFirstWriteHeader(t *testing.T) {
+	inner := &countingHeaderWriter{ResponseWriter: httptest.NewRecorder()}
+	writer := NewStatusWriter(inner)
+
+	writer.WriteHeader(http.StatusAccepted)
+	writer.WriteHeader(http.StatusInternalServerError)
+
+	if inner.headers != 1 {
+		t.Fatalf("forwarded headers = %d, want 1", inner.headers)
+	}
+}

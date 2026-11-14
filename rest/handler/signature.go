@@ -45,7 +45,12 @@ func SignatureHandler(cfg SignatureConfig) chain.Middleware {
 		return func(w http.ResponseWriter, r *http.Request) {
 			body, err := readSignedBody(r, cfg.MaxBody)
 			if err != nil {
-				writeStatusJSON(w, http.StatusRequestEntityTooLarge, "request body too large")
+				var maxBytesErr *http.MaxBytesError
+				if errors.Is(err, errBodyTooLarge) || errors.As(err, &maxBytesErr) {
+					writeStatusJSON(w, http.StatusRequestEntityTooLarge, "request body too large")
+					return
+				}
+				writeStatusJSON(w, http.StatusBadRequest, "cannot read request body")
 				return
 			}
 			r.Body = io.NopCloser(bytes.NewReader(body))

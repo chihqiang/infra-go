@@ -18,6 +18,7 @@ type LogOption func(*logOptions)
 type logOptions struct {
 	skipPaths   []string
 	serviceName string
+	clientIP    func(*http.Request) string
 }
 
 // WithLogSkipPaths omits matching request paths from the access log. Rules
@@ -32,6 +33,14 @@ func WithLogSkipPaths(paths ...string) LogOption {
 func WithLogServiceName(name string) LogOption {
 	return func(opts *logOptions) {
 		opts.serviceName = name
+	}
+}
+
+// WithLogClientIP overrides how the access-log client IP is resolved. It is
+// useful to only trust forwarding headers from known proxies.
+func WithLogClientIP(fn func(*http.Request) string) LogOption {
+	return func(opts *logOptions) {
+		opts.clientIP = fn
 	}
 }
 
@@ -93,7 +102,7 @@ func LogHandlerWith(log AccessLogger, opts ...LogOption) chain.Middleware {
 					logger.String("path", r.URL.Path),
 					logger.Int("status", status),
 					logger.Duration("duration", time.Since(start)),
-					logger.String("ip", realip.FromRequest(r)),
+					logger.String("ip", clientIP(r, options)),
 				}
 				if options.serviceName != "" {
 					fields = append(fields, logger.String("service", options.serviceName))
@@ -120,4 +129,11 @@ func LogHandlerWith(log AccessLogger, opts ...LogOption) chain.Middleware {
 			completed = true
 		}
 	}
+}
+
+func clientIP(r *http.Request, options logOptions) string {
+	if options.clientIP != nil {
+		return options.clientIP(r)
+	}
+	return realip.FromRequest(r)
 }

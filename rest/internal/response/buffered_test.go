@@ -43,3 +43,25 @@ func TestBufferedWriterKeepsFirstStatus(t *testing.T) {
 		t.Fatalf("status = %d, want 202", got)
 	}
 }
+
+type shortWriteWriter struct {
+	http.ResponseWriter
+	limit int
+}
+
+func (w *shortWriteWriter) Write(p []byte) (int, error) {
+	if len(p) > w.limit {
+		return w.limit, nil
+	}
+	return len(p), nil
+}
+
+func TestBufferedWriterReportsShortWrite(t *testing.T) {
+	writer := NewBufferedWriter()
+	_, _ = writer.Write([]byte("hello"))
+
+	inner := &shortWriteWriter{ResponseWriter: httptest.NewRecorder(), limit: 1}
+	if err := writer.WriteTo(inner); err == nil {
+		t.Fatal("short write should be reported")
+	}
+}

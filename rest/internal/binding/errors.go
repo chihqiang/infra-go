@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // Error describes a binding failure together with the HTTP status it should
@@ -39,11 +40,12 @@ func badRequest(format string, args ...any) error {
 }
 
 // requestError classifies a failure raised while reading the request body.
-// http.MaxBytesReader reports an oversized body as a *http.MaxBytesError; that
-// is a size limit, not malformed input, so it maps to 413 instead of 400.
+// http.MaxBytesReader reports an oversized body as a *http.MaxBytesError, and
+// http.Request.ParseForm has its own 10MB cap reported as "http: POST too
+// large". Both are size limits, not malformed input, so they map to 413.
 func requestError(format string, err error) error {
 	var maxBytesErr *http.MaxBytesError
-	if errors.As(err, &maxBytesErr) {
+	if errors.As(err, &maxBytesErr) || strings.Contains(err.Error(), "http: POST too large") {
 		return &Error{
 			Status: http.StatusRequestEntityTooLarge,
 			Err:    fmt.Errorf("rest/binding: request body too large: %w", err),

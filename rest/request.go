@@ -3,6 +3,7 @@ package rest
 import (
 	"context"
 	"net/http"
+	"net/netip"
 
 	"github.com/chihqiang/infra-go/rest/handler"
 	"github.com/chihqiang/infra-go/rest/internal/binding"
@@ -33,9 +34,25 @@ func BindPath(r *http.Request, dst any) error {
 }
 
 // ClientIP returns the client address of r, honouring X-Forwarded-For and
-// X-Real-IP when they hold a valid address.
+// X-Real-IP when they hold a valid address. The headers are trusted from any
+// peer; use ClientIPTrusted when r may come directly from clients.
 func ClientIP(r *http.Request) string {
 	return realip.FromRequest(r)
+}
+
+// ClientIPTrusted returns the client address of r, honouring X-Forwarded-For
+// and X-Real-IP only when the direct peer is inside trusted. An empty trusted
+// list keeps the legacy behaviour of ClientIP.
+//
+// The trusted list can be built with ParseTrustedProxies or supplied through
+// Config.TrustedProxies.
+func ClientIPTrusted(r *http.Request, trusted []netip.Prefix) string {
+	return realip.FromRequestTrusted(r, trusted)
+}
+
+// ParseTrustedProxies parses IP and CIDR strings for ClientIPTrusted.
+func ParseTrustedProxies(values []string) ([]netip.Prefix, error) {
+	return realip.ParseTrustedProxies(values)
 }
 
 // RequestID returns the ID assigned by handler.RequestIDHandler, or an empty

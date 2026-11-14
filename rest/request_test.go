@@ -91,3 +91,18 @@ func TestBindFailureCarriesRequestStatus(t *testing.T) {
 		t.Fatalf("status = %d, want 400", got)
 	}
 }
+
+func TestClientIPTrustedIgnoresSpoofedHeaders(t *testing.T) {
+	trusted, err := ParseTrustedProxies([]string{"10.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.RemoteAddr = "203.0.113.5:5678"
+	request.Header.Set("X-Forwarded-For", "1.2.3.4")
+
+	if got := ClientIPTrusted(request, trusted); got != "203.0.113.5" {
+		t.Fatalf("client IP = %q, want the direct peer", got)
+	}
+}

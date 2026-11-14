@@ -109,6 +109,7 @@ type Config struct {
     MaxHeaderBytes  int           `json:",default=1048576"`
     MaxBodyBytes    int64         `json:",default=1048576"`
     Middlewares      MiddlewaresConf
+    TrustedProxies   []string `json:",optional"`
     TraceIgnorePaths []string `json:",optional"`
     LogSkipPaths     []string `json:",optional"`
 }
@@ -125,13 +126,18 @@ type MiddlewaresConf struct {
 ```
 
 Tags are consumed by `core/conf` and `core/mapping`, so the same struct works for YAML/JSON files
-and environment expansion. `Config.Validate()` rejects an out-of-range port, half-configured TLS
-and negative limits.
+and environment expansion. `Config.Validate()` rejects an out-of-range port, half-configured TLS,
+invalid trusted proxies and negative limits.
+
+`TrustedProxies` accepts IPs and CIDR ranges. When it is set, the access log only honours
+`X-Forwarded-For` / `X-Real-IP` if the direct peer is in the list, and walks the forwarded chain
+right-to-left; when it is empty the legacy behaviour (trust the headers from any peer) is kept.
+`ClientIPTrusted` / `ParseTrustedProxies` expose the same logic for application code.
 
 Middleware execution order is fixed by the server:
 
 ```text
-Recover → RequestID → Trace → Log → MaxConns → Timeout → Gunzip → MaxBodyBytes → Use(...) → route
+Recover → RequestID → Trace → Log → MaxConns → [Breaker] → Timeout → Gunzip → MaxBodyBytes → Use(...) → route
 ```
 
 `Gunzip` runs before `MaxBodyBytes` so the body limit applies to the decompressed payload.
@@ -356,7 +362,14 @@ sg.Start()
 - `internal/response` provides `StatusWriter`, `DeferredWriter` and `BufferedWriter`; they power
   CORS, logging, timeouts and custom fallbacks. `StatusWriter` also forwards `Flush`/`Hijack`, so
   streaming and protocol upgrades survive the logging/tracing/breaker middleware.
-- `service.AsService` treats `http.ErrServerClosed` as a normal shutdown rather than an error.
+- `WithBreaker` is inserted between the observability middleware and `Timeout`, so a timeout 503 is
+  reported to the breaker while the request is still logged and traced.
+- An oversized streamed body is answered with 413, but the connection is not force-closed: the
+  middleware writers hide the unexported hook net/http uses for that.
 - `ClientIP` and the access-log `ip` field trust `X-Forwarded-For` / `X-Real-IP` when they contain
-  a valid address. Terminate them at a trusted proxy that overwrites the headers, otherwise treat
-  the value as client-controlled.
+  a valid address. Set `Config.TrustedProxies` (access log) or use `ClientIPTrusted` (application
+  code) to only trust the headers from known proxies; otherwise treat the value as
+  client-controlled.
+- A group root route (`Group("/api").Handle("/")`) is registered as `/api`; requesting `/api/`
+  does not match it. Register the trailing-slash path explicitly if clients send it.
+- `service.AsService` treats `http.ErrServerClosed` as a normal shutdown rather than an error.

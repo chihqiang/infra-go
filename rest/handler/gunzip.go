@@ -17,7 +17,7 @@ const (
 // instead of the (possibly tiny) compressed payload.
 func GunzipHandler(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.Header.Get(headerContentEncoding), encodingGzip) {
+		if !isGzipEncoding(r.Header.Get(headerContentEncoding)) {
 			next(w, r)
 			return
 		}
@@ -36,4 +36,17 @@ func GunzipHandler(next http.HandlerFunc) http.HandlerFunc {
 
 		next(w, r)
 	}
+}
+
+// isGzipEncoding reports whether the Content-Encoding header contains gzip.
+// Values are matched case-insensitively and as comma-separated tokens so
+// "GZIP" and "gzip, identity" are recognised.
+func isGzipEncoding(value string) bool {
+	for _, part := range strings.Split(value, ",") {
+		switch strings.ToLower(strings.TrimSpace(part)) {
+		case encodingGzip, "x-gzip":
+			return true
+		}
+	}
+	return false
 }

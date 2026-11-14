@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"sync"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/chihqiang/infra-go/rest/chain"
 	resthandler "github.com/chihqiang/infra-go/rest/handler"
 	"github.com/chihqiang/infra-go/rest/internal/cors"
+	"github.com/chihqiang/infra-go/rest/internal/realip"
 	"github.com/chihqiang/infra-go/rest/router"
 )
 
@@ -25,8 +28,9 @@ type Server struct {
 	shutdownTimeout  time.Duration
 	handlerMu        sync.RWMutex
 	handler          http.Handler
-	middlewares      []chain.Middleware
-	extraMiddlewares []chain.Middleware
+	frontMiddlewares []chain.Middleware
+	outerMiddlewares []chain.Middleware
+	tailMiddlewares  []chain.Middleware
 	cors             *corsSetting
 	routesMu         sync.RWMutex
 	routes           []Route
@@ -46,18 +50,23 @@ func NewServer(conf Config, opts ...Option) (*Server, error) {
 	if shutdownTimeout <= 0 {
 		shutdownTimeout = defaultShutdownTimeout
 	}
-	server := &Server{
-		router:          routes,
-		certFile:        conf.CertFile,
-		keyFile:         conf.KeyFile,
-		shutdownTimeout: shutdownTimeout,
-		addr:            net.JoinHostPort(conf.Host, strconv.Itoa(conf.Port)),
+	trustedProxies, err := realip.ParseTrustedProxies(conf.TrustedProxies)
+	if err != nil {
+		return nil, fmt.Errorf("rest: %w", err)
 	}
-	server.middlewares = buildMiddlewares(conf)
+	front, tail := buildMiddlewares(conf, trustedProxies)
+	server := &Server{
+		router:           routes,
+		certFile:         conf.CertFile,
+		keyFile:          conf.KeyFile,
+		shutdownTimeout:  shutdownTimeout,
+		frontMiddlewares: front,
+		tailMiddlewares:  tail,
+		addr:             net.JoinHostPort(conf.Host, strconv.Itoa(conf.Port)),
+	}
 	for _, opt := range opts {
 		opt(server)
 	}
-	server.middlewares = append(server.middlewares, server.extraMiddlewares...)
 	server.rebuildHandler()
 	server.httpServer = &http.Server{
 		Addr:           net.JoinHostPort(conf.Host, strconv.Itoa(conf.Port)),
@@ -73,45 +82,52 @@ func NewServer(conf Config, opts ...Option) (*Server, error) {
 }
 
 // buildMiddlewares assembles the server chain in execution order: the first
-// entry wraps all later ones.
-func buildMiddlewares(conf Config) []chain.Middleware {
-	var middlewares []chain.Middleware
-
+// entry wraps all later ones. front holds the observability middleware;
+// tail starts with Timeout, so middlewares inserted between them (the breaker)
+// observe timeout responses without running before request IDs and logs.
+func buildMiddlewares(conf Config, trustedProxies []netip.Prefix) (front, tail []chain.Middleware) {
 	if conf.Middlewares.Recovery {
-		middlewares = append(middlewares, resthandler.RecoverHandler)
+		front = append(front, resthandler.RecoverHandler)
 	}
 	if conf.Middlewares.RequestID {
-		middlewares = append(middlewares, resthandler.RequestIDHandler)
+		front = append(front, resthandler.RequestIDHandler)
 	}
 	if conf.Middlewares.Trace {
-		middlewares = append(middlewares, resthandler.TraceHandler(
+		front = append(front, resthandler.TraceHandler(
 			resthandler.WithTraceServiceName(conf.Name),
 			resthandler.WithTraceIgnorePaths(conf.TraceIgnorePaths...),
 		))
 	}
 	if conf.Middlewares.Log {
-		middlewares = append(middlewares, resthandler.LogHandler(
+		options := []resthandler.LogOption{
 			resthandler.WithLogServiceName(conf.Name),
 			resthandler.WithLogSkipPaths(conf.LogSkipPaths...),
-		))
+		}
+		if len(trustedProxies) > 0 {
+			options = append(options, resthandler.WithLogClientIP(func(r *http.Request) string {
+				return realip.FromRequestTrusted(r, trustedProxies)
+			}))
+		}
+		front = append(front, resthandler.LogHandler(options...))
 	}
 	if conf.Middlewares.MaxConns > 0 {
-		middlewares = append(middlewares, resthandler.MaxConnsHandler(conf.Middlewares.MaxConns))
+		front = append(front, resthandler.MaxConnsHandler(conf.Middlewares.MaxConns))
 	}
+
 	if conf.Middlewares.Timeout > 0 {
-		middlewares = append(middlewares, resthandler.TimeoutHandler(conf.Middlewares.Timeout))
+		tail = append(tail, resthandler.TimeoutHandler(conf.Middlewares.Timeout))
 	}
 	// Gunzip must run before MaxBodyBytes: the limit has to apply to the
 	// decompressed payload, otherwise a small gzip body can expand without
 	// bound (decompression bomb).
 	if conf.Middlewares.Gunzip {
-		middlewares = append(middlewares, resthandler.GunzipHandler)
+		tail = append(tail, resthandler.GunzipHandler)
 	}
 	if conf.MaxBodyBytes > 0 {
-		middlewares = append(middlewares, resthandler.MaxBytesHandler(conf.MaxBodyBytes))
+		tail = append(tail, resthandler.MaxBytesHandler(conf.MaxBodyBytes))
 	}
 
-	return middlewares
+	return front, tail
 }
 
 // Handle registers a handler for the given method and path pattern.
@@ -143,11 +159,11 @@ func (s *Server) SetNotAllowedHandler(handler http.Handler) {
 	s.router.SetNotAllowedHandler(handler)
 }
 
-// Use adds middleware to the server's request chain.
+// Use adds middleware to the server's request chain, after the built-ins.
 func (s *Server) Use(middleware chain.Middleware) {
 	s.handlerMu.Lock()
 	defer s.handlerMu.Unlock()
-	s.middlewares = append(s.middlewares, middleware)
+	s.tailMiddlewares = append(s.tailMiddlewares, middleware)
 	s.rebuildHandler()
 }
 
@@ -165,7 +181,14 @@ func (s *Server) rebuildHandler() {
 		})
 	}
 
-	handler := s.withPattern(chain.New(s.middlewares...).Then(routes))
+	// Outer middleware wraps the built-in chain, so it also observes responses
+	// generated by Timeout (for example a 503 that the breaker must count).
+	middlewares := make([]chain.Middleware, 0,
+		len(s.frontMiddlewares)+len(s.outerMiddlewares)+len(s.tailMiddlewares))
+	middlewares = append(middlewares, s.frontMiddlewares...)
+	middlewares = append(middlewares, s.outerMiddlewares...)
+	middlewares = append(middlewares, s.tailMiddlewares...)
+	handler := s.withPattern(chain.New(middlewares...).Then(routes))
 	s.handler = handler
 	if s.cors != nil {
 		s.handler = cors.Middleware(s.cors.headersFn(), s.cors.origins...)(s.handler.ServeHTTP)
@@ -202,13 +225,7 @@ func (s *Server) Start() error {
 	if err != nil {
 		return err
 	}
-	if err := s.Serve(listener); err != nil {
-		// http.Server closes plain listeners itself, but ServeTLS can return
-		// before taking ownership (for example when the certificate is invalid).
-		_ = listener.Close()
-		return err
-	}
-	return nil
+	return s.Serve(listener)
 }
 
 // Serve serves requests on the supplied listener and records its address so
@@ -223,7 +240,13 @@ func (s *Server) Serve(listener net.Listener) error {
 	s.addrMu.Unlock()
 
 	if s.certFile != "" && s.keyFile != "" {
-		return s.httpServer.ServeTLS(listener, s.certFile, s.keyFile)
+		err := s.httpServer.ServeTLS(listener, s.certFile, s.keyFile)
+		// ServeTLS returns before taking ownership when the certificate cannot
+		// be loaded; close the listener in that case so callers do not leak it.
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			_ = listener.Close()
+		}
+		return err
 	}
 	return s.httpServer.Serve(listener)
 }

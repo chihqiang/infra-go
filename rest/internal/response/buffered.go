@@ -2,6 +2,7 @@ package response
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"sync"
 )
@@ -71,9 +72,15 @@ func (b *BufferedWriter) WriteTo(w http.ResponseWriter) error {
 	}
 
 	w.WriteHeader(b.statusOrDefault())
-	if b.body.Len() > 0 {
-		_, err := w.Write(b.body.Bytes())
+	if b.body.Len() == 0 {
+		return nil
+	}
+	written, err := w.Write(b.body.Bytes())
+	if err != nil {
 		return err
+	}
+	if written < b.body.Len() {
+		return fmt.Errorf("response: short write: wrote %d of %d bytes", written, b.body.Len())
 	}
 	return nil
 }

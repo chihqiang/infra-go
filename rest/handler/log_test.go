@@ -243,3 +243,19 @@ func TestLogRecordsPanickingRequestAndRepanics(t *testing.T) {
 		t.Fatalf("entry = %+v, want 500 error record", entry)
 	}
 }
+
+func TestLogHandlerClientIPOverride(t *testing.T) {
+	log := &recordingLogger{}
+	handlerFn := LogHandlerWith(log, WithLogClientIP(func(*http.Request) string {
+		return "203.0.113.42"
+	}))(func(http.ResponseWriter, *http.Request) {})
+
+	handlerFn.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/users", nil))
+
+	if len(log.entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(log.entries))
+	}
+	if got := log.entries[0].fields["ip"]; got != "203.0.113.42" {
+		t.Fatalf("ip = %v, want the configured resolver", got)
+	}
+}

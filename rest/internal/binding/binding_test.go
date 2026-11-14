@@ -779,3 +779,25 @@ func TestFormTooLargeBodyMapsTo413(t *testing.T) {
 		t.Fatalf("status = %d, want 413", statusOf(t, err))
 	}
 }
+
+type postTooLargeReader struct{}
+
+func (postTooLargeReader) Read([]byte) (int, error) {
+	return 0, errors.New("http: POST too large")
+}
+
+func (postTooLargeReader) Close() error { return nil }
+
+func TestFormPostTooLargeMapsTo413(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Body = postTooLargeReader{}
+	req.Header.Set("Content-Type", MIMEPOSTForm)
+
+	err := Form.Bind(req, &formPayload{})
+	if err == nil {
+		t.Fatal("oversized form should fail")
+	}
+	if statusOf(t, err) != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", statusOf(t, err))
+	}
+}

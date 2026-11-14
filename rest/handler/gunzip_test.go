@@ -74,3 +74,21 @@ func TestGunzipHandlerRejectsInvalidGzip(t *testing.T) {
 		t.Fatalf("status = %d, want 400", recorder.Code)
 	}
 }
+
+func TestGunzipHandlerMatchesEncodingTokensCaseInsensitively(t *testing.T) {
+	for _, encoding := range []string{"GZIP", "x-gzip", "identity, Gzip"} {
+		var got string
+		handlerFn := GunzipHandler(func(_ http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			got = string(body)
+		})
+
+		request := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(gzipBody(t, "payload")))
+		request.Header.Set(headerContentEncoding, encoding)
+		handlerFn.ServeHTTP(httptest.NewRecorder(), request)
+
+		if got != "payload" {
+			t.Fatalf("encoding %q: body = %q, want payload", encoding, got)
+		}
+	}
+}
