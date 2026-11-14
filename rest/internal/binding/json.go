@@ -1,41 +1,55 @@
 package binding
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 )
 
-// JSON decodes a JSON request body.
-var JSON Binding = jsonBinding{}
-
 type jsonBinding struct{}
+
+func (jsonBinding) Name() string { return "json" }
 
 func (jsonBinding) Bind(req *http.Request, dst any) error {
 	if err := checkDestination(dst); err != nil {
 		return err
 	}
+	if req.Body == nil {
+		return badRequest("rest/binding: json body is empty")
+	}
 
 	decoder := json.NewDecoder(req.Body)
 	decoder.UseNumber()
-	if err := decoder.Decode(dst); err != nil {
-		if errors.Is(err, io.EOF) {
-			return wrapError(errors.New("binding: json body is empty"))
-		}
-		return wrapError(fmt.Errorf("binding: decode json: %w", err))
+	if err := decodeJSON(decoder, dst); err != nil {
+		return err
 	}
-	if decoder.More() {
-		return wrapError(errors.New("binding: json body contains trailing data"))
-	}
-
 	return validate(dst)
 }
 
-func checkDestination(dst any) error {
-	if dst == nil {
-		return errors.New("binding: destination must not be nil")
+func (jsonBinding) BindBody(body []byte, dst any) error {
+	if err := checkDestination(dst); err != nil {
+		return err
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if err := decodeJSON(decoder, dst); err != nil {
+		return err
+	}
+	return validate(dst)
+}
+
+func decodeJSON(decoder *json.Decoder, dst any) error {
+	if err := decoder.Decode(dst); err != nil {
+		if errors.Is(err, io.EOF) {
+			return badRequest("rest/binding: json body is empty")
+		}
+		return badRequest("rest/binding: decode json: %v", err)
+	}
+	if decoder.More() {
+		return badRequest("rest/binding: json body contains trailing data")
 	}
 	return nil
 }

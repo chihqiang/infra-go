@@ -228,33 +228,53 @@ them to 400 and unsupported content types to 415 automatically.
 ```go
 var payload CreateUser
 err := rest.Bind(r, &payload)        // content-type driven, query when there is no body
-err = rest.BindQuery(r, &payload)    // query string only
-err = rest.BindHeader(r, &payload)   // headers only
-err = rest.BindPath(r, &payload)     // path parameters only
+err = rest.BindQuery(r, &payload)    // query string (form tags)
+err = rest.BindHeader(r, &payload)   // headers (header tags)
+err = rest.BindPath(r, &payload)     // path parameters (path tags)
 ```
 
 | Source | Tag | Notes |
 |--------|-----|-------|
-| JSON | `json` | rejects empty and malformed bodies |
+| JSON | `json` | rejects empty, malformed and trailing data |
 | XML | `xml` | `application/xml`, `text/xml` |
-| Form | `form` | query merged with body, body wins; also multipart |
+| Form | `form` | query merged with body, body values win |
+| Multipart | `form` | values plus `[]*multipart.FileHeader` fields |
 | Query | `form` | single values and repeated keys (`[]string`) |
 | Header | `header` | case-insensitive matching |
-| Path | `path` (falls back to `json`) | reads `Request.PathValue` |
+| Path | `path` | reads `Request.PathValue` |
 
-Field presence, defaults and `optional` follow the `core/mapping` tag engine, e.g.
-`form:"limit,optional,default=20,range=[1:100]"`.
+Every mapper falls back to the `json` tag when the source tag is absent, and
+`"-"` skips a field.
 
-Implement `Validate() error` on the destination to run validation after decoding:
+Supported field types: `string`, `bool`, numbers, `[]byte`, `time.Time`
+(RFC 3339 or `2006-01-02`), `time.Duration`, slices of the above,
+`encoding.TextUnmarshaler` and nested/embedded structs (pointers are allocated
+on demand).
+
+## Validation
+
+Decoding is followed by validation, in this order:
+
+1. `binding` struct tags, evaluated by `go-playground/validator`
+   (`rest/internal/binding.Validator` can be replaced)
+2. `Validate() error` on the destination, for rules tags cannot express
 
 ```go
+type CreateUser struct {
+    Name  string `json:"name"  binding:"required,min=2"`
+    Email string `json:"email" binding:"required,email"`
+}
+
 func (r *CreateUser) Validate() error {
-    if r.Email == "" {
-        return fmt.Errorf("%w: email is required", rest.ErrBadRequest)
+    if strings.HasSuffix(r.Email, "@example.com") {
+        return fmt.Errorf("%w: example.com addresses are not allowed", rest.ErrBadRequest)
     }
     return nil
 }
 ```
+
+Binding and validation failures carry a status, so `rest.Error(w, err)` answers
+400 automatically; an unknown `Content-Type` produces 415.
 
 ## handler package
 

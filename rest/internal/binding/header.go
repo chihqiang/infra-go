@@ -5,24 +5,20 @@ import (
 	"strings"
 )
 
-// Header decodes request headers into dst using header tags.
-var Header Binding = headerBinding{}
-
 type headerBinding struct{}
 
+func (headerBinding) Name() string { return "header" }
+
+// Bind reads request headers; keys are matched case-insensitively.
 func (headerBinding) Bind(req *http.Request, dst any) error {
-	if err := checkDestination(dst); err != nil {
-		return err
+	if req == nil {
+		return badRequest("rest/binding: request must not be nil")
 	}
 
-	// Repeated headers are combined with ", " the way HTTP layers them.
-	values := make(map[string]any, len(req.Header))
+	values := make(map[string][]string, len(req.Header))
 	for key, items := range req.Header {
-		if len(items) == 0 {
-			continue
-		}
-		values[key] = strings.Join(items, ", ")
+		values[key] = items
+		values[strings.ToLower(key)] = items
 	}
-
-	return bindValues(tagHeader, values, dst)
+	return mapByTag(dst, values, "header")
 }

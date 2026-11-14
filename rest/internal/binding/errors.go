@@ -1,11 +1,12 @@
 package binding
 
 import (
-	"errors"
+	"fmt"
 	"net/http"
 )
 
-// Error describes a binding failure with the HTTP status it should produce.
+// Error describes a binding failure together with the HTTP status it should
+// produce, so the rest package can answer with the right code.
 type Error struct {
 	Status int
 	Err    error
@@ -13,6 +14,9 @@ type Error struct {
 
 // Error returns the underlying message.
 func (e *Error) Error() string {
+	if e.Err == nil {
+		return http.StatusText(e.StatusCode())
+	}
 	return e.Err.Error()
 }
 
@@ -29,15 +33,20 @@ func (e *Error) StatusCode() int {
 	return e.Status
 }
 
-func wrapError(err error) error {
+func badRequest(format string, args ...any) error {
+	return &Error{Status: http.StatusBadRequest, Err: fmt.Errorf(format, args...)}
+}
+
+func badRequestErr(err error) error {
 	if err == nil {
 		return nil
 	}
-
-	var bindingErr *Error
-	if errors.As(err, &bindingErr) {
-		return err
-	}
-
 	return &Error{Status: http.StatusBadRequest, Err: err}
+}
+
+func unsupportedMediaType(contentType string) error {
+	return &Error{
+		Status: http.StatusUnsupportedMediaType,
+		Err:    fmt.Errorf("rest/binding: unsupported media type %q", contentType),
+	}
 }

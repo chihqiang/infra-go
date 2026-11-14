@@ -9,14 +9,15 @@ import (
 	"github.com/chihqiang/infra-go/rest/internal/realip"
 )
 
-// Bind decodes the request into dst using the binder for its content type, and
-// runs dst.Validate when implemented. Requests without a body are read from the
-// query string.
+// Bind decodes the request into dst with the binder matching its content type,
+// then validates it with the "binding" struct tags and, when implemented,
+// dst.Validate. Requests without a body are read from the query string.
 func Bind(r *http.Request, dst any) error {
 	return binding.Bind(r, dst)
 }
 
-// BindQuery decodes the query string into dst using form tags.
+// BindQuery decodes the query string into dst using form tags (json tags are
+// used as a fallback).
 func BindQuery(r *http.Request, dst any) error {
 	return binding.BindQuery(r, dst)
 }

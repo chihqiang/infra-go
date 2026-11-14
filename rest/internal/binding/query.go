@@ -2,14 +2,13 @@ package binding
 
 import "net/http"
 
-// Query decodes the URL query string into dst using form tags.
-var Query Binding = queryBinding{}
-
 type queryBinding struct{}
 
+func (queryBinding) Name() string { return "query" }
+
 func (queryBinding) Bind(req *http.Request, dst any) error {
-	if err := checkDestination(dst); err != nil {
-		return err
+	if req == nil || req.URL == nil {
+		return badRequest("rest/binding: request must not be nil")
 	}
-	return bindValues(tagForm, valuesToMap(req.URL.Query()), dst)
+	return mapByTag(dst, req.URL.Query(), "form")
 }

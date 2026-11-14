@@ -1,65 +1,113 @@
 // Package binding decodes HTTP requests into Go structures.
+//
+// Selection is content-type driven, with per-source binders available for query
+// strings, headers and path parameters. Values are mapped through struct tags
+// (form, query, header, path) and validated with the binding tag.
 package binding
 
 import (
-	"errors"
-	"fmt"
 	"mime"
 	"net/http"
 	"strings"
 )
 
-// ErrUnsupportedMediaType is returned when a request body has no matching binder.
-var ErrUnsupportedMediaType = errors.New("binding: unsupported media type")
+// Content-Type values handled by the package.
+const (
+	MIMEJSON              = "application/json"
+	MIMEXML               = "application/xml"
+	MIMEXML2              = "text/xml"
+	MIMEPOSTForm          = "application/x-www-form-urlencoded"
+	MIMEMultipartPOSTForm = "multipart/form-data"
+)
 
 // Binding decodes a request into a destination value.
 type Binding interface {
+	// Name identifies the binder, mainly for error messages and tests.
+	Name() string
 	Bind(req *http.Request, dst any) error
 }
 
-// Bind decodes req into dst using the binder for its content type.
-// Requests without a body are bound from the query string.
-func Bind(req *http.Request, dst any) error {
-	return Binder(req).Bind(req, dst)
+// BindingBody is a Binding that can also decode an already-read body.
+type BindingBody interface {
+	Binding
+	BindBody(body []byte, dst any) error
 }
 
-// BindQuery decodes only the query string into dst.
-func BindQuery(req *http.Request, dst any) error {
-	return Query.Bind(req, dst)
-}
+// Binders exposed for callers that know the request format, mirroring the
+// content types handled by Default.
+var (
+	JSON          BindingBody = jsonBinding{}
+	XML           BindingBody = xmlBinding{}
+	Form          Binding     = formBinding{}
+	FormPost      Binding     = formPostBinding{}
+	FormMultipart Binding     = formMultipartBinding{}
+	Query         Binding     = queryBinding{}
+	Header        Binding     = headerBinding{}
+	Path          Binding     = pathBinding{}
+)
 
-// BindHeader decodes only the request headers into dst.
-func BindHeader(req *http.Request, dst any) error {
-	return Header.Bind(req, dst)
-}
-
-// BindPath decodes only the path parameters into dst.
-func BindPath(req *http.Request, dst any) error {
-	return Path.Bind(req, dst)
-}
-
-// Binder selects the binder matching req's content type. Requests without a
-// body bind from the query string, and bodies without a declared type are
-// treated as forms.
-func Binder(req *http.Request) Binding {
-	if req == nil || !hasBody(req) {
+// Default returns the binder matching the request method and content type.
+// Requests without a body use the query string.
+func Default(method, contentType string) Binding {
+	if method == http.MethodGet || method == http.MethodHead {
 		return Query
+	}
+
+	switch normalizeMediaType(contentType) {
+	case MIMEJSON:
+		return JSON
+	case MIMEXML, MIMEXML2:
+		return XML
+	case MIMEMultipartPOSTForm:
+		return FormMultipart
+	case MIMEPOSTForm:
+		return Form
+	default:
+		return Form
+	}
+}
+
+// Bind decodes req into dst with the binder for its content type.
+func Bind(req *http.Request, dst any) error {
+	if req == nil {
+		return badRequest("rest/binding: request must not be nil")
+	}
+	if !hasBody(req) {
+		return Query.Bind(req, dst)
 	}
 
 	contentType := mediaType(req)
 	if contentType == "" {
-		return Form
+		return formBodyBinding{}.Bind(req, dst)
 	}
-	if binder, ok := byContentType(contentType); ok {
-		return binder
+
+	switch contentType {
+	case MIMEJSON:
+		return JSON.Bind(req, dst)
+	case MIMEXML, MIMEXML2:
+		return XML.Bind(req, dst)
+	case MIMEMultipartPOSTForm:
+		return FormMultipart.Bind(req, dst)
+	case MIMEPOSTForm:
+		return Form.Bind(req, dst)
+	default:
+		return unsupportedMediaType(contentType)
 	}
-	return unsupportedBinding{}
 }
 
-type unsupportedBinding struct{}
+// BindQuery decodes the query string into dst using form tags.
+func BindQuery(req *http.Request, dst any) error {
+	return Query.Bind(req, dst)
+}
 
-func (unsupportedBinding) Bind(*http.Request, any) error {
-	return &Error{Status: http.StatusUnsupportedMediaType, Err: ErrUnsupportedMediaType}
+// BindHeader decodes request headers into dst using header tags.
+func BindHeader(req *http.Request, dst any) error {
+	return Header.Bind(req, dst)
+}
+
+// BindPath decodes path parameters into dst using path tags.
+func BindPath(req *http.Request, dst any) error {
+	return Path.Bind(req, dst)
 }
 
 func hasBody(req *http.Request) bool {
@@ -67,45 +115,24 @@ func hasBody(req *http.Request) bool {
 }
 
 func mediaType(req *http.Request) string {
-	value := req.Header.Get("Content-Type")
+	return normalizeMediaType(req.Header.Get("Content-Type"))
+}
+
+func normalizeMediaType(value string) string {
 	if value == "" {
 		return ""
 	}
 
 	parsed, _, err := mime.ParseMediaType(value)
 	if err != nil {
-		return ""
+		return strings.ToLower(strings.TrimSpace(value))
 	}
 	return strings.ToLower(parsed)
 }
 
-func byContentType(value string) (Binding, bool) {
-	switch value {
-	case "application/json":
-		return JSON, true
-	case "application/xml", "text/xml":
-		return XML, true
-	case "application/x-www-form-urlencoded":
-		return Form, true
-	case "multipart/form-data":
-		return MultipartForm, true
-	default:
-		return nil, false
-	}
-}
-
-// Validatable lets a destination validate itself after decoding.
-type Validatable interface {
-	Validate() error
-}
-
-func validate(dst any) error {
-	validatable, ok := dst.(Validatable)
-	if !ok {
-		return nil
-	}
-	if err := validatable.Validate(); err != nil {
-		return wrapError(fmt.Errorf("binding: validation failed: %w", err))
+func checkDestination(dst any) error {
+	if dst == nil {
+		return badRequest("rest/binding: destination must not be nil")
 	}
 	return nil
 }

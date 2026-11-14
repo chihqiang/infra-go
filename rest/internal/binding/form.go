@@ -1,45 +1,91 @@
 package binding
 
 import (
-	"fmt"
+	"errors"
+	"io"
 	"net/http"
+	"net/url"
 )
 
-// Form decodes the query string and URL-encoded body, with body values winning.
-var Form Binding = formBinding{}
-
-// MultipartForm decodes the query string and multipart body values.
-var MultipartForm Binding = multipartFormBinding{}
-
-const defaultMultipartMemory = 32 << 20
-
 type formBinding struct{}
+type formPostBinding struct{}
+type formMultipartBinding struct{}
 
+func (formBinding) Name() string { return "form" }
+
+// Bind merges the query string with the request body, body values winning.
 func (formBinding) Bind(req *http.Request, dst any) error {
-	if err := checkDestination(dst); err != nil {
-		return err
-	}
 	if err := req.ParseForm(); err != nil {
-		return wrapError(fmt.Errorf("binding: parse form: %w", err))
+		return badRequest("rest/binding: parse form: %v", err)
+	}
+	if err := req.ParseMultipartForm(defaultMemory); err != nil && !errors.Is(err, http.ErrNotMultipart) {
+		return badRequest("rest/binding: parse multipart form: %v", err)
 	}
 
-	values := mergeValues(valuesToMap(req.URL.Query()), valuesToMap(req.PostForm))
-	return bindValues(tagForm, values, dst)
+	values := make(map[string][]string, len(req.Form))
+	for key, items := range req.URL.Query() {
+		values[key] = append([]string(nil), items...)
+	}
+	for key, items := range req.Form {
+		values[key] = items
+	}
+	if req.MultipartForm != nil {
+		for key, items := range req.MultipartForm.Value {
+			values[key] = items
+		}
+	}
+
+	return mapByTag(dst, values, "form")
 }
 
-type multipartFormBinding struct{}
+func (formPostBinding) Name() string { return "form-urlencoded" }
 
-func (multipartFormBinding) Bind(req *http.Request, dst any) error {
-	if err := checkDestination(dst); err != nil {
-		return err
+// Bind reads only the request body values.
+func (formPostBinding) Bind(req *http.Request, dst any) error {
+	if err := req.ParseForm(); err != nil {
+		return badRequest("rest/binding: parse form: %v", err)
 	}
-	if err := req.ParseMultipartForm(defaultMultipartMemory); err != nil {
-		return wrapError(fmt.Errorf("binding: parse multipart form: %w", err))
+	return mapByTag(dst, req.PostForm, "form")
+}
+
+type formBodyBinding struct{}
+
+func (formBodyBinding) Name() string { return "form-body" }
+
+// Bind parses a body that was sent without a Content-Type as urlencoded values.
+func (formBodyBinding) Bind(req *http.Request, dst any) error {
+	if req == nil || req.Body == nil {
+		return mapByTag(dst, map[string][]string{}, "form")
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		return badRequest("rest/binding: read form body: %v", err)
+	}
+	values, err := url.ParseQuery(string(body))
+	if err != nil {
+		return badRequest("rest/binding: parse form body: %v", err)
+	}
+	return mapByTag(dst, values, "form")
+}
+
+func (formMultipartBinding) Name() string { return "multipart/form-data" }
+
+// Bind reads multipart values and uploaded files.
+func (formMultipartBinding) Bind(req *http.Request, dst any) error {
+	if err := req.ParseMultipartForm(defaultMemory); err != nil {
+		return badRequest("rest/binding: parse multipart form: %v", err)
 	}
 
-	values := valuesToMap(req.URL.Query())
-	if req.MultipartForm != nil {
-		values = mergeValues(values, valuesToMap(req.MultipartForm.Value))
+	values := make(map[string][]string, len(req.URL.Query()))
+	for key, items := range req.URL.Query() {
+		values[key] = append([]string(nil), items...)
 	}
-	return bindValues(tagForm, values, dst)
+	form := req.MultipartForm
+	if form == nil {
+		return mapByTag(dst, values, "form")
+	}
+	for key, items := range form.Value {
+		values[key] = items
+	}
+	return mapWithFiles(dst, values, form.File, "form")
 }
