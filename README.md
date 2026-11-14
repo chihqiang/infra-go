@@ -223,6 +223,26 @@ go vet ./...                  # static analysis
 go test ./... -race -count=1  # full unit tests + race detection
 ```
 
+## Acknowledgements
+
+infra-go stands on the shoulders of two excellent Go frameworks. The shape of the `rest` package
+- especially the server/engine split, the `chain` + `handler` middleware layout, route groups and
+the `config → server → route → handler → logic` layering - follows
+[go-zero](https://github.com/zeromicro/go-zero)'s `rest` design, and the request binding layer
+(content-type driven selection, tag mapping, `binding` validation tags) follows
+[gin](https://github.com/gin-gonic/gin)'s `binding` package.
+
+Both are MIT licensed; infra-go carries an independent implementation, but the architecture is
+clearly theirs:
+
+- **go-zero** — `rest`, `rest/chain`, `rest/handler`, `rest/router`, `rest/token` and the
+  middleware naming (`RecoverHandler`, `MaxBytesHandler`, `TimeoutHandler`, ...)
+- **gin** — `rest/internal/binding`: `Binding`/`Default`, form/query/header mapping and
+  validator integration
+
+Thanks to the go-zero and gin maintainers and contributors for publishing designs worth learning
+from.
+
 ## License
 
 [Apache-2.0](./LICENSE)
