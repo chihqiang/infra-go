@@ -3,6 +3,7 @@ package rest
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/chihqiang/infra-go/rest/internal/realip"
@@ -70,6 +71,16 @@ func DefaultConfig() Config {
 			Log:       true,
 		},
 	}
+}
+
+// withDefaults replaces the zero Config with DefaultConfig. A partially
+// populated Config is used as-is, so explicit zero values (Port 0, disabled
+// middleware switches) keep their meaning.
+func (c Config) withDefaults() Config {
+	if reflect.ValueOf(c).IsZero() {
+		return DefaultConfig()
+	}
+	return c
 }
 
 // Validate checks configuration values that cannot be inferred from defaults.

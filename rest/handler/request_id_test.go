@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -44,5 +45,26 @@ func TestRequestIDHandlerGeneratesIDForMissingOrInvalidValue(t *testing.T) {
 		if _, err := uuid.Parse(id); err != nil {
 			t.Errorf("incoming ID %q produced invalid generated ID %q: %v", incoming, id, err)
 		}
+	}
+}
+
+func TestContextWithRequestID(t *testing.T) {
+	ctx := ContextWithRequestID(context.Background(), "req-1")
+	id, ok := RequestIDFromContext(ctx)
+	if !ok || id != "req-1" {
+		t.Fatalf("request ID = %q, %t; want req-1, true", id, ok)
+	}
+
+	empty := ContextWithRequestID(context.Background(), "")
+	if _, ok := RequestIDFromContext(empty); ok {
+		t.Fatal("empty request ID should not be stored")
+	}
+
+	nilCtx := ContextWithRequestID(nil, "req-2")
+	if id, ok := RequestIDFromContext(nilCtx); !ok || id != "req-2" {
+		t.Fatalf("nil context request ID = %q, %t", id, ok)
+	}
+	if _, ok := RequestIDFromContext(nil); ok {
+		t.Fatal("nil context should not contain a request ID")
 	}
 }

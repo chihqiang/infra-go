@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -138,5 +139,45 @@ func TestBindPathNestedStructWithRouteWildcard(t *testing.T) {
 	}
 	if got != "42" {
 		t.Fatalf("nested path id = %q, want 42", got)
+	}
+}
+
+func TestBindAcceptsJSONWithoutJSONContentType(t *testing.T) {
+	for _, contentType := range []string{
+		"",
+		"application/x-www-form-urlencoded",
+		"application/vnd.api+json",
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"ada"}`))
+		if contentType != "" {
+			request.Header.Set("Content-Type", contentType)
+		}
+
+		var payload bindPayload
+		if err := Bind(request, &payload); err != nil {
+			t.Fatalf("content type %q: %v", contentType, err)
+		}
+		if payload.Name != "ada" {
+			t.Fatalf("content type %q: name = %q", contentType, payload.Name)
+		}
+	}
+}
+
+func TestContextWithRequestID(t *testing.T) {
+	ctx := ContextWithRequestID(context.Background(), "req-1")
+	if got := RequestIDFromContext(ctx); got != "req-1" {
+		t.Fatalf("request ID = %q, want req-1", got)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
+	if got := RequestID(request); got != "req-1" {
+		t.Fatalf("RequestID = %q, want req-1", got)
+	}
+
+	if got := RequestIDFromContext(ContextWithRequestID(nil, "req-2")); got != "req-2" {
+		t.Fatalf("nil context request ID = %q, want req-2", got)
+	}
+	if got := RequestIDFromContext(nil); got != "" {
+		t.Fatalf("nil context request ID = %q, want empty", got)
 	}
 }

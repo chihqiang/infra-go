@@ -89,7 +89,9 @@ func main() {
 ```
 
 `rest.DefaultConfig()` fills host/port, timeouts, `MaxBodyBytes` and the default middleware
-switches. A zero `Config` is also valid and starts with all middleware disabled.
+switches. Passing the zero `Config` to `NewServer` uses `DefaultConfig()`; a partially populated
+`Config` is used literally, so start from `DefaultConfig()` when customising and want the other
+defaults.
 
 The package name `rest` does not collide with `net/http`, so handlers can import both directly.
 
@@ -265,6 +267,11 @@ err = rest.BindPath(r, &payload)     // path parameters (path tags)
 | Header | `header` | case-insensitive matching |
 | Path | `path` | reads `Request.PathValue`; nested fields use their leaf wildcard name |
 
+JSON bodies are also recognised when `Content-Type` is missing or is
+`application/x-www-form-urlencoded` (the body starts with `{` or `[` after
+whitespace); `application/*+json` media types are accepted. Other explicit media
+types keep their normal 415 handling.
+
 Every mapper falls back to the `json` tag when the source tag is absent, and
 `"-"` skips a field.
 
@@ -329,7 +336,7 @@ used without a `rest.Server`:
 | Handler | Behaviour |
 |---------|-----------|
 | `RecoverHandler` | Recovers panics → 500, re-panics `http.ErrAbortHandler` |
-| `RequestIDHandler` | Keeps a safe `X-Request-ID` or generates a UUID; `RequestIDFromContext` |
+| `RequestIDHandler` | Keeps a safe `X-Request-ID` or generates a UUID; `ContextWithRequestID` / `RequestIDFromContext` |
 | `TraceHandler(opts...)` | OTel server span; `WithTraceServiceName`, `WithTraceIgnorePaths` |
 | `LogHandler(opts...)` / `LogHandlerWith(log, opts...)` | Access log via `core/logger` with method/pattern/status/duration/ip/request_id; `WithLogSkipPaths`, `WithLogServiceName` |
 | `MaxConnsHandler(n)` | Cap in-flight requests → 503 |

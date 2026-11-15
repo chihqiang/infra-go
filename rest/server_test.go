@@ -599,3 +599,41 @@ func TestWithBreakerCountsTimeoutResponses(t *testing.T) {
 		t.Fatalf("rejection = %q, want http status 503", br.promise.rejected)
 	}
 }
+
+func TestNewServerUsesDefaultConfigForZeroValue(t *testing.T) {
+	server, err := NewServer(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := server.httpServer.Addr; got != "0.0.0.0:8080" {
+		t.Fatalf("addr = %q, want 0.0.0.0:8080", got)
+	}
+	if server.httpServer.ReadTimeout != 10*time.Second || server.httpServer.MaxHeaderBytes != 1<<20 {
+		t.Fatalf("timeouts/limits not defaulted: %+v", server.httpServer)
+	}
+
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/missing", nil))
+	if got := recorder.Header().Get(resthandler.RequestIDHeader); got == "" {
+		t.Fatal("default RequestID middleware was not applied")
+	}
+}
+
+func TestNewServerLeavesPartialConfigLiteral(t *testing.T) {
+	server, err := NewServer(Config{Host: "127.0.0.1", Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := server.httpServer.Addr; got != "127.0.0.1:0" {
+		t.Fatalf("addr = %q, want 127.0.0.1:0", got)
+	}
+	if server.httpServer.ReadTimeout != 0 {
+		t.Fatalf("read timeout = %v, want 0 for a literal partial config", server.httpServer.ReadTimeout)
+	}
+
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/missing", nil))
+	if got := recorder.Header().Get(resthandler.RequestIDHeader); got != "" {
+		t.Fatalf("request ID header = %q, want no default middleware", got)
+	}
+}

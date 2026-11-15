@@ -12,7 +12,9 @@ import (
 
 // Bind decodes the request into dst with the binder matching its content type,
 // then validates it with the "binding" struct tags and, when implemented,
-// dst.Validate. Requests without a body are read from the query string.
+// dst.Validate. Requests without a body are read from the query string. A JSON
+// body is also detected when Content-Type is missing or is the urlencoded form
+// type; application/*+json media types are accepted as JSON.
 func Bind(r *http.Request, dst any) error {
 	return binding.Bind(r, dst)
 }
@@ -70,8 +72,16 @@ func RequestID(r *http.Request) string {
 	return RequestIDFromContext(r.Context())
 }
 
+// ContextWithRequestID returns a context carrying requestID for RequestID,
+// RequestIDFromContext and response envelopes, using the same slot as
+// handler.RequestIDHandler. An empty ID leaves ctx unchanged.
+func ContextWithRequestID(ctx context.Context, requestID string) context.Context {
+	return handler.ContextWithRequestID(ctx, requestID)
+}
+
 // RequestIDFromContext returns the request ID stored in ctx by
-// handler.RequestIDHandler, or an empty string when absent.
+// handler.RequestIDHandler or ContextWithRequestID, or an empty string when
+// absent.
 func RequestIDFromContext(ctx context.Context) string {
 	id, _ := handler.RequestIDFromContext(ctx)
 	return id
