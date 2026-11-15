@@ -19,7 +19,7 @@ func RecoverHandler(next http.HandlerFunc) http.HandlerFunc {
 					logger.Any("panic", recovered),
 					logger.String("stack", string(debug.Stack())),
 				)
-				writeError(w, r, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
+				w.WriteHeader(http.StatusInternalServerError)
 			}
 		}()
 		next(w, r)

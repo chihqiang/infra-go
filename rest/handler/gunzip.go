@@ -24,7 +24,7 @@ func GunzipHandler(next http.HandlerFunc) http.HandlerFunc {
 
 		reader, err := gzip.NewReader(r.Body)
 		if err != nil {
-			writeError(w, r, http.StatusBadRequest, "invalid gzip body")
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		defer func() { _ = reader.Close() }()

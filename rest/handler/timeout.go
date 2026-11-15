@@ -4,6 +4,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"time"
 
@@ -56,7 +57,8 @@ func TimeoutHandler(timeout time.Duration) chain.Middleware {
 				}
 			case <-ctx.Done():
 				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-					writeError(w, r, http.StatusServiceUnavailable, "request timed out")
+					w.WriteHeader(http.StatusServiceUnavailable)
+					_, _ = io.WriteString(w, "Request Timeout")
 				}
 			}
 		}
