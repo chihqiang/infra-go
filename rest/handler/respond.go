@@ -5,6 +5,10 @@ import (
 	"net/http"
 )
 
+// jsonContentType must stay in sync with rest.JSONContentType; handler cannot
+// import the rest package because rest imports handler.
+const jsonContentType = "application/json; charset=utf-8"
+
 // errorResponse mirrors the error fields of rest.BaseResponse. handler cannot
 // import the rest package (rest imports handler), so this small shape is kept
 // here and must stay in sync with rest.BaseResponse.
@@ -26,7 +30,7 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, message stri
 		requestID = w.Header().Get(RequestIDHeader)
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Type", jsonContentType)
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(errorResponse{
 		Code:      businessCodeError,

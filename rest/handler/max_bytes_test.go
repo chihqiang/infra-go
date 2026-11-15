@@ -24,7 +24,7 @@ func TestMaxBytesHandlerRejectsKnownOversizedBody(t *testing.T) {
 	if recorder.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusRequestEntityTooLarge)
 	}
-	if recorder.Header().Get("Content-Type") != "application/json; charset=utf-8" {
+	if recorder.Header().Get("Content-Type") != jsonContentType {
 		t.Fatalf("content type = %q, want JSON", recorder.Header().Get("Content-Type"))
 	}
 	if got := recorder.Header().Get("Connection"); got != "close" {

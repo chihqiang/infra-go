@@ -17,7 +17,7 @@ func TestWriteErrorUsesSharedEnvelope(t *testing.T) {
 	if recorder.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429", recorder.Code)
 	}
-	if got := recorder.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+	if got := recorder.Header().Get("Content-Type"); got != jsonContentType {
 		t.Fatalf("content type = %q", got)
 	}
 
