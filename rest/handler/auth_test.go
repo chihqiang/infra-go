@@ -36,7 +36,7 @@ func TestAuthorizeStoresClaims(t *testing.T) {
 		_, _ = w.Write([]byte(claims.Subject + ":" + scope))
 	})
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
-	request.Header.Set(Header, "Bearer "+signed)
+	request.Header.Set(AuthorizationHeader, "Bearer "+signed)
 	recorder := httptest.NewRecorder()
 
 	handlerFn.ServeHTTP(recorder, request)
@@ -88,7 +88,7 @@ func TestAuthorizeRejectsBadHeaders(t *testing.T) {
 	for _, test := range tests {
 		request := httptest.NewRequest(http.MethodGet, "/", nil)
 		if test.header != "" {
-			request.Header.Set(Header, test.header)
+			request.Header.Set(AuthorizationHeader, test.header)
 		}
 		recorder := httptest.NewRecorder()
 		handlerFn.ServeHTTP(recorder, request)
@@ -120,8 +120,8 @@ func TestAuthorizeRejectsMultipleAuthorizationHeaders(t *testing.T) {
 	handlerFn := Authorize(parser)(func(http.ResponseWriter, *http.Request) {})
 
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
-	request.Header.Add(Header, "Bearer first")
-	request.Header.Add(Header, "Bearer second")
+	request.Header.Add(AuthorizationHeader, "Bearer first")
+	request.Header.Add(AuthorizationHeader, "Bearer second")
 	recorder := httptest.NewRecorder()
 	handlerFn.ServeHTTP(recorder, request)
 
@@ -144,7 +144,7 @@ func TestAuthorizeAcceptsLowercaseScheme(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
-	request.Header.Set(Header, "bearer "+signed)
+	request.Header.Set(AuthorizationHeader, "bearer "+signed)
 	recorder := httptest.NewRecorder()
 
 	handlerFn.ServeHTTP(recorder, request)
@@ -185,5 +185,24 @@ func TestAuthorizeWithoutParserReturnsServerError(t *testing.T) {
 	}
 	if got := recorder.Header().Get("WWW-Authenticate"); got != "" {
 		t.Fatalf("challenge = %q, want none for a server error", got)
+	}
+}
+
+func TestAuthorizeCallbackDefaultsStatus(t *testing.T) {
+	parser := newTokenParser(t)
+	handlerFn := Authorize(parser, WithUnauthorizedCallback(
+		func(w http.ResponseWriter, _ *http.Request, err error) {
+			w.Header().Set("X-Reason", err.Error())
+		},
+	))(func(http.ResponseWriter, *http.Request) {})
+
+	recorder := httptest.NewRecorder()
+	handlerFn.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 when the callback does not set one", recorder.Code)
+	}
+	if got := recorder.Header().Get("X-Reason"); got == "" {
+		t.Fatal("callback header was not applied")
 	}
 }

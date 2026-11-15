@@ -59,8 +59,8 @@ type corsSetting struct {
 	notAllowedFn func(http.ResponseWriter)
 }
 
-// WithCors enables CORS for the given origins, or all origins when none are given.
-func WithCors(origins ...string) Option {
+// WithCORS enables CORS for the given origins, or all origins when none are given.
+func WithCORS(origins ...string) Option {
 	return func(s *Server) {
 		setting := s.cors
 		if setting == nil {
@@ -73,10 +73,10 @@ func WithCors(origins ...string) Option {
 	}
 }
 
-// WithCorsHeaders adds extra allowed request headers to CORS responses. It only
-// configures headers: CORS still has to be enabled with WithCors or
-// WithCustomCors.
-func WithCorsHeaders(headers ...string) Option {
+// WithCORSHeaders adds extra allowed request headers to CORS responses. It only
+// configures headers: CORS still has to be enabled with WithCORS or
+// WithCustomCORS.
+func WithCORSHeaders(headers ...string) Option {
 	return func(s *Server) {
 		if s.cors == nil {
 			s.pendingCorsHeaders = append(s.pendingCorsHeaders, headers...)
@@ -86,8 +86,8 @@ func WithCorsHeaders(headers ...string) Option {
 	}
 }
 
-// WithCustomCors enables CORS with custom header and rejection callbacks.
-func WithCustomCors(headerFn func(http.Header), notAllowedFn func(http.ResponseWriter), origins ...string) Option {
+// WithCustomCORS enables CORS with custom header and rejection callbacks.
+func WithCustomCORS(headerFn func(http.Header), notAllowedFn func(http.ResponseWriter), origins ...string) Option {
 	return func(s *Server) {
 		s.cors = &corsSetting{
 			origins:      append([]string(nil), origins...),

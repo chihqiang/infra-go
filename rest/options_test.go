@@ -11,8 +11,8 @@ import (
 	"github.com/chihqiang/infra-go/rest/handler"
 )
 
-func TestWithCorsAppliesHeadersAndPreflight(t *testing.T) {
-	server, err := NewServer(Config{}, WithCors("https://example.com"), WithCorsHeaders("X-Token"))
+func TestWithCORSAppliesHeadersAndPreflight(t *testing.T) {
+	server, err := NewServer(Config{}, WithCORS("https://example.com"), WithCORSHeaders("X-Token"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,8 +34,8 @@ func TestWithCorsAppliesHeadersAndPreflight(t *testing.T) {
 	}
 }
 
-func TestWithCorsHeadersOnNotFound(t *testing.T) {
-	server, err := NewServer(Config{}, WithCors("https://example.com"))
+func TestWithCORSHeadersOnNotFound(t *testing.T) {
+	server, err := NewServer(Config{}, WithCORS("https://example.com"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,8 +53,8 @@ func TestWithCorsHeadersOnNotFound(t *testing.T) {
 	}
 }
 
-func TestWithCustomCorsNotAllowedHandler(t *testing.T) {
-	server, err := NewServer(Config{}, WithCustomCors(
+func TestWithCustomCORSNotAllowedHandler(t *testing.T) {
+	server, err := NewServer(Config{}, WithCustomCORS(
 		func(http.Header) {},
 		func(w http.ResponseWriter) { _, _ = w.Write([]byte("blocked")) },
 		"https://example.com",
@@ -143,7 +143,7 @@ func TestWithRateLimitRejectsExcessTraffic(t *testing.T) {
 }
 
 func TestCustomCorsOverridesUnmatchedResponse(t *testing.T) {
-	server, err := NewServer(Config{}, WithCustomCors(
+	server, err := NewServer(Config{}, WithCustomCORS(
 		func(http.Header) {},
 		func(w http.ResponseWriter) { _, _ = w.Write([]byte("blocked")) },
 		"https://example.com",
@@ -168,8 +168,8 @@ func TestCustomCorsOverridesUnmatchedResponse(t *testing.T) {
 	}
 }
 
-func TestWithCorsForwardsPlainOptionsToRoute(t *testing.T) {
-	server, err := NewServer(Config{}, WithCors("https://example.com"))
+func TestWithCORSForwardsPlainOptionsToRoute(t *testing.T) {
+	server, err := NewServer(Config{}, WithCORS("https://example.com"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,8 +193,8 @@ func TestWithCorsForwardsPlainOptionsToRoute(t *testing.T) {
 	}
 }
 
-func TestWithCorsHeadersAloneDoesNotEnableCors(t *testing.T) {
-	server, err := NewServer(Config{}, WithCorsHeaders("X-Token"))
+func TestWithCORSHeadersAloneDoesNotEnableCors(t *testing.T) {
+	server, err := NewServer(Config{}, WithCORSHeaders("X-Token"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,14 +206,14 @@ func TestWithCorsHeadersAloneDoesNotEnableCors(t *testing.T) {
 	server.ServeHTTP(recorder, request)
 
 	if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "" {
-		t.Fatalf("allow origin = %q, want empty: WithCorsHeaders must not enable CORS", got)
+		t.Fatalf("allow origin = %q, want empty: WithCORSHeaders must not enable CORS", got)
 	}
 }
 
-func TestWithCorsHeadersBeforeWithCorsIsApplied(t *testing.T) {
+func TestWithCORSHeadersBeforeWithCORSIsApplied(t *testing.T) {
 	server, err := NewServer(Config{},
-		WithCorsHeaders("X-Token"),
-		WithCors("https://example.com"),
+		WithCORSHeaders("X-Token"),
+		WithCORS("https://example.com"),
 	)
 	if err != nil {
 		t.Fatal(err)

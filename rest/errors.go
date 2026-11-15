@@ -82,7 +82,7 @@ func (c *CodeMsg) StatusCode() int {
 	return http.StatusBadRequest
 }
 
-// New creates a CodeMsg error carrying a business code.
-func New(code int, msg string) error {
+// NewCodeError creates a business error carrying code and msg.
+func NewCodeError(code int, msg string) error {
 	return &CodeMsg{Code: code, Msg: msg}
 }

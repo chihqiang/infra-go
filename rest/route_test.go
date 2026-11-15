@@ -167,7 +167,7 @@ func TestWithRouteAuthProtectsGroupRoute(t *testing.T) {
 
 	authorized := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/profile", nil)
-	request.Header.Set(handler.Header, "Bearer "+signed)
+	request.Header.Set(handler.AuthorizationHeader, "Bearer "+signed)
 	server.ServeHTTP(authorized, request)
 	if authorized.Code != http.StatusOK || authorized.Body.String() != "user-1" {
 		t.Fatalf("authorized response = %d %q", authorized.Code, authorized.Body.String())

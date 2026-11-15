@@ -98,7 +98,7 @@ func (p *Parser) Parse(token string) (*Claims, error) {
 		lastErr = err
 	}
 
-	return nil, fmt.Errorf("%w: %v", ErrInvalidToken, lastErr)
+	return nil, fmt.Errorf("%w: %w", ErrInvalidToken, lastErr)
 }
 
 func (p *Parser) parseWithSecret(token, secret string) (*Claims, error) {
