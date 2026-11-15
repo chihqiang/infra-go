@@ -73,6 +73,9 @@ func TestGunzipHandlerRejectsInvalidGzip(t *testing.T) {
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", recorder.Code)
 	}
+	if got := recorder.Body.String(); got != "{\"code\":-1,\"msg\":\"invalid gzip body\"}\n" {
+		t.Fatalf("body = %q, want the shared error envelope", got)
+	}
 }
 
 func TestGunzipHandlerMatchesEncodingTokensCaseInsensitively(t *testing.T) {

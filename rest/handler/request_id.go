@@ -20,7 +20,7 @@ func RequestIDHandler(next http.HandlerFunc) http.HandlerFunc {
 			generated, err := uuid.NewRandom()
 			if err != nil {
 				logger.Error("rest: generate request ID", logger.Err(err))
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				writeError(w, r, http.StatusInternalServerError, "failed to generate request ID")
 				return
 			}
 			id = generated.String()
