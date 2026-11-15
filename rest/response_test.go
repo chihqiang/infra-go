@@ -32,7 +32,7 @@ func TestJSONBaseResponse(t *testing.T) {
 		wantData any
 	}{
 		{name: "success value", input: map[string]string{"name": "ada"}, wantCode: 0, wantMsg: "ok", wantData: map[string]any{"name": "ada"}},
-		{name: "code msg pointer", input: New(4001, "invalid"), wantCode: 4001, wantMsg: "invalid"},
+		{name: "code msg pointer", input: NewCodeError(4001, "invalid"), wantCode: 4001, wantMsg: "invalid"},
 		{name: "code msg struct", input: CodeMsg{Code: 4002, Msg: "conflict"}, wantCode: 4002, wantMsg: "conflict"},
 		{name: "grpc status", input: status.New(codes.NotFound, "missing"), wantCode: 5, wantMsg: "missing"},
 		{name: "grpc error", input: status.Error(codes.Unknown, "boom"), wantCode: 2, wantMsg: "boom"},
@@ -223,7 +223,7 @@ func (errDatabase) Error() string { return "database exploded" }
 
 func TestErrorKeepsBusinessCodeMessage(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	if err := Error(recorder, New(4001, "invalid order")); err != nil {
+	if err := Error(recorder, NewCodeError(4001, "invalid order")); err != nil {
 		t.Fatal(err)
 	}
 	if recorder.Code != http.StatusBadRequest {

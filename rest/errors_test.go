@@ -33,8 +33,8 @@ func TestStatusOf(t *testing.T) {
 		{name: "unavailable", err: ErrServiceUnavailable, want: http.StatusServiceUnavailable},
 		{name: "status coder", err: codedError{}, want: http.StatusGone},
 		{name: "invalid status coder falls back", err: invalidCodedError{}, want: http.StatusInternalServerError},
-		{name: "code msg business code", err: New(4001, "invalid order"), want: http.StatusBadRequest},
-		{name: "code msg http code", err: New(http.StatusConflict, "conflict"), want: http.StatusConflict},
+		{name: "code msg business code", err: NewCodeError(4001, "invalid order"), want: http.StatusBadRequest},
+		{name: "code msg http code", err: NewCodeError(http.StatusConflict, "conflict"), want: http.StatusConflict},
 		{name: "code msg typed nil", err: (*CodeMsg)(nil), want: http.StatusInternalServerError},
 		{name: "unknown", err: errors.New("boom"), want: http.StatusInternalServerError},
 	}
@@ -46,8 +46,8 @@ func TestStatusOf(t *testing.T) {
 	}
 }
 
-func TestNewCarriesCodeAndMessage(t *testing.T) {
-	err := New(4001, "invalid order")
+func TestNewCodeErrorCarriesCodeAndMessage(t *testing.T) {
+	err := NewCodeError(4001, "invalid order")
 
 	var codeMsg *CodeMsg
 	if !errors.As(err, &codeMsg) {
@@ -58,5 +58,13 @@ func TestNewCarriesCodeAndMessage(t *testing.T) {
 	}
 	if err.Error() != "code: 4001, msg: invalid order" {
 		t.Fatalf("Error() = %q", err.Error())
+	}
+}
+
+func TestDeprecatedNewAlias(t *testing.T) {
+	legacy := New(4001, "invalid order")
+	current := NewCodeError(4001, "invalid order")
+	if legacy.Error() != current.Error() {
+		t.Fatalf("legacy error = %q, current error = %q", legacy, current)
 	}
 }

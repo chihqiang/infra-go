@@ -243,6 +243,9 @@ Status resolution order in `StatusOf`:
 Decode failures are wrapped in an internal error that implements `StatusCoder`, so `rest.Error` maps
 them to 400, unsupported content types to 415 and oversized bodies to 413 automatically.
 
+Business errors are created with `rest.NewCodeError(code, msg)`; `rest.New` remains as a deprecated
+alias.
+
 ## Binding
 
 ```go
