@@ -22,7 +22,7 @@ A logging package built on [go.uber.org/zap](https://github.com/uber-go/zap) and
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/logger
+go get github.com/chihqiang/infra-go/core/logger
 ```
 
 ## Quick start
@@ -31,7 +31,7 @@ go get github.com/chihqiang/infra-go/logger
 package main
 
 import (
-    "github.com/chihqiang/infra-go/logger"
+    "github.com/chihqiang/infra-go/core/logger"
 )
 
 func main() {
@@ -283,7 +283,7 @@ defer unregister() // undo it when no longer needed (idempotent; repeated calls 
 The `infra-go/trace` package registers a tracing extractor automatically in `init()`, so no manual setup is required:
 
 ```go
-import _ "github.com/chihqiang/infra-go/trace" // registers the trace_id, span_id extractors automatically
+import _ "github.com/chihqiang/infra-go/core/trace" // registers the trace_id, span_id extractors automatically
 ```
 
 Extracted fields:
@@ -379,7 +379,7 @@ package main
 import (
     "time"
 
-    "github.com/chihqiang/infra-go/logger"
+    "github.com/chihqiang/infra-go/core/logger"
 )
 
 func main() {

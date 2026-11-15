@@ -18,7 +18,7 @@ connection pool management, key prefixes, distributed locks, and more.
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/redisx
+go get github.com/chihqiang/infra-go/core/redisx
 ```
 
 ## Quick start
@@ -31,7 +31,7 @@ import (
     "fmt"
     "time"
 
-    "github.com/chihqiang/infra-go/redisx"
+    "github.com/chihqiang/infra-go/core/redisx"
 )
 
 func main() {

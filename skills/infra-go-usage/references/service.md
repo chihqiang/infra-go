@@ -12,13 +12,13 @@ recovery and graceful shutdown.
   `logger` without interrupting other services; a panic in `Start` automatically triggers `Stop`
   to unblock the other services
 - **Adapters**: `WithStart` / `WithStarter` wrap plain functions; `AsService` adapts objects
-  with `Start() error` + `Stop() error` (such as `httpx.Server`)
+  with `Start() error` + `Stop() error` (such as `rest.Server`)
 - **Logger integration**: errors are recorded with the global `infra-go/logger`
 
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/service
+go get github.com/chihqiang/infra-go/core/service
 ```
 
 ## Core interfaces
@@ -49,26 +49,28 @@ package main
 import (
     "net/http"
 
-    "github.com/chihqiang/infra-go/httpx"
-    "github.com/chihqiang/infra-go/service"
+    "github.com/chihqiang/infra-go/rest"
+    "github.com/chihqiang/infra-go/core/service"
 )
 
 func main() {
     sg := service.NewServiceGroup()
 
     // HTTP service
-    server := httpx.NewServer(httpx.ServerConfig{
-        Host: "0.0.0.0",
-        Port: 8080,
-    })
-    server.AddRoute(httpx.Route{
+    conf := rest.DefaultConfig()
+    conf.Host, conf.Port = "0.0.0.0", 8080
+    server, err := rest.NewServer(conf)
+    if err != nil {
+        panic(err)
+    }
+    server.AddRoute(rest.Route{
         Method: "GET", Path: "/ping",
-        Handler: func(w http.ResponseWriter, r *http.Request) {
-            httpx.OkJSON(w, "pong")
-        },
+        Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            _ = rest.OkJSON(w, "pong")
+        }),
     })
 
-    // Adapt *httpx.Server into a Service with service.AsService for direct management
+    // Adapt *rest.Server into a Service with service.AsService for direct management
     // (AsService adapts objects with Start() error + Stop() error; Start blocks until the signal
     // arrives and triggers a graceful shutdown)
     sg.Add(service.AsService(server))
@@ -84,11 +86,11 @@ func main() {
 sg := service.NewServiceGroup()
 
 // Adding several services:
-// - objects shaped like *httpx.Server (Start() error + Stop() error) go straight through
+// - objects shaped like *rest.Server (Start() error + Stop() error) go straight through
 //   service.AsService
 // - plain functions with no stop capability, or that handle the exit signal themselves, use
 //   service.WithStart
-sg.Add(service.AsService(server))                  // HTTP service (httpx.Server)
+sg.Add(service.AsService(server))                  // HTTP service (rest.Server)
 sg.Add(service.WithStart(func() { _ = consumer.Run() })) // Redis consumer (asynq)
 sg.Add(service.WithStart(func() { cronTick() }))  // cron job
 
@@ -147,11 +149,13 @@ sg.Add(service.WithStarter(&MyStarter{}))
 ### AsService
 
 Adapts objects that implement `Start() error` and `Stop() error` into a Service, ready for
-`sg.Add`. A typical object is `httpx.Server` (both its `Start` and `Stop` return an error, so the
+`sg.Add`. A typical object is `rest.Server` (both its `Start` and `Stop` return an error, so the
 signatures differ from `Service.Starter`/`Stopper` and it cannot be used as a Service directly):
 
 ```go
-server := httpx.NewServer(httpx.ServerConfig{Host: "0.0.0.0", Port: 8080})
+conf := rest.DefaultConfig()
+conf.Host, conf.Port = "0.0.0.0", 8080
+server, _ := rest.NewServer(conf)
 // ...register routes...
 
 sg.Add(service.AsService(server)) // managed together by the ServiceGroup
@@ -217,7 +221,7 @@ sg.Stop() // returns normally; the panic was logged
 | ------ | ------ |
 | `WithStart(fn)` | Wrap a `func()` into a Service (Stop is a no-op) |
 | `WithStarter(s)` | Wrap a `Starter` into a Service (Stop is a no-op) |
-| `AsService(s)` | Adapt an object with `Start() error` + `Stop() error` (such as `httpx.Server`) into a Service |
+| `AsService(s)` | Adapt an object with `Start() error` + `Stop() error` (such as `rest.Server`) into a Service |
 
 ## Stop order
 

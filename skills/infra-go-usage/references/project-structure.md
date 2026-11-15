@@ -57,9 +57,9 @@ Holds only config structs; declare defaults, ranges and enums with `json` tags, 
 ```go
 type Config struct {
     App      App                `json:"app"`
-    Server   httpx.ServerConfig `json:"server"`
-    DB       orm.Config         `json:"db"`
-    JWT      jwt.Config         `json:"jwt"`
+    Server   rest.Config `json:"server"`
+    DB       orm.Config  `json:"db"`
+    Token    token.Config `json:"token"`
     Logger   logger.Config      `json:"logger"`
     Security SecurityConfig     `json:"security"`
     Redis    redisx.Config      `json:"redis,optional"`
@@ -74,7 +74,7 @@ Creates, injects and manages the lifecycle of each component (DB, Redis, JWT, Lo
 type ServiceContext struct {
     Config        config.Config
     DB            *gorm.DB
-    JWT           *jwt.JWT
+    Token         *token.Parser
     RedisClient   redis.UniversalClient
     AuthLogic     *logic.AuthLogic
     OrderLogic    *logic.OrderLogic
@@ -82,7 +82,7 @@ type ServiceContext struct {
 }
 
 func NewServiceContext(c config.Config) (*ServiceContext, error) {
-    // In dependency order: orm.New → db.Migrate → jwt.New → redisx.New → each Logic/Handler
+    // In dependency order: orm.New → db.Migrate → token.NewParser → redisx.New → each Logic/Handler
 }
 
 func (sc *ServiceContext) Close() { /* close DB / Redis / background workers */ }
@@ -93,14 +93,16 @@ func (sc *ServiceContext) Close() { /* close DB / Redis / background workers */ 
 Registers all routes and the middleware chain in one place:
 
 ```go
-func Register(server *httpx.Server, svcCtx *svc.ServiceContext) {
-    server.Use(httpx.WithRequestID())
-    server.Use(httpx.WithRecovery())
-    server.Use(httpx.WithLogger())
-    server.Use(httpx.WithTracing("/healthz"))
+func Register(server *rest.Server, svcCtx *svc.ServiceContext) {
+    // request id / recovery / access log / trace are switched on by
+    // rest.DefaultConfig(); mount extras here
+    server.Use(resthandler.TraceHandler(
+        resthandler.WithTraceIgnorePaths("/healthz"),
+        resthandler.WithTraceServiceName("my-service"),
+    ))
 
     v1 := server.Group("/api/v1")
-    v1.AddRoute(httpx.Route{
+    v1.AddRoute(rest.Route{
         Method: http.MethodPost,
         Path:   "/orders",
         Handler: svcCtx.OrderHandler.Create,
@@ -117,15 +119,16 @@ Does only three things: **bind params → call Logic → unified response**:
 func (h *OrderHandler) Create(w http.ResponseWriter, r *http.Request) {
     ctx := r.Context()
     var req logic.CreateOrderRequest
-    if err := httpx.MustBindJSON(w, r, &req); err != nil {
-        return // 400 already written automatically
+    if err := rest.Bind(r, &req); err != nil {
+        _ = rest.ErrorCtx(ctx, w, err) // 400/415 chosen from the error
+        return
     }
     order, err := h.svc.Create(ctx, &req)
     if err != nil {
-        httpx.OkJSONCtx(ctx, w, httpx.NewCodeError(httpx.CodeDefaultError, err.Error()))
+        _ = rest.ErrorCtx(ctx, w, err)
         return
     }
-    httpx.OkJSONCtx(ctx, w, order)
+    rest.JSONBaseResponseCtx(ctx, w, order)
 }
 ```
 
@@ -143,26 +146,26 @@ GORM entities (table names, comments, indexes), constants and DTOs, matching `db
 
 ### middleware — middleware
 
-Business-specific middleware (auth, audit, permissions, context injection) implements the `httpx.Middleware` signature (`func(http.HandlerFunc) http.HandlerFunc`) for `route` to mount.
+Business-specific middleware (auth, audit, permissions, context injection) implements `chain.Middleware` (`func(http.HandlerFunc) http.HandlerFunc`) for `route` to mount.
 
-- For common capabilities use the httpx built-ins directly: `httpx.WithJWT` (JWT auth), `httpx.WithRateLimit` (rate limiting), `httpx.WithTracing` (tracing), `httpx.WithRecovery`, etc.
-- To bring in a third-party standard `func(http.Handler) http.Handler` middleware, wrap it with `httpx.AsMiddleware` before registering.
-- Reading the current user's claims inside a handler: `jwt.ClaimsFromContext(r.Context())`.
+- For common capabilities use the rest built-ins directly: `rest.WithRouteAuth` (JWT auth), `resthandler.RateLimitHandler` (rate limiting), `resthandler.TraceHandler` (tracing), `resthandler.RecoverHandler`, etc.
+- To bring in a third-party standard `func(http.Handler) http.Handler` middleware, wrap it into `chain.Middleware` before calling `server.Use`.
+- Reading the current user's claims inside a handler: `token.ClaimsFrom(r.Context())`.
 
 ## Mapping to infra-go modules
 
 | Directory | infra-go modules used |
 |------|------|
 | `config` | `conf` (loading / defaults / validation) |
-| `svc` | `orm` · `redisx` · `jwt` · `hash` (assembly) |
-| `route` | `httpx` (AddRoute/Group/Use) |
-| `handler` | `httpx` (MustBind* / OkJSON / WriteHTTPError) |
-| `middleware` | `httpx.WithJWT` · `httpx.WithRateLimit` · httpx built-in middleware |
+| `svc` | `orm` · `redisx` · `token` · `hash` (assembly) |
+| `route` | `rest` (AddRoute/Group/Use) |
+| `handler` | `rest` (Bind / Error / JSONBaseResponse) |
+| `middleware` | `rest.WithRouteAuth` · `resthandler.RateLimitHandler` · rest built-in handlers |
 | `logic` | `orm` · `redisx` · `retry` · `taskq` · `syncx` · `cast` · `hash` |
-| `main.go` | `conf` · `logger` · `httpx` · `service` (multi-service orchestration) |
+| `main.go` | `conf` · `logger` · `rest` · `service` (multi-service orchestration) |
 
 ## Recommendations
 
 - Small services (single domain, <10 endpoints) may merge `handler` + `logic`, but keep the `svc` and `route` layers.
-- Add `ws/` (based on `websocket`) when you need realtime communication; add `job/` (based on `taskq`) for async tasks.
+- Add `ws/` (based on `ws`) when you need realtime communication; add `job/` (based on `taskq`) for async tasks.
 - Keep development defaults in `config.yaml`; never commit sensitive config (JWT Secret, database password) — override it with the `${VAR}` support of `conf.UseEnv()`.

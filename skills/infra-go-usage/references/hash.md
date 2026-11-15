@@ -17,7 +17,7 @@ A package wrapping common hashing algorithms: MD5, SHA1, SHA256, SHA512, SHA3, H
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/hash
+go get github.com/chihqiang/infra-go/core/hash
 ```
 
 ## Quick start
@@ -28,7 +28,7 @@ package main
 import (
     "fmt"
 
-    "github.com/chihqiang/infra-go/hash"
+    "github.com/chihqiang/infra-go/core/hash"
 )
 
 func main() {
@@ -128,7 +128,7 @@ decrypted, err := hash.AESGCMDecrypt(key, encrypted)
 
 ### HMAC sign/verify
 
-`HMACSign` / `HMACVerify` are used for request signing and tamper detection (e.g. `httpx.WithContentSecurity`). The signature is base64-encoded and verification uses constant-time comparison (`hmac.Equal`) to prevent timing attacks:
+`HMACSign` / `HMACVerify` are used for request signing and tamper detection (e.g. `rest.WithSignature` for signed request bodies). The signature is base64-encoded and verification uses constant-time comparison (`hmac.Equal`) to prevent timing attacks:
 
 ```go
 // sign: returns the base64-encoded HMAC-SHA256
@@ -199,8 +199,8 @@ import (
     "fmt"
     "os"
 
-    "github.com/chihqiang/infra-go/hash"
-    "github.com/chihqiang/infra-go/logger"
+    "github.com/chihqiang/infra-go/core/hash"
+    "github.com/chihqiang/infra-go/core/logger"
 )
 
 func main() {

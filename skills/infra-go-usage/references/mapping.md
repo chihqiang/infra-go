@@ -20,7 +20,7 @@ It supports defining defaults, environment variables, optional fields, enum vali
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/mapping
+go get github.com/chihqiang/infra-go/core/mapping
 ```
 
 ## Quick start
@@ -33,7 +33,7 @@ import (
     "fmt"
     "time"
 
-    "github.com/chihqiang/infra-go/mapping"
+    "github.com/chihqiang/infra-go/core/mapping"
 )
 
 type Config struct {
@@ -270,8 +270,8 @@ func UnmarshalKey(m map[string]any, v any) error
 ### NewDefaultUnmarshaler
 
 Creates an unmarshaler that only fills defaults (equivalent to `NewUnmarshaler("json", WithDefault())`).
-It is the single entry point for the fillDefault pattern used by the conf, logger, orm, redisx, jwt,
-httpx, taskq and trace modules:
+It is the single entry point for the fillDefault pattern used by the conf, logger, orm, redisx, token,
+http, taskq and trace modules:
 
 ```go
 func NewDefaultUnmarshaler() *Unmarshaler
@@ -387,6 +387,6 @@ err := mapping.UnmarshalJsonMap(m, &cfg, mapping.WithCanonicalKeyFunc(strings.To
 - **logger**: fills the logging defaults (`MustFillAndOverride`)
 - **orm**: fills the database defaults (`MustFillAndOverride`)
 - **redisx**: fills the Redis defaults (`MustFillAndOverride`)
-- **httpx**: fills the HTTP server defaults (`MustFillAndOverride`)
-- **jwt**: fills the JWT defaults (`MustFillAndOverride`)
+- **http**: fills the HTTP server defaults (`MustFillAndOverride`)
+- **token**: fills the token defaults (`MustFillAndOverride`)
 - **trace**: fills the tracing defaults
