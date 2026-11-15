@@ -83,8 +83,7 @@ func main() {
                 _ = rest.Error(w, err) // binding failures map to 400/415 automatically
                 return
             }
-            // {"code":0,"msg":"ok","request_id":"...","data":{"msg":"hello, ..."}}
-            _ = rest.OkJSONCtx(r.Context(), w, map[string]string{"msg": "hello, " + req.Name})
+            _ = rest.OkJSON(w, map[string]string{"msg": "hello, " + req.Name})
         }),
     })
 

@@ -108,16 +108,8 @@ func TestOkXML(t *testing.T) {
 	if got := recorder.Header().Get("Content-Type"); got != XMLContentType {
 		t.Fatalf("content type = %q, want %q", got, XMLContentType)
 	}
-	body := recorder.Body.String()
-	for _, want := range []string{
-		`<xml version="1.0" encoding="UTF-8">`,
-		"<code>0</code>",
-		"<msg>ok</msg>",
-		"<data><name>ada</name></data>",
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("xml body missing %q:\n%s", want, body)
-		}
+	if got := recorder.Body.String(); got != "<namedValue><name>ada</name></namedValue>" {
+		t.Fatalf("body = %q", got)
 	}
 }
 
@@ -184,8 +176,8 @@ func TestJSONWriters(t *testing.T) {
 		if got := recorder.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
 			t.Errorf("%s: content type = %q", test.name, got)
 		}
-		if got := recorder.Body.String(); got != "{\"code\":0,\"msg\":\"ok\",\"data\":{\"status\":\"fine\"}}\n" {
-			t.Errorf("%s: body = %q", test.name, got)
+		if recorder.Body.String() != "{\"status\":\"fine\"}\n" {
+			t.Errorf("%s: body = %q", test.name, recorder.Body.String())
 		}
 	}
 }
@@ -317,23 +309,5 @@ func TestOkHTMLCtxWritesHTML(t *testing.T) {
 	}
 	if recorder.Body.String() != "<p>ok</p>" {
 		t.Fatalf("body = %q", recorder.Body.String())
-	}
-}
-
-func TestOkJSONCtxCarriesRequestID(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	handlerFn := handler.RequestIDHandler(func(w http.ResponseWriter, r *http.Request) {
-		if err := OkJSONCtx(r.Context(), w, "pong"); err != nil {
-			t.Fatal(err)
-		}
-	})
-	handlerFn.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
-
-	envelope := decodeEnvelope(t, recorder.Body.Bytes())
-	if envelope["code"] != float64(BusinessCodeOK) || envelope["data"] != "pong" {
-		t.Fatalf("envelope = %v", envelope)
-	}
-	if id, _ := envelope["request_id"].(string); id == "" {
-		t.Fatal("request_id is missing from the envelope")
 	}
 }

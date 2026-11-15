@@ -71,26 +71,14 @@ func WriteJSON(w http.ResponseWriter, status int, v any) error {
 	return restresponse.WriteJSON(w, status, v)
 }
 
-// OkJSON writes v wrapped in a BaseResponse envelope as JSON with status 200.
-// Use WriteJSON for a raw body.
+// OkJSON writes v as JSON with status 200.
 func OkJSON(w http.ResponseWriter, v any) error {
-	return OkJSONCtx(context.Background(), w, v)
+	return WriteJSON(w, http.StatusOK, v)
 }
 
-// OkJSONCtx is OkJSON with a context: the envelope carries the request ID from
-// ctx when the RequestIDHandler middleware is in the chain.
-func OkJSONCtx(ctx context.Context, w http.ResponseWriter, v any) error {
-	return WriteJSON(w, http.StatusOK, WrapBaseResponseCtx(ctx, v))
-}
-
-// CreatedJSON writes v wrapped in a BaseResponse envelope as JSON with status 201.
+// CreatedJSON writes v as JSON with status 201.
 func CreatedJSON(w http.ResponseWriter, v any) error {
-	return CreatedJSONCtx(context.Background(), w, v)
-}
-
-// CreatedJSONCtx is CreatedJSON with a context.
-func CreatedJSONCtx(ctx context.Context, w http.ResponseWriter, v any) error {
-	return WriteJSON(w, http.StatusCreated, WrapBaseResponseCtx(ctx, v))
+	return WriteJSON(w, http.StatusCreated, v)
 }
 
 // NoContent writes a bodyless 204 response.
@@ -124,45 +112,41 @@ func WrapBaseResponseCtx(ctx context.Context, v any) BaseResponse[any] {
 }
 
 // JSONBaseResponse writes v wrapped in BaseResponse as JSON with status 200.
-// It is equivalent to OkJSON.
 func JSONBaseResponse(w http.ResponseWriter, v any) {
 	JSONBaseResponseCtx(context.Background(), w, v)
 }
 
 // JSONBaseResponseCtx writes v wrapped in BaseResponse as JSON with status 200,
-// adding the request ID from ctx. It is equivalent to OkJSONCtx.
+// adding the request ID from ctx.
 func JSONBaseResponseCtx(ctx context.Context, w http.ResponseWriter, v any) {
-	if err := OkJSONCtx(ctx, w, v); err != nil {
+	if err := OkJSON(w, WrapBaseResponseCtx(ctx, v)); err != nil {
 		logger.ErrorCtx(ctx, "rest: write json base response", logger.Err(err))
 	}
 }
 
 // XMLBaseResponse writes v wrapped in BaseResponse as XML with status 200.
-// It is equivalent to OkXML.
 func XMLBaseResponse(w http.ResponseWriter, v any) {
 	XMLBaseResponseCtx(context.Background(), w, v)
 }
 
 // XMLBaseResponseCtx writes v wrapped in BaseResponse as XML with status 200,
-// adding the request ID from ctx. It is equivalent to OkXMLCtx.
+// adding the request ID from ctx.
 func XMLBaseResponseCtx(ctx context.Context, w http.ResponseWriter, v any) {
-	OkXMLCtx(ctx, w, v)
-}
-
-// OkXML writes v wrapped in a BaseResponse envelope as XML with status 200.
-// Use WriteXML for a raw body.
-func OkXML(w http.ResponseWriter, v any) {
-	OkXMLCtx(context.Background(), w, v)
-}
-
-// OkXMLCtx is OkXML with a context: the envelope carries the request ID from ctx.
-func OkXMLCtx(ctx context.Context, w http.ResponseWriter, v any) {
-	envelope := xmlEnvelope[any]{
+	OkXMLCtx(ctx, w, xmlEnvelope[any]{
 		Version:      xmlVersion,
 		Encoding:     xmlEncoding,
 		BaseResponse: WrapBaseResponseCtx(ctx, v),
-	}
-	if err := doWriteXML(w, http.StatusOK, envelope); err != nil {
+	})
+}
+
+// OkXML writes v as an XML body with status 200.
+func OkXML(w http.ResponseWriter, v any) {
+	WriteXML(w, http.StatusOK, v)
+}
+
+// OkXMLCtx writes v as an XML body with status 200 and logs with ctx.
+func OkXMLCtx(ctx context.Context, w http.ResponseWriter, v any) {
+	if err := doWriteXML(w, http.StatusOK, v); err != nil {
 		logger.ErrorCtx(ctx, "rest: write xml response", logger.Err(err))
 	}
 }
