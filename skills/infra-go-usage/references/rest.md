@@ -265,6 +265,11 @@ err = rest.BindPath(r, &payload)     // path parameters (path tags)
 | Header | `header` | case-insensitive matching |
 | Path | `path` | reads `Request.PathValue`; nested fields use their leaf wildcard name |
 
+JSON bodies are also recognised when `Content-Type` is missing or is
+`application/x-www-form-urlencoded` (the body starts with `{` or `[` after
+whitespace); `application/*+json` media types are accepted. Other explicit media
+types keep their normal 415 handling.
+
 Every mapper falls back to the `json` tag when the source tag is absent, and
 `"-"` skips a field.
 

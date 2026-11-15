@@ -6,11 +6,18 @@
 package binding
 
 import (
+	"bytes"
+	"errors"
+	"io"
 	"mime"
 	"net/http"
 	"reflect"
 	"strings"
 )
+
+// jsonSniffSize bounds the body prefix inspected to recognise a JSON payload
+// when the Content-Type is missing or declares a form.
+const jsonSniffSize = 512
 
 // Content-Type values handled by the package.
 const (
@@ -54,9 +61,11 @@ func Default(method, contentType string) Binding {
 		return Query
 	}
 
-	switch normalizeMediaType(contentType) {
-	case MIMEJSON:
+	normalized := normalizeMediaType(contentType)
+	if isJSONMediaType(normalized) {
 		return JSON
+	}
+	switch normalized {
 	case MIMEXML, MIMEXML2:
 		return XML
 	case MIMEMultipartPOSTForm:
@@ -78,22 +87,94 @@ func Bind(req *http.Request, dst any) error {
 	}
 
 	contentType := mediaType(req)
-	if contentType == "" {
-		return formBodyBinding{}.Bind(req, dst)
+
+	// Clients often omit the JSON Content-Type or send curl's default
+	// application/x-www-form-urlencoded. Inspect the body prefix so a JSON
+	// payload still reaches the JSON binder instead of being parsed as a form.
+	if contentType == "" || contentType == MIMEPOSTForm {
+		isJSON, err := looksLikeJSONBody(req)
+		if err != nil {
+			return requestError("rest/binding: read body: %w", err)
+		}
+		if isJSON {
+			return JSON.Bind(req, dst)
+		}
 	}
 
-	switch contentType {
-	case MIMEJSON:
+	switch {
+	case contentType == "":
+		return formBodyBinding{}.Bind(req, dst)
+	case isJSONMediaType(contentType):
 		return JSON.Bind(req, dst)
-	case MIMEXML, MIMEXML2:
+	case contentType == MIMEXML || contentType == MIMEXML2:
 		return XML.Bind(req, dst)
-	case MIMEMultipartPOSTForm:
+	case contentType == MIMEMultipartPOSTForm:
 		return FormMultipart.Bind(req, dst)
-	case MIMEPOSTForm:
+	case contentType == MIMEPOSTForm:
 		return Form.Bind(req, dst)
 	default:
 		return unsupportedMediaType(contentType)
 	}
+}
+
+// isJSONMediaType reports whether contentType is JSON, including the RFC 6839
+// structured suffix (for example application/vnd.api+json).
+func isJSONMediaType(contentType string) bool {
+	return contentType == MIMEJSON || strings.HasSuffix(contentType, "+json")
+}
+
+// looksLikeJSONBody reads a small prefix of the body and restores it. The caller
+// must only invoke it when the body will otherwise be treated as a form.
+func looksLikeJSONBody(req *http.Request) (bool, error) {
+	body := req.Body
+	buf := make([]byte, jsonSniffSize)
+	n := 0
+	var readErr error
+
+	for n < len(buf) {
+		read, err := body.Read(buf[n:])
+		n += read
+		if err != nil {
+			readErr = err
+			break
+		}
+		if read == 0 {
+			break
+		}
+		if firstNonSpace(buf[:n]) != 0 {
+			break
+		}
+	}
+
+	req.Body = replayBody{
+		Reader: io.MultiReader(bytes.NewReader(buf[:n]), body),
+		Closer: body,
+	}
+
+	if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		return false, readErr
+	}
+
+	first := firstNonSpace(buf[:n])
+	return first == '{' || first == '[', nil
+}
+
+func firstNonSpace(buf []byte) byte {
+	for _, b := range buf {
+		switch b {
+		case ' ', '\t', '\r', '\n':
+			continue
+		default:
+			return b
+		}
+	}
+	return 0
+}
+
+// replayBody replays the inspected prefix before the original body.
+type replayBody struct {
+	io.Reader
+	io.Closer
 }
 
 // BindQuery decodes the query string into dst using form tags.

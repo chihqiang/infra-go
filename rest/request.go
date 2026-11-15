@@ -12,7 +12,9 @@ import (
 
 // Bind decodes the request into dst with the binder matching its content type,
 // then validates it with the "binding" struct tags and, when implemented,
-// dst.Validate. Requests without a body are read from the query string.
+// dst.Validate. Requests without a body are read from the query string. A JSON
+// body is also detected when Content-Type is missing or is the urlencoded form
+// type; application/*+json media types are accepted as JSON.
 func Bind(r *http.Request, dst any) error {
 	return binding.Bind(r, dst)
 }

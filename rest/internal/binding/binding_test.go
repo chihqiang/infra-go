@@ -827,3 +827,60 @@ func TestPathBindNestedStructUsesLeafWildcardName(t *testing.T) {
 		t.Fatalf("org = %+v", payload.Org)
 	}
 }
+
+func TestBindJSONWithoutJSONContentType(t *testing.T) {
+	tests := []struct {
+		name        string
+		contentType string
+		body        string
+	}{
+		{name: "missing content type", body: `{"name":"ada","age":36}`},
+		{name: "urlencoded content type", contentType: MIMEPOSTForm, body: `{"name":"ada","age":36}`},
+		{name: "leading whitespace", body: " \n\t{\"name\":\"ada\",\"age\":36}"},
+		{name: "vendor json suffix", contentType: "application/vnd.api+json", body: `{"name":"ada","age":36}`},
+	}
+
+	for _, test := range tests {
+		request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(test.body))
+		if test.contentType != "" {
+			request.Header.Set("Content-Type", test.contentType)
+		}
+
+		var payload jsonPayload
+		if err := Bind(request, &payload); err != nil {
+			t.Fatalf("%s: %v", test.name, err)
+		}
+		if payload.Name != "ada" || payload.Age != 36 {
+			t.Fatalf("%s: payload = %+v", test.name, payload)
+		}
+	}
+}
+
+func TestBindJSONSniffReplaysLargeBody(t *testing.T) {
+	name := strings.Repeat("a", 1024)
+	request := httptest.NewRequest(http.MethodPost, "/",
+		strings.NewReader(`{"name":"`+name+`"}`))
+	// jsonSniffSize is 512, so this body crosses the inspected prefix.
+
+	var payload jsonPayload
+	if err := Bind(request, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Name != name {
+		t.Fatalf("name length = %d, want %d", len(payload.Name), len(name))
+	}
+}
+
+func TestBindJSONSniffMapsBodyLimitTo413(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"ada"}`))
+	request.Body = http.MaxBytesReader(httptest.NewRecorder(), request.Body, 4)
+
+	var payload jsonPayload
+	err := Bind(request, &payload)
+	if err == nil {
+		t.Fatal("oversized body should fail")
+	}
+	if statusOf(t, err) != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", statusOf(t, err))
+	}
+}

@@ -140,3 +140,24 @@ func TestBindPathNestedStructWithRouteWildcard(t *testing.T) {
 		t.Fatalf("nested path id = %q, want 42", got)
 	}
 }
+
+func TestBindAcceptsJSONWithoutJSONContentType(t *testing.T) {
+	for _, contentType := range []string{
+		"",
+		"application/x-www-form-urlencoded",
+		"application/vnd.api+json",
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"ada"}`))
+		if contentType != "" {
+			request.Header.Set("Content-Type", contentType)
+		}
+
+		var payload bindPayload
+		if err := Bind(request, &payload); err != nil {
+			t.Fatalf("content type %q: %v", contentType, err)
+		}
+		if payload.Name != "ada" {
+			t.Fatalf("content type %q: name = %q", contentType, payload.Name)
+		}
+	}
+}
