@@ -32,8 +32,25 @@ func RequestIDHandler(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// RequestIDFromContext returns the request ID stored by RequestIDHandler.
+// ContextWithRequestID returns a context carrying requestID in the same slot
+// used by RequestIDHandler, so RequestIDFromContext and response helpers can
+// read it. An empty requestID leaves ctx unchanged.
+func ContextWithRequestID(ctx context.Context, requestID string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if requestID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, requestIDContextKey{}, requestID)
+}
+
+// RequestIDFromContext returns the request ID stored by RequestIDHandler or
+// ContextWithRequestID.
 func RequestIDFromContext(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
 	id, ok := ctx.Value(requestIDContextKey{}).(string)
 	return id, ok
 }

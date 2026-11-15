@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -159,5 +160,24 @@ func TestBindAcceptsJSONWithoutJSONContentType(t *testing.T) {
 		if payload.Name != "ada" {
 			t.Fatalf("content type %q: name = %q", contentType, payload.Name)
 		}
+	}
+}
+
+func TestContextWithRequestID(t *testing.T) {
+	ctx := ContextWithRequestID(context.Background(), "req-1")
+	if got := RequestIDFromContext(ctx); got != "req-1" {
+		t.Fatalf("request ID = %q, want req-1", got)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
+	if got := RequestID(request); got != "req-1" {
+		t.Fatalf("RequestID = %q, want req-1", got)
+	}
+
+	if got := RequestIDFromContext(ContextWithRequestID(nil, "req-2")); got != "req-2" {
+		t.Fatalf("nil context request ID = %q, want req-2", got)
+	}
+	if got := RequestIDFromContext(nil); got != "" {
+		t.Fatalf("nil context request ID = %q, want empty", got)
 	}
 }

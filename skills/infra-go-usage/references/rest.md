@@ -334,7 +334,7 @@ used without a `rest.Server`:
 | Handler | Behaviour |
 |---------|-----------|
 | `RecoverHandler` | Recovers panics → 500, re-panics `http.ErrAbortHandler` |
-| `RequestIDHandler` | Keeps a safe `X-Request-ID` or generates a UUID; `RequestIDFromContext` |
+| `RequestIDHandler` | Keeps a safe `X-Request-ID` or generates a UUID; `ContextWithRequestID` / `RequestIDFromContext` |
 | `TraceHandler(opts...)` | OTel server span; `WithTraceServiceName`, `WithTraceIgnorePaths` |
 | `LogHandler(opts...)` / `LogHandlerWith(log, opts...)` | Access log via `core/logger` with method/pattern/status/duration/ip/request_id; `WithLogSkipPaths`, `WithLogServiceName` |
 | `MaxConnsHandler(n)` | Cap in-flight requests → 503 |

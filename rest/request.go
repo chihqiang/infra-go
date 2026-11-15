@@ -72,8 +72,16 @@ func RequestID(r *http.Request) string {
 	return RequestIDFromContext(r.Context())
 }
 
+// ContextWithRequestID returns a context carrying requestID for RequestID,
+// RequestIDFromContext and response envelopes, using the same slot as
+// handler.RequestIDHandler. An empty ID leaves ctx unchanged.
+func ContextWithRequestID(ctx context.Context, requestID string) context.Context {
+	return handler.ContextWithRequestID(ctx, requestID)
+}
+
 // RequestIDFromContext returns the request ID stored in ctx by
-// handler.RequestIDHandler, or an empty string when absent.
+// handler.RequestIDHandler or ContextWithRequestID, or an empty string when
+// absent.
 func RequestIDFromContext(ctx context.Context) string {
 	id, _ := handler.RequestIDFromContext(ctx)
 	return id
