@@ -46,7 +46,7 @@ func TestTimeoutDiscardsSlowHandlerOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(body) != "{\"code\":503,\"msg\":\"request timed out\"}\n" {
+	if string(body) != "{\"code\":-1,\"msg\":\"request timed out\"}\n" {
 		t.Fatalf("body = %q", body)
 	}
 	<-release

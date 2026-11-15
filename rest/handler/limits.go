@@ -27,14 +27,14 @@ func RateLimitHandler(limiter ratelimit.Limiter) chain.Middleware {
 		return func(w http.ResponseWriter, r *http.Request) {
 			allowed, err := limiter.AllowContext(r.Context())
 			if err != nil {
-				writeStatusJSON(w, http.StatusServiceUnavailable, "rate limiter unavailable")
+				writeError(w, r, http.StatusServiceUnavailable, "rate limiter unavailable")
 				return
 			}
 			if !allowed {
 				if delay, ok := retryAfter(limiter); ok {
 					w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(delay)))
 				}
-				writeStatusJSON(w, http.StatusTooManyRequests, "too many requests")
+				writeError(w, r, http.StatusTooManyRequests, "too many requests")
 				return
 			}
 			next(w, r)
@@ -58,7 +58,7 @@ func MaxConnsHandler(limit int) chain.Middleware {
 		guard := ratelimit.NewConcurrency(limit)
 		return func(w http.ResponseWriter, r *http.Request) {
 			if !guard.Allow() {
-				writeStatusJSON(w, http.StatusServiceUnavailable, "too many connections")
+				writeError(w, r, http.StatusServiceUnavailable, "too many connections")
 				return
 			}
 			defer guard.Release()

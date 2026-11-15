@@ -56,7 +56,7 @@ func TimeoutHandler(timeout time.Duration) chain.Middleware {
 				}
 			case <-ctx.Done():
 				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-					writeStatusJSON(w, http.StatusServiceUnavailable, "request timed out")
+					writeError(w, r, http.StatusServiceUnavailable, "request timed out")
 				}
 			}
 		}

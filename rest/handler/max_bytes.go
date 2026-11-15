@@ -19,7 +19,7 @@ func MaxBytesHandler(limit int64) chain.Middleware {
 		return func(w http.ResponseWriter, r *http.Request) {
 			if r.ContentLength > limit {
 				markConnectionClose(w)
-				writeStatusJSON(w, http.StatusRequestEntityTooLarge, "request body too large")
+				writeError(w, r, http.StatusRequestEntityTooLarge, "request body too large")
 				return
 			}
 			if r.Body != nil {

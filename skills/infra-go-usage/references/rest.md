@@ -225,6 +225,10 @@ rest.Error(w, err)                           // HTTP status from StatusOf(err)
 `rest.Error` hides details for 5xx (body keeps `code`/`msg`, the real error is logged) and echoes
 the message for 4xx.
 
+Middleware-generated failures (auth, rate/concurrency limits, timeout, breaker, signature and body
+limit) write the same `code`/`msg`/`request_id` envelope with `code = -1`, using the shared
+definition in `rest/internal/response`.
+
 Status resolution order in `StatusOf`:
 
 1. `StatusCoder` (`StatusCode() int`) implemented by the error chain; values outside 100–999 are
@@ -334,7 +338,7 @@ used without a `rest.Server`:
 | `SignatureHandler(cfg)` | HMAC-signed body check with key rotation and timestamp TTL; the timestamp is checked before the body is read |
 | `Authorize(parser, opts...)` | Bearer token check; RFC 6750 challenge (`invalid_request` → 400, `invalid_token` → 401), missing parser → 500, `WithUnauthorizedCallback` |
 
-Default authorization failures use the handler-level JSON body (`code` mirrors the HTTP status).
+Default authorization failures use the shared `code`/`msg`/`request_id` envelope (`code = -1`).
 Install `WithUnauthorizedCallback` when the application needs a different envelope or extra
 reporting.
 
@@ -378,8 +382,9 @@ sg.Start()
   falls back to 10s instead of closing connections immediately.
 - Custom 404/405 handlers keep `http.ServeMux`'s method-aware behaviour: a path match with a
   wrong method stays 405 instead of falling through to 404.
-- `internal/response` provides `StatusWriter`, `DeferredWriter` and `BufferedWriter`; they power
-  CORS, logging, timeouts and custom fallbacks. `StatusWriter` also forwards `Flush`/`Hijack`, so
+- `internal/response` provides `StatusWriter`, `DeferredWriter`, `BufferedWriter`, the shared
+  `BaseResponse`/`WriteError` envelope, and they power CORS, logging, timeouts and custom
+  fallbacks. `StatusWriter` also forwards `Flush`/`Hijack`, so
   streaming and protocol upgrades survive the logging/tracing/breaker middleware.
 - `WithBreaker` is inserted between the observability middleware and `Timeout`, so a timeout 503 is
   reported to the breaker while the request is still logged and traced.

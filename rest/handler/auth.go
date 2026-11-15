@@ -115,20 +115,20 @@ func reject(w http.ResponseWriter, r *http.Request, err error, callback Unauthor
 	switch {
 	case errors.Is(err, ErrAuthUnavailable):
 		// A missing parser is a server bug; do not disguise it as a 401.
-		writeStatusJSON(w, http.StatusInternalServerError, "authentication unavailable")
+		writeError(w, r, http.StatusInternalServerError, "authentication unavailable")
 	case errors.Is(err, ErrMalformedAuthorization):
 		setBearerChallenge(w, "invalid_request", "malformed authorization header")
-		writeStatusJSON(w, http.StatusBadRequest, "malformed authorization header")
+		writeError(w, r, http.StatusBadRequest, "malformed authorization header")
 	case errors.Is(err, token.ErrMissingToken):
 		// No error attribute: the client did not present bearer credentials.
 		setBearerChallenge(w, "", "")
-		writeStatusJSON(w, http.StatusUnauthorized, "unauthorized")
+		writeError(w, r, http.StatusUnauthorized, "unauthorized")
 	case errors.Is(err, token.ErrInvalidToken):
 		setBearerChallenge(w, "invalid_token", "the access token is invalid or expired")
-		writeStatusJSON(w, http.StatusUnauthorized, "invalid or expired token")
+		writeError(w, r, http.StatusUnauthorized, "invalid or expired token")
 	default:
 		setBearerChallenge(w, "", "")
-		writeStatusJSON(w, http.StatusUnauthorized, "unauthorized")
+		writeError(w, r, http.StatusUnauthorized, "unauthorized")
 	}
 }
 

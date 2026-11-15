@@ -1,17 +1,15 @@
 package handler
 
 import (
-	"encoding/json"
 	"net/http"
+
+	"github.com/chihqiang/infra-go/rest/internal/response"
 )
 
-type statusBody struct {
-	Code int    `json:"code"`
-	Msg  string `json:"msg"`
-}
-
-func writeStatusJSON(w http.ResponseWriter, status int, message string) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(statusBody{Code: status, Msg: message})
+// writeError writes the shared code/msg/request_id envelope. The envelope
+// definition lives in internal/response so handler middleware and the rest
+// package cannot drift apart; only the request ID is resolved here.
+func writeError(w http.ResponseWriter, r *http.Request, status int, message string) {
+	requestID, _ := RequestIDFromContext(r.Context())
+	_ = response.WriteError(w, status, message, requestID)
 }
