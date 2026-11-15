@@ -47,7 +47,7 @@ func SignatureHandler(cfg SignatureConfig) chain.Middleware {
 			// timestamp must not cost a full body read.
 			timestamp, err := signedTimestamp(r, cfg)
 			if err != nil {
-				writeStatusJSON(w, http.StatusUnauthorized, err.Error())
+				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
 
@@ -55,10 +55,10 @@ func SignatureHandler(cfg SignatureConfig) chain.Middleware {
 			if err != nil {
 				var maxBytesErr *http.MaxBytesError
 				if errors.Is(err, errBodyTooLarge) || errors.As(err, &maxBytesErr) {
-					writeStatusJSON(w, http.StatusRequestEntityTooLarge, "request body too large")
+					w.WriteHeader(http.StatusRequestEntityTooLarge)
 					return
 				}
-				writeStatusJSON(w, http.StatusBadRequest, "cannot read request body")
+				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
 			r.Body = io.NopCloser(bytes.NewReader(body))
@@ -72,7 +72,7 @@ func SignatureHandler(cfg SignatureConfig) chain.Middleware {
 				}
 			}
 
-			writeStatusJSON(w, http.StatusUnauthorized, "invalid signature")
+			w.WriteHeader(http.StatusUnauthorized)
 		}
 	}
 }

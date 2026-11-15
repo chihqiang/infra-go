@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -11,10 +11,25 @@ import (
 // Header is the request header that carries the bearer token.
 const Header = "Authorization"
 
-const bearerPrefix = "bearer "
+const (
+	bearerPrefix = "bearer "
+	bearerScheme = "bearer"
+	// authRealm names the protection space in the WWW-Authenticate challenge.
+	authRealm = "api"
+)
+
+var (
+	// ErrMalformedAuthorization reports a syntactically invalid bearer
+	// Authorization header.
+	ErrMalformedAuthorization = errors.New("handler: malformed authorization header")
+	// ErrAuthUnavailable reports that Authorize was constructed without a parser,
+	// which is a server configuration error rather than a client failure.
+	ErrAuthUnavailable = errors.New("handler: token parser is not configured")
+)
 
 // UnauthorizedCallback handles rejected authentication. When it is nil the
-// middleware writes a JSON 401 response.
+// middleware writes a JSON response and, where applicable, an RFC 6750
+// WWW-Authenticate challenge.
 type UnauthorizedCallback func(w http.ResponseWriter, r *http.Request, err error)
 
 // AuthorizeOption customizes Authorize.
@@ -42,7 +57,7 @@ func Authorize(parser *token.Parser, opts ...AuthorizeOption) func(http.HandlerF
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			if parser == nil {
-				reject(w, r, token.ErrInvalidToken, options.callback)
+				reject(w, r, ErrAuthUnavailable, options.callback)
 				return
 			}
 
@@ -64,17 +79,29 @@ func Authorize(parser *token.Parser, opts ...AuthorizeOption) func(http.HandlerF
 }
 
 func bearerToken(r *http.Request) (string, error) {
+	if len(r.Header.Values(Header)) > 1 {
+		return "", ErrMalformedAuthorization
+	}
+
 	value := strings.TrimSpace(r.Header.Get(Header))
 	if value == "" {
 		return "", token.ErrMissingToken
 	}
+
+	// An unsupported scheme means the request carries no bearer credentials:
+	// answer 401 with a bare challenge (RFC 6750, section 3.1).
+	if len(value) < len(bearerScheme) || !strings.EqualFold(value[:len(bearerScheme)], bearerScheme) {
+		return "", token.ErrMissingToken
+	}
+	// "Bearer" without the separating space, or with empty credentials, is a
+	// malformed bearer request.
 	if len(value) <= len(bearerPrefix) || !strings.EqualFold(value[:len(bearerPrefix)], bearerPrefix) {
-		return "", token.ErrInvalidToken
+		return "", ErrMalformedAuthorization
 	}
 
 	value = strings.TrimSpace(value[len(bearerPrefix):])
-	if value == "" {
-		return "", token.ErrMissingToken
+	if value == "" || strings.ContainsAny(value, " \t") {
+		return "", ErrMalformedAuthorization
 	}
 	return value, nil
 }
@@ -85,14 +112,35 @@ func reject(w http.ResponseWriter, r *http.Request, err error, callback Unauthor
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("WWW-Authenticate", `Bearer realm="api"`)
-	w.WriteHeader(http.StatusUnauthorized)
-	_ = json.NewEncoder(w).Encode(struct {
-		Code int    `json:"code"`
-		Msg  string `json:"msg"`
-	}{
-		Code: http.StatusUnauthorized,
-		Msg:  err.Error(),
-	})
+	switch {
+	case errors.Is(err, ErrAuthUnavailable):
+		// A missing parser is a server bug; do not disguise it as a 401.
+		w.WriteHeader(http.StatusInternalServerError)
+	case errors.Is(err, ErrMalformedAuthorization):
+		setBearerChallenge(w, "invalid_request", "malformed authorization header")
+		w.WriteHeader(http.StatusBadRequest)
+	case errors.Is(err, token.ErrMissingToken):
+		// No error attribute: the client did not present bearer credentials.
+		setBearerChallenge(w, "", "")
+		w.WriteHeader(http.StatusUnauthorized)
+	case errors.Is(err, token.ErrInvalidToken):
+		setBearerChallenge(w, "invalid_token", "the access token is invalid or expired")
+		w.WriteHeader(http.StatusUnauthorized)
+	default:
+		setBearerChallenge(w, "", "")
+		w.WriteHeader(http.StatusUnauthorized)
+	}
+}
+
+// setBearerChallenge writes the RFC 6750 challenge. code and description are
+// fixed literals here, so no quoted-string escaping is required.
+func setBearerChallenge(w http.ResponseWriter, code, description string) {
+	challenge := `Bearer realm="` + authRealm + `"`
+	if code != "" {
+		challenge += `, error="` + code + `"`
+	}
+	if description != "" {
+		challenge += `, error_description="` + description + `"`
+	}
+	w.Header().Set("WWW-Authenticate", challenge)
 }

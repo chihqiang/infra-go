@@ -20,7 +20,7 @@ func BreakerHandler(br breaker.Breaker) chain.Middleware {
 		return func(w http.ResponseWriter, r *http.Request) {
 			promise, err := br.AllowCtx(r.Context())
 			if err != nil {
-				writeStatusJSON(w, http.StatusServiceUnavailable, "service unavailable")
+				w.WriteHeader(http.StatusServiceUnavailable)
 				return
 			}
 

@@ -17,8 +17,8 @@ func TestRecoverHandlerReturnsInternalServerError(t *testing.T) {
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusInternalServerError)
 	}
-	if recorder.Body.String() != "Internal Server Error\n" {
-		t.Fatalf("body = %q, want internal server error", recorder.Body.String())
+	if recorder.Body.Len() != 0 {
+		t.Fatalf("body = %q, want an empty body", recorder.Body.String())
 	}
 }
 

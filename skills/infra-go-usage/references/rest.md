@@ -225,6 +225,11 @@ rest.Error(w, err)                           // HTTP status from StatusOf(err)
 `rest.Error` hides details for 5xx (body keeps `code`/`msg`, the real error is logged) and echoes
 the message for 4xx.
 
+Middleware-generated failures (auth, rate/concurrency limits, timeout, breaker, signature, body
+limit, recovery and gunzip) only set the HTTP status and protocol headers
+(`Retry-After`, `WWW-Authenticate`, `Connection`) and write no JSON body, matching go-zero's
+handler convention. Use `rest.Error` in the business handler when an error envelope is needed.
+
 Status resolution order in `StatusOf`:
 
 1. `StatusCoder` (`StatusCode() int`) implemented by the error chain; values outside 100–999 are
@@ -326,13 +331,17 @@ used without a `rest.Server`:
 | `TraceHandler(opts...)` | OTel server span; `WithTraceServiceName`, `WithTraceIgnorePaths` |
 | `LogHandler(opts...)` / `LogHandlerWith(log, opts...)` | Access log via `core/logger` with method/pattern/status/duration/ip/request_id; `WithLogSkipPaths`, `WithLogServiceName` |
 | `MaxConnsHandler(n)` | Cap in-flight requests → 503 |
-| `TimeoutHandler(d)` | Bound handler time → 503, discards late writes; handler panics are re-raised on the caller goroutine so recovery middleware still handles them |
+| `TimeoutHandler(d)` | Bound handler time → 503 with `Request Timeout` (go-zero style), discards late writes; handler panics are re-raised on the caller goroutine so recovery middleware still handles them |
 | `MaxBytesHandler(n)` | 413 for oversized bodies, `http.MaxBytesReader` for streaming, sets `Connection: close` |
 | `GunzipHandler` | Transparently decompresses `Content-Encoding: gzip` |
 | `RateLimitHandler(limiter)` / `RateLimitPerSecondHandler(rate, burst)` | 429 via `core/ratelimit` |
 | `BreakerHandler(br)` | Circuit breaker; 5xx responses count as failures → 503 when open |
 | `SignatureHandler(cfg)` | HMAC-signed body check with key rotation and timestamp TTL; the timestamp is checked before the body is read |
-| `Authorize(parser, opts...)` | Bearer token check; `WithUnauthorizedCallback` |
+| `Authorize(parser, opts...)` | Bearer token check; RFC 6750 challenge (`invalid_request` → 400, `invalid_token` → 401), missing parser → 500, `WithUnauthorizedCallback` |
+
+Default authorization failures write 400/401/500 with an RFC 6750 `WWW-Authenticate` challenge
+and no body. Install `WithUnauthorizedCallback` when the application needs a custom body or extra
+reporting.
 
 ## token package
 

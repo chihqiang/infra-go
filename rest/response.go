@@ -22,6 +22,8 @@ const (
 	// BusinessCodeError is the code for a failed business response.
 	BusinessCodeError = -1
 
+	// JSONContentType is the content type of JSON responses.
+	JSONContentType = "application/json; charset=utf-8"
 	// XMLContentType is the content type of XML responses.
 	XMLContentType = "application/xml"
 	// HTMLContentType is the content type of HTML responses.
@@ -72,7 +74,7 @@ func WrapBaseResponse(v any) BaseResponse[any] {
 func WriteJSON(w http.ResponseWriter, status int, v any) error {
 	header := w.Header()
 	if header.Get("Content-Type") == "" {
-		header.Set("Content-Type", "application/json; charset=utf-8")
+		header.Set("Content-Type", JSONContentType)
 	}
 	w.WriteHeader(status)
 	return json.NewEncoder(w).Encode(v)

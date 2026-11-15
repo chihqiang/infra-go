@@ -173,7 +173,7 @@ func TestJSONWriters(t *testing.T) {
 		if recorder.Code != test.status {
 			t.Errorf("%s: status = %d, want %d", test.name, recorder.Code, test.status)
 		}
-		if got := recorder.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+		if got := recorder.Header().Get("Content-Type"); got != JSONContentType {
 			t.Errorf("%s: content type = %q", test.name, got)
 		}
 		if recorder.Body.String() != "{\"status\":\"fine\"}\n" {
