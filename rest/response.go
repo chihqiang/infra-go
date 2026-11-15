@@ -2,12 +2,12 @@ package rest
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"net/http"
 
 	"github.com/chihqiang/infra-go/core/logger"
-	restresponse "github.com/chihqiang/infra-go/rest/internal/response"
 	"google.golang.org/grpc/status"
 )
 
@@ -16,11 +16,11 @@ const (
 	xmlEncoding = "UTF-8"
 
 	// BusinessCodeOK is the code for a successful business response.
-	BusinessCodeOK = restresponse.BusinessCodeOK
+	BusinessCodeOK = 0
 	// BusinessMsgOK is the default message for a successful business response.
-	BusinessMsgOK = restresponse.BusinessMsgOK
+	BusinessMsgOK = "ok"
 	// BusinessCodeError is the code for a failed business response.
-	BusinessCodeError = restresponse.BusinessCodeError
+	BusinessCodeError = -1
 
 	// XMLContentType is the content type of XML responses.
 	XMLContentType = "application/xml"
@@ -31,10 +31,12 @@ const (
 // BaseResponse is the envelope used by business APIs. Code is a business code,
 // not an HTTP status; RequestID is filled from the request context when the
 // RequestIDHandler middleware is in the chain.
-//
-// The definition lives in rest/internal/response so handler middleware can
-// write the same envelope without importing this package.
-type BaseResponse[T any] = restresponse.BaseResponse[T]
+type BaseResponse[T any] struct {
+	Code      int    `json:"code" xml:"code"`
+	Msg       string `json:"msg" xml:"msg"`
+	RequestID string `json:"request_id,omitempty" xml:"request_id,omitempty"`
+	Data      T      `json:"data,omitempty" xml:"data,omitempty"`
+}
 
 type xmlEnvelope[T any] struct {
 	XMLName  xml.Name `xml:"xml"`
@@ -68,7 +70,12 @@ func WrapBaseResponse(v any) BaseResponse[any] {
 
 // WriteJSON encodes v as JSON with the given HTTP status.
 func WriteJSON(w http.ResponseWriter, status int, v any) error {
-	return restresponse.WriteJSON(w, status, v)
+	header := w.Header()
+	if header.Get("Content-Type") == "" {
+		header.Set("Content-Type", "application/json; charset=utf-8")
+	}
+	w.WriteHeader(status)
+	return json.NewEncoder(w).Encode(v)
 }
 
 // OkJSON writes v as JSON with status 200.

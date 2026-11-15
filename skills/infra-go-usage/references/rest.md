@@ -226,8 +226,8 @@ rest.Error(w, err)                           // HTTP status from StatusOf(err)
 the message for 4xx.
 
 Middleware-generated failures (auth, rate/concurrency limits, timeout, breaker, signature and body
-limit) write the same `code`/`msg`/`request_id` envelope with `code = -1`, using the shared
-definition in `rest/internal/response`.
+limit) write the same `code`/`msg`/`request_id` envelope with `code = -1`. `handler` keeps a small
+matching error shape because it cannot import `rest` (that would be an import cycle).
 
 Status resolution order in `StatusOf`:
 
@@ -382,9 +382,8 @@ sg.Start()
   falls back to 10s instead of closing connections immediately.
 - Custom 404/405 handlers keep `http.ServeMux`'s method-aware behaviour: a path match with a
   wrong method stays 405 instead of falling through to 404.
-- `internal/response` provides `StatusWriter`, `DeferredWriter`, `BufferedWriter`, the shared
-  `BaseResponse`/`WriteError` envelope, and they power CORS, logging, timeouts and custom
-  fallbacks. `StatusWriter` also forwards `Flush`/`Hijack`, so
+- `internal/response` provides `StatusWriter`, `DeferredWriter` and `BufferedWriter`; they power
+  CORS, logging, timeouts and custom fallbacks. `StatusWriter` also forwards `Flush`/`Hijack`, so
   streaming and protocol upgrades survive the logging/tracing/breaker middleware.
 - `WithBreaker` is inserted between the observability middleware and `Timeout`, so a timeout 503 is
   reported to the breaker while the request is still logged and traced.
