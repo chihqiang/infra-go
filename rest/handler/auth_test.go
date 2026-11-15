@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/chihqiang/infra-go/rest/token"
@@ -52,24 +53,83 @@ func TestAuthorizeRejectsBadHeaders(t *testing.T) {
 		called = true
 	})
 
-	for _, header := range []string{"", "Basic abc", "Bearer ", "Bearer not-a-token"} {
+	tests := []struct {
+		name        string
+		header      string
+		status      int
+		challenge   []string
+		noErrorAuth bool
+	}{
+		{
+			name:        "missing credentials",
+			status:      http.StatusUnauthorized,
+			noErrorAuth: true,
+		},
+		{
+			name:        "unsupported scheme",
+			header:      "Basic abc",
+			status:      http.StatusUnauthorized,
+			noErrorAuth: true,
+		},
+		{
+			name:      "empty bearer credentials",
+			header:    "Bearer ",
+			status:    http.StatusBadRequest,
+			challenge: []string{`Bearer realm="api"`, `error="invalid_request"`},
+		},
+		{
+			name:      "invalid token",
+			header:    "Bearer not-a-token",
+			status:    http.StatusUnauthorized,
+			challenge: []string{`Bearer realm="api"`, `error="invalid_token"`},
+		},
+	}
+
+	for _, test := range tests {
 		request := httptest.NewRequest(http.MethodGet, "/", nil)
-		if header != "" {
-			request.Header.Set(Header, header)
+		if test.header != "" {
+			request.Header.Set(Header, test.header)
 		}
 		recorder := httptest.NewRecorder()
 		handlerFn.ServeHTTP(recorder, request)
 
-		if recorder.Code != http.StatusUnauthorized {
-			t.Errorf("header %q: status = %d, want 401", header, recorder.Code)
+		if recorder.Code != test.status {
+			t.Errorf("%s: status = %d, want %d", test.name, recorder.Code, test.status)
 		}
-		if got := recorder.Header().Get("WWW-Authenticate"); got == "" {
-			t.Errorf("header %q: missing WWW-Authenticate", header)
+		challenge := recorder.Header().Get("WWW-Authenticate")
+		if challenge == "" {
+			t.Errorf("%s: missing WWW-Authenticate", test.name)
+		}
+		for _, want := range test.challenge {
+			if !strings.Contains(challenge, want) {
+				t.Errorf("%s: challenge = %q, want %q", test.name, challenge, want)
+			}
+		}
+		if test.noErrorAuth && strings.Contains(challenge, "error=") {
+			t.Errorf("%s: challenge must not carry error information: %q", test.name, challenge)
 		}
 	}
 
 	if called {
 		t.Fatal("rejected requests must not reach the next handler")
+	}
+}
+
+func TestAuthorizeRejectsMultipleAuthorizationHeaders(t *testing.T) {
+	parser := newTokenParser(t)
+	handlerFn := Authorize(parser)(func(http.ResponseWriter, *http.Request) {})
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Add(Header, "Bearer first")
+	request.Header.Add(Header, "Bearer second")
+	recorder := httptest.NewRecorder()
+	handlerFn.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", recorder.Code)
+	}
+	if got := recorder.Header().Get("WWW-Authenticate"); !strings.Contains(got, `error="invalid_request"`) {
+		t.Fatalf("challenge = %q, want invalid_request", got)
 	}
 }
 
@@ -114,13 +174,16 @@ func TestAuthorizeUsesCallback(t *testing.T) {
 	}
 }
 
-func TestAuthorizeWithoutParserRejects(t *testing.T) {
+func TestAuthorizeWithoutParserReturnsServerError(t *testing.T) {
 	handlerFn := Authorize(nil)(func(http.ResponseWriter, *http.Request) {})
 
 	recorder := httptest.NewRecorder()
 	handlerFn.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
 
-	if recorder.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", recorder.Code)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", recorder.Code)
+	}
+	if got := recorder.Header().Get("WWW-Authenticate"); got != "" {
+		t.Fatalf("challenge = %q, want none for a server error", got)
 	}
 }

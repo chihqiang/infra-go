@@ -332,7 +332,11 @@ used without a `rest.Server`:
 | `RateLimitHandler(limiter)` / `RateLimitPerSecondHandler(rate, burst)` | 429 via `core/ratelimit` |
 | `BreakerHandler(br)` | Circuit breaker; 5xx responses count as failures → 503 when open |
 | `SignatureHandler(cfg)` | HMAC-signed body check with key rotation and timestamp TTL; the timestamp is checked before the body is read |
-| `Authorize(parser, opts...)` | Bearer token check; `WithUnauthorizedCallback` |
+| `Authorize(parser, opts...)` | Bearer token check; RFC 6750 challenge (`invalid_request` → 400, `invalid_token` → 401), missing parser → 500, `WithUnauthorizedCallback` |
+
+Default authorization failures use the handler-level JSON body (`code` mirrors the HTTP status).
+Install `WithUnauthorizedCallback` when the application needs a different envelope or extra
+reporting.
 
 ## token package
 
