@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"net/http"
 	"time"
 
@@ -44,35 +43,18 @@ func WithLogClientIP(fn func(*http.Request) string) LogOption {
 	}
 }
 
-// AccessLogger is the subset of core/logger.ILogger used by LogHandlerWith.
-type AccessLogger interface {
-	InfoCtx(ctx context.Context, msg string, fields ...logger.Field)
-	WarnCtx(ctx context.Context, msg string, fields ...logger.Field)
-	ErrorCtx(ctx context.Context, msg string, fields ...logger.Field)
-}
-
 // LogHandler writes one access-log line per request using the global logger,
 // resolved per request so a later logger replacement still takes effect.
 func LogHandler(opts ...LogOption) chain.Middleware {
-	return LogHandlerWith(globalLogger{}, opts...)
-}
-
-type globalLogger struct{}
-
-func (globalLogger) InfoCtx(ctx context.Context, msg string, fields ...logger.Field) {
-	logger.GetGlobal().InfoCtx(ctx, msg, fields...)
-}
-
-func (globalLogger) WarnCtx(ctx context.Context, msg string, fields ...logger.Field) {
-	logger.GetGlobal().WarnCtx(ctx, msg, fields...)
-}
-
-func (globalLogger) ErrorCtx(ctx context.Context, msg string, fields ...logger.Field) {
-	logger.GetGlobal().ErrorCtx(ctx, msg, fields...)
+	return logHandler(func() logger.ILogger { return logger.GetGlobal() }, opts...)
 }
 
 // LogHandlerWith writes access logs through the given logger.
-func LogHandlerWith(log AccessLogger, opts ...LogOption) chain.Middleware {
+func LogHandlerWith(log logger.ILogger, opts ...LogOption) chain.Middleware {
+	return logHandler(func() logger.ILogger { return log }, opts...)
+}
+
+func logHandler(resolveLogger func() logger.ILogger, opts ...LogOption) chain.Middleware {
 	options := logOptions{}
 	for _, opt := range opts {
 		opt(&options)
@@ -97,6 +79,7 @@ func LogHandlerWith(log AccessLogger, opts ...LogOption) chain.Middleware {
 				if !completed {
 					status = http.StatusInternalServerError
 				}
+				log := resolveLogger()
 				fields := []logger.Field{
 					logger.String("method", r.Method),
 					logger.String("path", r.URL.Path),

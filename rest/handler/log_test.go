@@ -17,6 +17,7 @@ type logEntry struct {
 }
 
 type recordingLogger struct {
+	logger.ILogger
 	entries []logEntry
 }
 
