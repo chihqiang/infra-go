@@ -40,8 +40,10 @@ type Server struct {
 	tlsConfig          *tls.Config
 }
 
-// NewServer creates a server using the given configuration.
+// NewServer creates a server using the given configuration. The zero Config is
+// replaced by DefaultConfig; a partially populated Config is used literally.
 func NewServer(conf Config, opts ...Option) (*Server, error) {
+	conf = conf.withDefaults()
 	if err := conf.Validate(); err != nil {
 		return nil, err
 	}

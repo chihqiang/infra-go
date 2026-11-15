@@ -89,7 +89,9 @@ func main() {
 ```
 
 `rest.DefaultConfig()` fills host/port, timeouts, `MaxBodyBytes` and the default middleware
-switches. A zero `Config` is also valid and starts with all middleware disabled.
+switches. Passing the zero `Config` to `NewServer` uses `DefaultConfig()`; a partially populated
+`Config` is used literally, so start from `DefaultConfig()` when customising and want the other
+defaults.
 
 The package name `rest` does not collide with `net/http`, so handlers can import both directly.
 
