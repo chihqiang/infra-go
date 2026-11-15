@@ -60,11 +60,3 @@ func TestNewCodeErrorCarriesCodeAndMessage(t *testing.T) {
 		t.Fatalf("Error() = %q", err.Error())
 	}
 }
-
-func TestDeprecatedNewAlias(t *testing.T) {
-	legacy := New(4001, "invalid order")
-	current := NewCodeError(4001, "invalid order")
-	if legacy.Error() != current.Error() {
-		t.Fatalf("legacy error = %q, current error = %q", legacy, current)
-	}
-}

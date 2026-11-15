@@ -86,10 +86,3 @@ func (c *CodeMsg) StatusCode() int {
 func NewCodeError(code int, msg string) error {
 	return &CodeMsg{Code: code, Msg: msg}
 }
-
-// New creates a CodeMsg error carrying a business code.
-//
-// Deprecated: use NewCodeError.
-func New(code int, msg string) error {
-	return NewCodeError(code, msg)
-}
