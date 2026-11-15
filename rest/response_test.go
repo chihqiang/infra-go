@@ -5,6 +5,7 @@ import (
 	stderrors "errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -309,5 +310,39 @@ func TestOkHTMLCtxWritesHTML(t *testing.T) {
 	}
 	if recorder.Body.String() != "<p>ok</p>" {
 		t.Fatalf("body = %q", recorder.Body.String())
+	}
+}
+
+type statusMessageError struct {
+	status  int
+	message string
+}
+
+func (e statusMessageError) Error() string   { return e.message }
+func (e statusMessageError) StatusCode() int { return e.status }
+
+func TestHandlerErrorsMatchBaseResponseEnvelope(t *testing.T) {
+	handlerFn := handler.MaxBytesHandler(1)(func(http.ResponseWriter, *http.Request) {})
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("payload"))
+	handlerRecorder := httptest.NewRecorder()
+	handlerFn.ServeHTTP(handlerRecorder, request)
+
+	if handlerRecorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", handlerRecorder.Code)
+	}
+	handlerEnvelope := decodeEnvelope(t, handlerRecorder.Body.Bytes())
+
+	errorRecorder := httptest.NewRecorder()
+	err := Error(errorRecorder, statusMessageError{
+		status:  http.StatusRequestEntityTooLarge,
+		message: "request body too large",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	errorEnvelope := decodeEnvelope(t, errorRecorder.Body.Bytes())
+
+	if !reflect.DeepEqual(handlerEnvelope, errorEnvelope) {
+		t.Fatalf("handler envelope = %v, rest.Error envelope = %v", handlerEnvelope, errorEnvelope)
 	}
 }

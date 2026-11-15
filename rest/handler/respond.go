@@ -16,6 +16,7 @@ type errorResponse struct {
 	Code      int    `json:"code"`
 	Msg       string `json:"msg"`
 	RequestID string `json:"request_id,omitempty"`
+	Data      any    `json:"data,omitempty"`
 }
 
 // businessCodeError matches rest.BusinessCodeError.
