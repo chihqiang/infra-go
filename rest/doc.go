@@ -22,7 +22,7 @@
 //		Method: http.MethodGet,
 //		Path:   "/users/{id}",
 //		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-//			_ = rest.OkJSON(w, map[string]string{"id": r.PathValue("id")})
+//			_ = rest.OkJSONCtx(r.Context(), w, map[string]string{"id": r.PathValue("id")})
 //		}),
 //	})
 //

@@ -78,7 +78,8 @@ func main() {
                 _ = rest.Error(w, err) // binding failures map to 400/415
                 return
             }
-            _ = rest.OkJSON(w, map[string]string{"msg": "hello, " + req.Name})
+            // {"code":0,"msg":"ok","request_id":"...","data":{"msg":"hello, ..."}}
+            _ = rest.OkJSONCtx(r.Context(), w, map[string]string{"msg": "hello, " + req.Name})
         }),
     })
 
@@ -215,12 +216,25 @@ server.AddRoute(rest.Route{
 ## Responses
 
 ```go
-rest.WriteJSON(w, http.StatusAccepted, body) // explicit status
-rest.OkJSON(w, body)                         // 200
-rest.CreatedJSON(w, body)                    // 201
-rest.NoContent(w)                            // 204, no body
-rest.Error(w, err)                           // HTTP status from StatusOf(err)
+rest.OkJSON(w, body)             // 200, wrapped in BaseResponse
+rest.OkJSONCtx(ctx, w, body)     // same, adds request_id from ctx
+rest.CreatedJSON(w, body)        // 201, wrapped
+rest.CreatedJSONCtx(ctx, w, body)
+rest.JSONBaseResponse(w, body)   // alias of OkJSON
+rest.OkXML(w, body)              // 200, wrapped XML envelope
+rest.OkXMLCtx(ctx, w, body)
+rest.XMLBaseResponse(w, body)    // alias of OkXML
+rest.NoContent(w)                // 204, no body
+rest.Error(w, err)               // error envelope, HTTP status from StatusOf(err)
+
+rest.WriteJSON(w, status, raw)   // low-level: no envelope
+rest.WriteXML(w, status, raw)    // low-level: no envelope
+rest.OkHTML(w, html)             // raw HTML
 ```
+
+Success responses use `BaseResponse`: `{"code":0,"msg":"ok","request_id":"...","data":...}`.
+`request_id` is present when the RequestID middleware is in the chain. Use `WriteJSON` /
+`WriteXML` when an endpoint needs a raw body.
 
 `rest.Error` hides details for 5xx (body keeps `code`/`msg`, the real error is logged) and echoes
 the message for 4xx.
