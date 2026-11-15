@@ -179,16 +179,16 @@ Group middleware applies to routes registered after `Use` and is inherited by ch
 
 ```go
 server, _ := rest.NewServer(conf,
-    rest.WithCors("https://example.com"),
-    rest.WithCorsHeaders("X-Token"),
+    rest.WithCORS("https://example.com"),
+    rest.WithCORSHeaders("X-Token"),
 )
 ```
 
 | Option | Effect |
 |--------|--------|
-| `WithCors(origins ...string)` | Allow the given origins (all origins when empty, no credentials). Entries with a scheme match exactly; a scheme-less host also allows its subdomains |
-| `WithCorsHeaders(headers ...string)` | Append allowed request headers; it only configures them, CORS still has to be enabled with `WithCors` / `WithCustomCors` |
-| `WithCustomCors(headerFn, notAllowedFn, origins...)` | Customise headers and the rejected-request body |
+| `WithCORS(origins ...string)` | Allow the given origins (all origins when empty, no credentials). Entries with a scheme match exactly; a scheme-less host also allows its subdomains |
+| `WithCORSHeaders(headers ...string)` | Append allowed request headers; it only configures them, CORS still has to be enabled with `WithCORS` / `WithCustomCORS` |
+| `WithCustomCORS(headerFn, notAllowedFn, origins...)` | Customise headers and the rejected-request body |
 
 A real preflight (`OPTIONS` with both `Origin` and `Access-Control-Request-Method`) is answered
 with 204 before reaching a route. Plain `OPTIONS` requests still reach the route handler, so custom

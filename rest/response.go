@@ -25,7 +25,7 @@ const (
 	// JSONContentType is the content type of JSON responses.
 	JSONContentType = "application/json; charset=utf-8"
 	// XMLContentType is the content type of XML responses.
-	XMLContentType = "application/xml"
+	XMLContentType = "application/xml; charset=utf-8"
 	// HTMLContentType is the content type of HTML responses.
 	HTMLContentType = "text/html; charset=utf-8"
 )

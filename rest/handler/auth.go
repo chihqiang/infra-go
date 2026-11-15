@@ -8,8 +8,8 @@ import (
 	"github.com/chihqiang/infra-go/rest/token"
 )
 
-// Header is the request header that carries the bearer token.
-const Header = "Authorization"
+// AuthorizationHeader is the request header that carries the bearer token.
+const AuthorizationHeader = "Authorization"
 
 const (
 	bearerPrefix = "bearer "
@@ -27,9 +27,11 @@ var (
 	ErrAuthUnavailable = errors.New("handler: token parser is not configured")
 )
 
-// UnauthorizedCallback handles rejected authentication. When it is nil the
-// middleware writes a JSON response and, where applicable, an RFC 6750
-// WWW-Authenticate challenge.
+// UnauthorizedCallback handles rejected authentication. It may set custom
+// headers and write a body; the middleware still applies the default HTTP status
+// when the callback does not set one. When the callback is nil the middleware
+// writes the status and, where applicable, an RFC 6750 WWW-Authenticate
+// challenge.
 type UnauthorizedCallback func(w http.ResponseWriter, r *http.Request, err error)
 
 // AuthorizeOption customizes Authorize.
@@ -79,11 +81,11 @@ func Authorize(parser *token.Parser, opts ...AuthorizeOption) func(http.HandlerF
 }
 
 func bearerToken(r *http.Request) (string, error) {
-	if len(r.Header.Values(Header)) > 1 {
+	if len(r.Header.Values(AuthorizationHeader)) > 1 {
 		return "", ErrMalformedAuthorization
 	}
 
-	value := strings.TrimSpace(r.Header.Get(Header))
+	value := strings.TrimSpace(r.Header.Get(AuthorizationHeader))
 	if value == "" {
 		return "", token.ErrMissingToken
 	}
@@ -107,29 +109,62 @@ func bearerToken(r *http.Request) (string, error) {
 }
 
 func reject(w http.ResponseWriter, r *http.Request, err error, callback UnauthorizedCallback) {
-	if callback != nil {
-		callback(w, r, err)
-		return
-	}
+	status := http.StatusUnauthorized
+	errorCode, description := "", ""
 
 	switch {
 	case errors.Is(err, ErrAuthUnavailable):
 		// A missing parser is a server bug; do not disguise it as a 401.
-		w.WriteHeader(http.StatusInternalServerError)
+		status = http.StatusInternalServerError
 	case errors.Is(err, ErrMalformedAuthorization):
-		setBearerChallenge(w, "invalid_request", "malformed authorization header")
-		w.WriteHeader(http.StatusBadRequest)
+		status = http.StatusBadRequest
+		errorCode, description = "invalid_request", "malformed authorization header"
 	case errors.Is(err, token.ErrMissingToken):
 		// No error attribute: the client did not present bearer credentials.
-		setBearerChallenge(w, "", "")
-		w.WriteHeader(http.StatusUnauthorized)
 	case errors.Is(err, token.ErrInvalidToken):
-		setBearerChallenge(w, "invalid_token", "the access token is invalid or expired")
-		w.WriteHeader(http.StatusUnauthorized)
-	default:
-		setBearerChallenge(w, "", "")
-		w.WriteHeader(http.StatusUnauthorized)
+		errorCode, description = "invalid_token", "the access token is invalid or expired"
 	}
+
+	if status != http.StatusInternalServerError {
+		setBearerChallenge(w, errorCode, description)
+	}
+
+	if callback != nil {
+		writer := &unauthorizedWriter{ResponseWriter: w, status: status}
+		callback(writer, r, err)
+		// The callback may set its own status; otherwise apply the default.
+		writer.WriteHeader(status)
+		return
+	}
+	w.WriteHeader(status)
+}
+
+// unauthorizedWriter applies the default unauthorized status once, even when
+// the callback only sets headers or writes a body without WriteHeader.
+type unauthorizedWriter struct {
+	http.ResponseWriter
+	status int
+	wrote  bool
+}
+
+func (w *unauthorizedWriter) WriteHeader(status int) {
+	if w.wrote {
+		return
+	}
+	w.wrote = true
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *unauthorizedWriter) Write(p []byte) (int, error) {
+	if !w.wrote {
+		w.WriteHeader(w.status)
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+// Unwrap exposes the underlying writer to http.ResponseController.
+func (w *unauthorizedWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 // setBearerChallenge writes the RFC 6750 challenge. code and description are
