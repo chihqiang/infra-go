@@ -4,6 +4,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -139,4 +141,40 @@ func TestWithLoggerKeepsGlobalUntouched(t *testing.T) {
 	require.NoError(t, err)
 	assert.Same(t, l, srv.Logger())
 	assert.Same(t, before, logger.GetGlobal(), "WithLogger must not install the logger globally")
+}
+
+// TestWithLoggerDrivesAccessLog guards the option ordering in NewServer: the
+// injected logger must reach the access-log middleware, not only s.Logger().
+func TestWithLoggerDrivesAccessLog(t *testing.T) {
+	dir := t.TempDir()
+	injected := logger.New(logger.Config{Mode: "file", Path: dir, Encoding: "plain", Level: "info"})
+	t.Cleanup(func() {
+		if closer, ok := injected.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+	})
+
+	server, err := NewServer(DefaultConfig(), WithLogger(injected))
+	require.NoError(t, err)
+	server.HandleFunc(http.MethodGet, "/logged", func(http.ResponseWriter, *http.Request) {})
+	server.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/logged", nil))
+	require.NoError(t, injected.Sync())
+
+	data, err := os.ReadFile(filepath.Join(dir, "access.log"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "/logged")
+}
+
+// TestWithLoggerTakesPrecedenceOverConfigLogger documents the option contract:
+// an injected logger wins and is never installed globally by NewServer.
+func TestWithLoggerTakesPrecedenceOverConfigLogger(t *testing.T) {
+	previous := logger.GetGlobal()
+	t.Cleanup(func() { logger.SetGlobal(previous) })
+
+	injected := logger.New(logger.Config{})
+	server, err := NewServer(Config{Logger: logger.Config{Mode: "console"}}, WithLogger(injected))
+	require.NoError(t, err)
+
+	assert.Same(t, injected, server.Logger())
+	assert.Same(t, previous, logger.GetGlobal(), "an injected logger must not become the global logger")
 }

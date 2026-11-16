@@ -2,6 +2,8 @@ package rest
 
 import (
 	"bytes"
+	"compress/gzip"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -238,5 +240,49 @@ func TestWithCORSHeadersBeforeWithCORSIsApplied(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("allow headers = %v, want X-Token", values)
+	}
+}
+
+// TestWithMiddlewareRunsAfterBuiltins keeps the option ordering intact: the
+// option middleware is appended after the config-driven tail (Gunzip here), not
+// in front of it.
+func TestWithMiddlewareRunsAfterBuiltins(t *testing.T) {
+	var seenEncoding string
+	conf := DefaultConfig()
+	conf.Middlewares.Gunzip = handler.GunzipConfig{Enabled: true}
+
+	server, err := NewServer(conf, WithMiddleware(func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			seenEncoding = r.Header.Get("Content-Encoding")
+			next(w, r)
+		}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.HandleFunc(http.MethodGet, "/gz", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_, _ = w.Write(body)
+	})
+
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write([]byte("payload")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/gz", bytes.NewReader(compressed.Bytes()))
+	request.Header.Set("Content-Encoding", "gzip")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Body.String() != "payload" {
+		t.Fatalf("body = %q, want payload", recorder.Body.String())
+	}
+	if seenEncoding != "" {
+		t.Fatalf("option middleware saw Content-Encoding %q, so it ran before Gunzip", seenEncoding)
 	}
 }

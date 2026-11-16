@@ -34,3 +34,21 @@ func TestRecoverHandlerPreservesAbortHandler(t *testing.T) {
 	}()
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
 }
+
+// TestRecoverHandlerAbortsWhenResponseCommitted makes a panic after headers and
+// a partial body visible to the client instead of ending the chunked response
+// cleanly and looking like a successful (but truncated) reply.
+func TestRecoverHandlerAbortsWhenResponseCommitted(t *testing.T) {
+	handlerFn := NewRecoveryHandler(RecoveryConfig{Enabled: true}).Handle(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("partial"))
+		panic("boom")
+	})
+
+	defer func() {
+		if recovered := recover(); recovered != http.ErrAbortHandler {
+			t.Fatalf("panic = %v, want http.ErrAbortHandler", recovered)
+		}
+	}()
+	handlerFn.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+}

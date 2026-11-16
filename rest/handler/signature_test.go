@@ -297,3 +297,27 @@ func TestSignRequestBindsMethodPathAndQuery(t *testing.T) {
 		}
 	}
 }
+
+// TestSignatureHandlerRejectsFarFutureTimestamp covers the duration-saturation
+// hole in the freshness check: a timestamp more than ~292 years ahead made
+// now.Sub saturate and the negated duration stay negative, so the request was
+// accepted regardless of TTL.
+func TestSignatureHandlerRejectsFarFutureTimestamp(t *testing.T) {
+	key := []byte("signing-key")
+	body := []byte("payload")
+	now := time.Unix(1_700_000_000, 0)
+	handlerFn := newSignatureHandler(SignatureConfig{
+		Keys: [][]byte{key},
+		TTL:  time.Minute,
+		Now:  func() time.Time { return now },
+	}).Handle(func(http.ResponseWriter, *http.Request) { t.Fatal("far-future request reached the handler") })
+
+	request := httptest.NewRequest(http.MethodPost, "/pay", bytes.NewReader(body))
+	signRequest(request, key, now.AddDate(400, 0, 0).Unix(), body)
+
+	recorder := httptest.NewRecorder()
+	handlerFn.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 for a timestamp outside the TTL", recorder.Code)
+	}
+}

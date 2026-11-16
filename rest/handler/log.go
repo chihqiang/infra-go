@@ -30,11 +30,17 @@ type LogHandler struct {
 }
 
 // NewLogHandler creates a LogHandler. A nil log resolves the global logger on
-// every request, so a later logger replacement still takes effect.
+// every request, so a later logger replacement still takes effect. Config
+// values are only parsed when logging is enabled, so a disabled handler keeps
+// unrelated settings out of validation.
 func NewLogHandler(config LogConfig, log logger.ILogger) (*LogHandler, error) {
-	trusted, err := realip.ParseTrustedProxies(config.TrustedProxies)
-	if err != nil {
-		return nil, err
+	var trusted []netip.Prefix
+	if config.Enabled {
+		var err error
+		trusted, err = realip.ParseTrustedProxies(config.TrustedProxies)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &LogHandler{
 		config:    config,

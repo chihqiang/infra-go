@@ -33,10 +33,10 @@ func TestConfigValidateRejectsBadValues(t *testing.T) {
 	negativeBody.Middlewares.MaxBytes.Limit = -1
 
 	negativeConns := DefaultConfig()
-	negativeConns.Middlewares.MaxConns.Limit = -1
+	negativeConns.Middlewares.MaxConns = resthandler.MaxConnsConfig{Enabled: true, Limit: -1}
 
 	negativeMiddlewareTimeout := DefaultConfig()
-	negativeMiddlewareTimeout.Middlewares.Timeout.Timeout = -time.Second
+	negativeMiddlewareTimeout.Middlewares.Timeout = resthandler.TimeoutConfig{Enabled: true, Timeout: -time.Second}
 
 	authWithoutParser := DefaultConfig()
 	authWithoutParser.Middlewares.Auth = resthandler.AuthConfig{Enabled: true}
@@ -49,6 +49,13 @@ func TestConfigValidateRejectsBadValues(t *testing.T) {
 
 	signatureWithoutKeys := DefaultConfig()
 	signatureWithoutKeys.Middlewares.Signature = resthandler.SignatureConfig{Enabled: true}
+
+	negativeSignatureBody := DefaultConfig()
+	negativeSignatureBody.Middlewares.Signature = resthandler.SignatureConfig{
+		Enabled: true,
+		Keys:    [][]byte{[]byte("signing-key")},
+		MaxBody: -1,
+	}
 
 	tests := []struct {
 		name string
@@ -63,6 +70,7 @@ func TestConfigValidateRejectsBadValues(t *testing.T) {
 		{name: "rate limit without limiter", conf: rateLimitWithoutLimiter},
 		{name: "breaker without breaker", conf: breakerWithoutBreaker},
 		{name: "signature without keys", conf: signatureWithoutKeys},
+		{name: "negative signature body limit", conf: negativeSignatureBody},
 		{name: "negative timeout", conf: Config{Port: 80, ReadTimeout: -time.Second}},
 	}
 
@@ -84,5 +92,24 @@ func TestConfigValidateTrustedProxies(t *testing.T) {
 	invalid.Middlewares.Log.TrustedProxies = []string{"not-an-ip"}
 	if err := invalid.Validate(); err == nil {
 		t.Fatal("invalid trusted proxy should fail validation")
+	}
+}
+
+// TestConfigValidateIgnoresDisabledMiddlewareSettings makes the contract
+// explicit: only enabled middleware takes part in validation, so a disabled
+// feature can keep placeholder or inherited values.
+func TestConfigValidateIgnoresDisabledMiddlewareSettings(t *testing.T) {
+	conf := DefaultConfig()
+	conf.Middlewares.Log = resthandler.LogConfig{Enabled: false, TrustedProxies: []string{"not-an-ip"}}
+	conf.Middlewares.MaxConns = resthandler.MaxConnsConfig{Enabled: false, Limit: -1}
+	conf.Middlewares.Timeout = resthandler.TimeoutConfig{Enabled: false, Timeout: -time.Second}
+	conf.Middlewares.MaxBytes = resthandler.MaxBytesConfig{Enabled: false, Limit: -1}
+	conf.Middlewares.Auth = resthandler.AuthConfig{Enabled: false}
+	conf.Middlewares.RateLimit = resthandler.RateLimitConfig{Enabled: false}
+	conf.Middlewares.Breaker = resthandler.BreakerConfig{Enabled: false}
+	conf.Middlewares.Signature = resthandler.SignatureConfig{Enabled: false, MaxBody: -1}
+
+	if err := conf.Validate(); err != nil {
+		t.Fatalf("disabled middleware settings must not be validated: %v", err)
 	}
 }

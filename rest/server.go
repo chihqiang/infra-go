@@ -41,6 +41,7 @@ type Server struct {
 	servicesMu         sync.Mutex
 	services           []service.Service
 	log                logger.ILogger
+	loggerSet          bool
 }
 
 // NewServer creates a server using the given configuration. The zero Config is
@@ -50,18 +51,13 @@ type Server struct {
 // it as the server's own logger (used by the access-log middleware and other
 // server-owned components) and also sets it as the global logger so that
 // package-level logger functions in middleware (recovery, request-ID, ...) see
-// the same instance. Use WithLogger to inject a pre-built logger instead.
+// the same instance. Use WithLogger to inject a pre-built logger instead: an
+// injected logger takes precedence over Config.Logger and is not installed
+// globally.
 func NewServer(conf Config, opts ...Option) (*Server, error) {
 	conf = conf.withDefaults()
 	if err := conf.Validate(); err != nil {
 		return nil, err
-	}
-
-	// Build the server-owned logger early so buildMiddlewares can inject it
-	// into the access-log handler instead of falling back to the global.
-	var ownedLogger logger.ILogger
-	if conf.loggerConfigured() {
-		ownedLogger = logger.New(conf.Logger)
 	}
 
 	routes := router.New()
@@ -75,17 +71,27 @@ func NewServer(conf Config, opts ...Option) (*Server, error) {
 		keyFile:         conf.KeyFile,
 		shutdownTimeout: shutdownTimeout,
 		addr:            net.JoinHostPort(conf.Host, strconv.Itoa(conf.Port)),
-		log:             ownedLogger,
-	}
-	if err := server.buildMiddlewares(conf); err != nil {
-		return nil, err
 	}
 	if conf.Middlewares.Breaker.Enabled {
 		server.outerMiddlewares = append(server.outerMiddlewares,
 			resthandler.NewBreakerHandler(conf.Middlewares.Breaker).Handle)
 	}
+	// Apply options before building the middleware chain: WithLogger must reach
+	// the access-log handler, and WithMiddleware/WithSignature/WithRateLimit
+	// append middleware that has to run after the config-driven built-ins.
 	for _, opt := range opts {
 		opt(server)
+	}
+
+	// Build the server-owned logger after options so a logger injected with
+	// WithLogger is used as-is and never installed as the global logger.
+	var ownedLogger logger.ILogger
+	if !server.loggerSet && conf.loggerConfigured() {
+		ownedLogger = logger.New(conf.Logger)
+		server.log = ownedLogger
+	}
+	if err := server.buildMiddlewares(conf); err != nil {
+		return nil, err
 	}
 	if conf.Health.Enabled {
 		// Normalize next to the registration so a disabled Health config is never
@@ -124,7 +130,8 @@ func NewServer(conf Config, opts ...Option) (*Server, error) {
 // entry wraps all later ones. s.frontMiddlewares holds the observability
 // middleware; s.tailMiddlewares starts with Timeout, so middlewares inserted
 // between them (the breaker) observe timeout responses without running before
-// request IDs and logs.
+// request IDs and logs. Middleware appended by options (WithMiddleware,
+// WithRateLimit, WithSignature) is kept after the config-driven tail.
 func (s *Server) buildMiddlewares(conf Config) error {
 	front := []chain.Middleware{
 		resthandler.NewRecoveryHandler(conf.Middlewares.Recovery).Handle,
@@ -153,6 +160,8 @@ func (s *Server) buildMiddlewares(conf Config) error {
 		resthandler.NewMaxBytesHandler(conf.Middlewares.MaxBytes).Handle,
 		resthandler.NewSignatureHandler(conf.Middlewares.Signature).Handle,
 	}
+	// Keep middleware appended by options behind the config-driven built-ins.
+	tail = append(tail, s.tailMiddlewares...)
 
 	s.frontMiddlewares = front
 	s.tailMiddlewares = tail
@@ -188,9 +197,10 @@ func (s *Server) Router() *router.Router {
 	return s.router
 }
 
-// Logger returns the server-owned logger, or nil when the server was created
-// without a Logger config and no WithLogger option was supplied. When nil, the
-// access-log middleware and other components fall back to the global logger.
+// Logger returns the server-owned logger. It is nil when neither Config.Logger
+// nor WithLogger supplied one, or when WithLogger(nil) explicitly cleared it.
+// When nil, the access-log middleware and other components fall back to the
+// global logger.
 func (s *Server) Logger() logger.ILogger {
 	return s.log
 }

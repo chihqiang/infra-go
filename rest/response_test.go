@@ -318,3 +318,46 @@ func TestError_WrappedCodeMsgKeepsBusinessMessage(t *testing.T) {
 	assert.Equal(t, http.StatusBadGateway, body.Code)
 	assert.Equal(t, "upstream down", body.Msg)
 }
+
+// TestOkJSONFillsRequestIDWithoutContext covers the common handler form that
+// only has the ResponseWriter: the envelope takes the ID from the response
+// header written by RequestIDHandler instead of leaving request_id empty.
+func TestOkJSONFillsRequestIDWithoutContext(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/users", nil)
+	recorder := httptest.NewRecorder()
+	handler.NewRequestIDHandler(handler.RequestIDConfig{Enabled: true}).Handle(
+		func(w http.ResponseWriter, _ *http.Request) {
+			require.NoError(t, OkJSON(w, namedValue{Name: "ada"}))
+		},
+	).ServeHTTP(recorder, request)
+
+	envelope := decodeEnvelope(t, recorder.Body.Bytes())
+	id := recorder.Header().Get(handler.RequestIDHeader)
+	require.NotEmpty(t, id)
+	assert.Equal(t, id, envelope["request_id"])
+}
+
+// TestErrorJSONFillsRequestIDWithoutContext is the error-envelope counterpart.
+func TestErrorJSONFillsRequestIDWithoutContext(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/users", nil)
+	recorder := httptest.NewRecorder()
+	handler.NewRequestIDHandler(handler.RequestIDConfig{Enabled: true}).Handle(
+		func(w http.ResponseWriter, _ *http.Request) {
+			require.NoError(t, ErrorJSON(w, ErrResourceNotFound))
+		},
+	).ServeHTTP(recorder, request)
+
+	envelope := decodeEnvelope(t, recorder.Body.Bytes())
+	assert.Equal(t, recorder.Header().Get(handler.RequestIDHeader), envelope["request_id"])
+}
+
+// TestRequestIDFromContextWinsOverHeader keeps an explicit context authoritative.
+func TestRequestIDFromContextWinsOverHeader(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	recorder.Header().Set(handler.RequestIDHeader, "header-id")
+	ctx := handler.ContextWithRequestID(context.Background(), "ctx-id")
+	require.NoError(t, OkJSONCtx(ctx, recorder, namedValue{Name: "ada"}))
+
+	envelope := decodeEnvelope(t, recorder.Body.Bytes())
+	assert.Equal(t, "ctx-id", envelope["request_id"])
+}

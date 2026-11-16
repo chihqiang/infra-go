@@ -65,3 +65,21 @@ func TestBufferedWriterReportsShortWrite(t *testing.T) {
 		t.Fatal("short write should be reported")
 	}
 }
+
+func TestBufferedWriterKeepsInterimResponseOutOfFinalStatus(t *testing.T) {
+	buffered := NewBufferedWriter()
+	buffered.WriteHeader(http.StatusEarlyHints)
+	buffered.WriteHeader(http.StatusNoContent)
+
+	if got := buffered.Status(); got != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", got)
+	}
+
+	recorder := httptest.NewRecorder()
+	if err := buffered.WriteTo(recorder); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("replayed status = %d, want 204", recorder.Code)
+	}
+}

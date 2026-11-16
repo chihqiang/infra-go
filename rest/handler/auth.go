@@ -11,7 +11,6 @@ import (
 const (
 	// AuthorizationHeader is the request header that carries the bearer token.
 	AuthorizationHeader = "Authorization"
-	bearerPrefix        = "bearer "
 	bearerScheme        = "bearer"
 	// authRealm names the default protection space in the WWW-Authenticate challenge.
 	authRealm = "api"
@@ -93,18 +92,22 @@ func bearerToken(r *http.Request) (string, error) {
 		return "", token.ErrMissingToken
 	}
 
-	// An unsupported scheme means the request carries no bearer credentials:
-	// answer 401 with a bare challenge (RFC 6750, section 3.1).
+	// The scheme is a token on its own: "Bearer2 abc" or "Bearerfoo abc" is a
+	// non-bearer credential, not a malformed bearer one. Such requests carry no
+	// bearer credentials and get a bare 401 challenge (RFC 6750, section 3.1).
 	if len(value) < len(bearerScheme) || !strings.EqualFold(value[:len(bearerScheme)], bearerScheme) {
 		return "", token.ErrMissingToken
 	}
-	// "Bearer" without the separating space, or with empty credentials, is a
-	// malformed bearer request.
-	if len(value) <= len(bearerPrefix) || !strings.EqualFold(value[:len(bearerPrefix)], bearerPrefix) {
+	if len(value) > len(bearerScheme) && value[len(bearerScheme)] != ' ' && value[len(bearerScheme)] != '\t' {
+		return "", token.ErrMissingToken
+	}
+	// "Bearer" without credentials, or with credential characters a b64token
+	// cannot contain, is a malformed bearer request.
+	if len(value) == len(bearerScheme) {
 		return "", ErrMalformedAuthorization
 	}
 
-	value = strings.TrimSpace(value[len(bearerPrefix):])
+	value = strings.TrimSpace(value[len(bearerScheme):])
 	if value == "" || strings.ContainsAny(value, " \t") {
 		return "", ErrMalformedAuthorization
 	}
@@ -171,6 +174,10 @@ type unauthorizedWriter struct {
 }
 
 func (w *unauthorizedWriter) WriteHeader(status int) {
+	if status >= 100 && status < 200 && status != http.StatusSwitchingProtocols {
+		w.ResponseWriter.WriteHeader(status)
+		return
+	}
 	if w.wrote {
 		return
 	}

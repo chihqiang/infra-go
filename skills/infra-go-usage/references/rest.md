@@ -170,6 +170,10 @@ server, err := rest.NewServer(cfg.Config)
 builds it and calls `logger.SetGlobal`; the logger sync service added by `NewServer` flushes it
 when the `Server.Register` group stops. The zero `logger.Config` leaves the application's global logger untouched.
 
+Use `rest.WithLogger(l)` to inject an already-built logger instead. It takes precedence over
+`Config.Logger`, is used by the access-log middleware, and is deliberately not installed globally
+(call `logger.SetGlobal` yourself if the package-level logger should match).
+
 ```go
 server, _ := rest.NewServer(rest.Config{
     Logger: logger.Config{
@@ -216,8 +220,10 @@ are runtime dependencies (`json:"-"`): set them programmatically after loading c
 `Config.Validate` rejects enabling one of them without its dependency.
 
 Tags are consumed by `core/conf` and `core/mapping`, so the same struct works for YAML/JSON files
-and environment expansion. `Config.Validate()` rejects an out-of-range port, half-configured TLS,
-invalid trusted proxies and negative limits.
+and environment expansion. `Config.Validate()` rejects an out-of-range port, half-configured TLS
+and negative server timeouts. Middleware settings (invalid trusted proxies, negative limits, a
+missing parser, limiter, breaker or signature key) are only checked while that middleware is
+enabled, so disabled features do not force their configuration to be valid.
 
 `Middlewares.Log.TrustedProxies` accepts IPs and CIDR ranges. When it is set, the access log only
 honours `X-Forwarded-For` / `X-Real-IP` if the direct peer is in the list, and walks the forwarded
@@ -348,8 +354,10 @@ w.WriteHeader(http.StatusNoContent) // 204, no body
 
 `rest.OkJSON`/`rest.OkJSONCtx` and `rest.OkXML`/`rest.OkXMLCtx` wrap the value in `BaseResponse`, so success and
 failure share one structure: `{"code":0,"msg":"ok","data":...}` on success and `{"code":-1,"msg":"..."}` on failure.
-`request_id` is filled from the request context when the request ID middleware is in the chain; XML responses are
-wrapped in `<xml version="1.0" encoding="UTF-8">...</xml>`.
+`request_id` comes from the request context in the `...Ctx` helpers, or from the `X-Request-ID`
+response header for the helpers without a context (`OkJSON`, `ErrorJSON`, ...); it stays empty when
+the request ID middleware is disabled. XML responses are wrapped in
+`<xml version="1.0" encoding="UTF-8">...</xml>`.
 
 Use `rest.WriteJSON`/`rest.WriteXML` when a raw, unwrapped body is needed. `rest.WriteJSON` accepts the request
 context for call-site symmetry, but the writers never log, so log returned errors yourself.
@@ -406,7 +414,8 @@ whitespace); `application/*+json` media types are accepted. Other explicit media
 types keep their normal 415 handling.
 
 Every mapper falls back to the `json` tag when the source tag is absent, and
-`"-"` skips a field.
+`"-"` skips a field. Field lookups also try the lower-case form of the key, so an untagged
+`Tags []string` field binds `?tags=a&tags=b` and untagged nested structs bind `?profile.name=ada`.
 
 Supported field types: `string`, `bool`, numbers, `[]byte`, `time.Time`
 (RFC 3339 or `2006-01-02`, including pointers and slices), `time.Duration`, slices of the above,
@@ -506,7 +515,7 @@ server.Use(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
 
 | Handler | Behaviour |
 |---------|-----------|
-| `NewRecoveryHandler(RecoveryConfig)` | Recovers panics → 500, re-panics `http.ErrAbortHandler` |
+| `NewRecoveryHandler(RecoveryConfig)` | Recovers panics → 500, re-panics `http.ErrAbortHandler`; when the response is already committed it aborts the connection instead of hiding the truncation behind a clean 200 |
 | `NewRequestIDHandler(RequestIDConfig)` | Keeps a safe `X-Request-ID` or generates a UUID; `resthandler.RequestIDFromContext(ctx)` reads it from the request context. Importing `rest/handler` also registers a `logger` context extractor, so every `logger.XxxCtx` call carries `request_id` automatically |
 | `NewTraceHandler(TraceConfig)` | OTel server span; `ServiceName`, `IgnorePaths` |
 | `NewLogHandler(LogConfig, logger)` | Access log via `core/logger`; `ServiceName`, `SkipPaths`, `TrustedProxies`, `ClientIP` |
@@ -516,12 +525,13 @@ server.Use(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
 | `NewGunzipHandler(GunzipConfig)` | Transparently decompresses `Content-Encoding: gzip` |
 | `NewRateLimitHandler(RateLimitConfig)` / `NewRateLimitPerSecondHandler(rate, burst)` | 429 via `core/ratelimit` |
 | `NewBreakerHandler(BreakerConfig)` | Circuit breaker; 5xx responses count as failures → 503 when open |
-| `NewSignatureHandler(SignatureConfig)` | HMAC check over `METHOD / escaped-path / raw-query / timestamp / body` with key rotation and a timestamp TTL (zero uses the 5-minute default, negative disables it); the timestamp is checked before the body is read |
+| `NewSignatureHandler(SignatureConfig)` | HMAC check over `METHOD / escaped-path / raw-query / timestamp / body` with key rotation and a timestamp TTL (zero uses the 5-minute default, negative disables it); the timestamp is checked before the body is read, and `MaxBody` caps the body read for verification (zero is unlimited) |
 | `NewAuthHandler(AuthConfig)` | Bearer token check; RFC 6750 challenge (`invalid_request` → 400, `invalid_token` → 401), missing parser → 500, optional `Callback` |
 
 Default authorization failures write 400/401/500 with an RFC 6750 `WWW-Authenticate` challenge
-and no body. Set `AuthConfig.Callback` when the application needs a custom body or extra
-reporting.
+and no body. A missing or unsupported scheme (`Basic ...`, `Bearer2 ...`) gets a bare 401 challenge;
+only a header that starts with `Bearer` but has no valid credentials is a 400 `invalid_request`.
+Set `AuthConfig.Callback` when the application needs a custom body or extra reporting.
 
 ## token package
 
@@ -573,7 +583,9 @@ agent configured through `Middlewares.Trace.Agent` are added automatically by `N
   wrong method stays 405 instead of falling through to 404.
 - `internal/response` provides `StatusWriter`, `DeferredWriter` and `BufferedWriter`; they power
   CORS, logging, timeouts and custom fallbacks. `StatusWriter` also forwards `Flush`/`Hijack`, so
-  streaming and protocol upgrades survive the logging/tracing/breaker middleware.
+  streaming and protocol upgrades survive the logging/tracing/breaker middleware. Informational
+  1xx responses (except `101 Switching Protocols`) are forwarded without consuming the final
+  status, so the access log and breaker still see the later 2xx-5xx status.
 - `WithBreaker` is inserted between the observability middleware and `Timeout`, so a timeout 503 is
   reported to the breaker while the request is still logged and traced.
 - An oversized streamed body is answered with 413 and the response carries `Connection: close`, so

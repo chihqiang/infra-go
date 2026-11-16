@@ -86,7 +86,7 @@ server, err := rest.NewServer(cfg.Config) // the embedded rest.Config
 
 - Do not add a separate `Server rest.Config` / `HTTP rest.Config` field: it forces `cfg.Server.Port` at every call site and nests all server settings under one config key.
 - Do not add a second `Logger` field either — the embedded `rest.Config` already provides one; an outer field would shadow it and leave two keys competing for the same `logger` section.
-- Embedding promotes `rest.Config.Validate`, so `conf` validates host/port/TLS/middleware settings automatically. A business-level `Validate` must call the embedded one first: `if err := c.Config.Validate(); err != nil { return err }`.
+- Embedding promotes `rest.Config.Validate`, so `conf` validates host/port/TLS and the settings of enabled middleware automatically. A business-level `Validate` must call the embedded one first: `if err := c.Config.Validate(); err != nil { return err }`.
 
 ### svc — dependency assembly (ServiceContext)
 

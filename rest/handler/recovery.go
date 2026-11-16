@@ -5,6 +5,7 @@ import (
 	"runtime/debug"
 
 	"github.com/chihqiang/infra-go/core/logger"
+	"github.com/chihqiang/infra-go/rest/internal/response"
 )
 
 // RecoveryConfig configures RecoveryHandler.
@@ -23,12 +24,18 @@ func NewRecoveryHandler(config RecoveryConfig) *RecoveryHandler {
 }
 
 // Handle wraps next with panic recovery.
+//
+// The writer is tracked so a panic that happens after the response was
+// committed can abort the connection instead of writing a 500 that cannot be
+// sent. Without the abort the client would see a cleanly terminated but
+// silently truncated "successful" response.
 func (h *RecoveryHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 	if !h.config.Enabled {
 		return next
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
+		tracked := response.NewStatusWriter(w)
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				if recovered == http.ErrAbortHandler {
@@ -38,9 +45,12 @@ func (h *RecoveryHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 					logger.Any("panic", recovered),
 					logger.String("stack", string(debug.Stack())),
 				)
-				w.WriteHeader(http.StatusInternalServerError)
+				if tracked.Committed() {
+					panic(http.ErrAbortHandler)
+				}
+				tracked.WriteHeader(http.StatusInternalServerError)
 			}
 		}()
-		next(w, r)
+		next(tracked, r)
 	}
 }
