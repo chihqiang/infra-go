@@ -68,10 +68,10 @@ func (c *CodeMsg) Error() string {
 }
 
 // StatusCode maps the business code onto an HTTP status so the error can be
-// passed to Error: codes that already are HTTP 4xx/5xx statuses are used as-is,
-// every other business code is treated as a client-side failure (400). This
-// keeps the business message visible instead of turning every CodeMsg into a
-// hidden 500.
+// passed to ErrorJSON or ErrorXML: codes that already are HTTP 4xx/5xx statuses
+// are used as-is, every other business code is treated as a client-side failure
+// (400). This keeps the business message visible instead of turning every
+// CodeMsg into a hidden 500.
 func (c *CodeMsg) StatusCode() int {
 	if c == nil {
 		return 0

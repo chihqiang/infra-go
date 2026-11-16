@@ -84,7 +84,7 @@ func main() {
         Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
             var req helloRequest
             if err := rest.Bind(r, &req); err != nil {
-                _ = rest.Error(w, err) // binding failures map to 400/415 automatically
+                _ = rest.ErrorJSON(w, err) // binding failures map to 400/415 automatically
                 return
             }
             _ = rest.OkJSON(w, map[string]string{"msg": "hello, " + req.Name})
@@ -120,7 +120,7 @@ The documentation of each module is maintained centrally in
 | [orm](./skills/infra-go-usage/references/orm.md) | ORM wrapper built on gorm, supporting MySQL/PostgreSQL/SQLite |
 | [redisx](./skills/infra-go-usage/references/redisx.md) | Redis client wrapper: connection pool, health check, distributed lock |
 | [cache](./skills/infra-go-usage/references/cache.md) | Unified cache interface with two implementations: in-memory (LRU eviction, hit-rate statistics) and Redis (protection against cache breakdown and penetration) |
-| [rest](./skills/infra-go-usage/references/rest.md) | HTTP toolkit: config (`Config`), method-aware routing, route groups, middleware chain, request binding and graceful shutdown. Handlers live in `rest/handler` (recovery, request ID, tracing, access log, concurrency/timeout/body limits, gzip, breaker, rate limit, JWT auth, body signature) as structs with a `Config` and a `Handle` method, so they can be reused outside a `rest.Server`; binding is exposed as `rest.Bind*`, and JSON/XML responses plus the `code/msg/data` envelope live in `rest` itself (`OkJSON` / `JSONBaseResponse` / `Error`); CORS comes from `rest.WithCORS` |
+| [rest](./skills/infra-go-usage/references/rest.md) | HTTP toolkit: config (`Config`), method-aware routing, route groups, middleware chain, request binding and graceful shutdown. Handlers live in `rest/handler` (recovery, request ID, tracing, access log, concurrency/timeout/body limits, gzip, breaker, rate limit, JWT auth, body signature) as structs with a `Config` and a `Handle` method, so they can be reused outside a `rest.Server`; binding is exposed as `rest.Bind*`, and JSON/XML responses plus the `code/msg/data` error envelope live in `rest` itself (`OkJSON` / `ErrorJSON` / `ErrorXML`); CORS comes from `rest.WithCORS` |
 | [ratelimit](./skills/infra-go-usage/references/ratelimit.md) | Rate limiters: token bucket/sliding window with in-memory and Redis backends. HTTP integration is `rest/handler.NewRateLimitHandler` |
 | [breaker](./skills/infra-go-usage/references/breaker.md) | Circuit breaker using the Google SRE algorithm: fail fast, degrade and prevent cascading failures |
 | [retry](./skills/infra-go-usage/references/retry.md) | Retry mechanism: exponential backoff, fixed delay and jitter |

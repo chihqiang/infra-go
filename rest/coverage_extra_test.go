@@ -60,47 +60,38 @@ func TestWithBreakerNilAndAddServiceNil(t *testing.T) {
 	assert.Nil(t, srv.Logger())
 }
 
-func TestRequestIDNilRequest(t *testing.T) {
-	assert.Equal(t, "", RequestID(nil))
-	assert.Equal(t, "", RequestIDFromContext(nil))
-}
-
 func TestResponseXMLAndHTMLWriters(t *testing.T) {
 	type payload struct {
 		Name string `xml:"name"`
 	}
 
 	xmlRecorder := httptest.NewRecorder()
-	OkXML(xmlRecorder, payload{Name: "alice"})
+	require.NoError(t, OkXML(xmlRecorder, payload{Name: "alice"}))
 	assert.Equal(t, http.StatusOK, xmlRecorder.Code)
 	assert.Equal(t, XMLContentType, xmlRecorder.Header().Get("Content-Type"))
 	assert.Contains(t, xmlRecorder.Body.String(), "<name>alice</name>")
 
 	written := httptest.NewRecorder()
-	WriteXML(written, http.StatusCreated, payload{Name: "bob"})
+	require.NoError(t, WriteXML(written, http.StatusCreated, payload{Name: "bob"}))
 	assert.Equal(t, http.StatusCreated, written.Code)
 
 	// A value that cannot be marshalled becomes a 500 from http.Error.
 	bad := httptest.NewRecorder()
-	OkXML(bad, make(chan int))
+	require.Error(t, OkXML(bad, make(chan int)))
 	assert.Equal(t, http.StatusInternalServerError, bad.Code)
 
 	htmlRecorder := httptest.NewRecorder()
-	OkHTML(htmlRecorder, "<p>hi</p>")
+	require.NoError(t, WriteHTML(htmlRecorder, http.StatusOK, "<p>hi</p>"))
 	assert.Equal(t, http.StatusOK, htmlRecorder.Code)
 	assert.Equal(t, HTMLContentType, htmlRecorder.Header().Get("Content-Type"))
 	assert.Equal(t, "<p>hi</p>", htmlRecorder.Body.String())
 
 	writtenHTML := httptest.NewRecorder()
-	WriteHTML(writtenHTML, http.StatusAccepted, "ok")
+	require.NoError(t, WriteHTML(writtenHTML, http.StatusAccepted, "ok"))
 	assert.Equal(t, http.StatusAccepted, writtenHTML.Code)
 
-	ctxHTML := httptest.NewRecorder()
-	OkHTMLCtx(nil, ctxHTML, "ctx")
-	assert.Equal(t, http.StatusOK, ctxHTML.Code)
-
 	ctxXML := httptest.NewRecorder()
-	OkXMLCtx(nil, ctxXML, payload{Name: "ctx"})
+	require.NoError(t, OkXMLCtx(nil, ctxXML, payload{Name: "ctx"}))
 	assert.Equal(t, http.StatusOK, ctxXML.Code)
 }
 
@@ -120,10 +111,9 @@ func (w *shortWriter) Write(p []byte) (int, error) {
 	return len(p) - 1, nil
 }
 
-func TestWriteAllReportsShortWrite(t *testing.T) {
-	err := writeAll(&shortWriter{}, []byte("body"))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "wrote")
+func TestResponseWritersReportShortWrite(t *testing.T) {
+	require.ErrorContains(t, WriteXML(&shortWriter{}, http.StatusOK, "body"), "wrote")
+	require.ErrorContains(t, WriteHTML(&shortWriter{}, http.StatusOK, "body"), "wrote")
 }
 
 func TestRouteOptionsNoOp(t *testing.T) {

@@ -1,13 +1,10 @@
 package rest
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/chihqiang/infra-go/rest/handler"
 )
 
 func TestClientIPUsesDirectPeerByDefault(t *testing.T) {
@@ -23,17 +20,36 @@ func TestClientIPUsesDirectPeerByDefault(t *testing.T) {
 	}
 }
 
-func TestRequestIDReadsMiddlewareValue(t *testing.T) {
-	var got string
-	handler.NewRequestIDHandler(handler.RequestIDConfig{Enabled: true}).Handle(func(_ http.ResponseWriter, r *http.Request) {
-		got = RequestID(r)
-	}).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
-
-	if got == "" {
-		t.Fatal("request ID is empty after RequestIDHandler")
+func TestPathParam(t *testing.T) {
+	server, err := NewServer(Config{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if RequestID(httptest.NewRequest(http.MethodGet, "/", nil)) != "" {
-		t.Fatal("request ID should be empty without the middleware")
+
+	var got string
+	server.HandleFunc(http.MethodGet, "/groups/{id}", func(_ http.ResponseWriter, r *http.Request) {
+		got = PathParam(r, "id")
+	})
+	server.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/groups/42", nil))
+
+	if got != "42" {
+		t.Fatalf("path param = %q, want 42", got)
+	}
+	if PathParam(nil, "id") != "" {
+		t.Fatal("path param for nil request should be empty")
+	}
+}
+
+func TestQueryParam(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/groups?page=2&page=3", nil)
+	if got := QueryParam(request, "page"); got != "2" {
+		t.Fatalf("query param = %q, want first value 2", got)
+	}
+	if got := QueryParam(request, "missing"); got != "" {
+		t.Fatalf("missing query param = %q, want empty", got)
+	}
+	if QueryParam(nil, "page") != "" {
+		t.Fatal("query param for nil request should be empty")
 	}
 }
 
@@ -126,7 +142,7 @@ func TestBindPathNestedStructWithRouteWildcard(t *testing.T) {
 			Org org `path:"org"`
 		}
 		if err := BindPath(r, &payload); err != nil {
-			_ = Error(w, err)
+			_ = ErrorJSON(w, err)
 			return
 		}
 		got = payload.Org.ID
@@ -160,24 +176,5 @@ func TestBindAcceptsJSONWithoutJSONContentType(t *testing.T) {
 		if payload.Name != "ada" {
 			t.Fatalf("content type %q: name = %q", contentType, payload.Name)
 		}
-	}
-}
-
-func TestContextWithRequestID(t *testing.T) {
-	ctx := ContextWithRequestID(context.Background(), "req-1")
-	if got := RequestIDFromContext(ctx); got != "req-1" {
-		t.Fatalf("request ID = %q, want req-1", got)
-	}
-
-	request := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
-	if got := RequestID(request); got != "req-1" {
-		t.Fatalf("RequestID = %q, want req-1", got)
-	}
-
-	if got := RequestIDFromContext(ContextWithRequestID(nil, "req-2")); got != "req-2" {
-		t.Fatalf("nil context request ID = %q, want req-2", got)
-	}
-	if got := RequestIDFromContext(nil); got != "" {
-		t.Fatalf("nil context request ID = %q, want empty", got)
 	}
 }

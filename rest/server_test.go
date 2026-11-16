@@ -270,7 +270,7 @@ func TestServerMaxBodyBytesChunkedRequest(t *testing.T) {
 			Name string `json:"name"`
 		}
 		if err := Bind(r, &payload); err != nil {
-			_ = Error(w, err)
+			_ = ErrorJSON(w, err)
 			return
 		}
 		_ = OkJSON(w, payload)
@@ -305,7 +305,7 @@ func TestServerMaxBodyBytesAppliesAfterGunzip(t *testing.T) {
 			Name string `json:"name"`
 		}
 		if err := Bind(r, &payload); err != nil {
-			_ = Error(w, err)
+			_ = ErrorJSON(w, err)
 			return
 		}
 		_ = OkJSON(w, payload)
