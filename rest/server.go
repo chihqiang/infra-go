@@ -72,19 +72,16 @@ func NewServer(conf Config, opts ...Option) (*Server, error) {
 	if shutdownTimeout <= 0 {
 		shutdownTimeout = defaultShutdownTimeout
 	}
-	front, tail, err := buildMiddlewares(conf, ownedLogger)
-	if err != nil {
-		return nil, err
-	}
 	server := &Server{
-		router:           routes,
-		certFile:         conf.CertFile,
-		keyFile:          conf.KeyFile,
-		shutdownTimeout:  shutdownTimeout,
-		frontMiddlewares: front,
-		tailMiddlewares:  tail,
-		addr:             net.JoinHostPort(conf.Host, strconv.Itoa(conf.Port)),
-		log:              ownedLogger,
+		router:          routes,
+		certFile:        conf.CertFile,
+		keyFile:         conf.KeyFile,
+		shutdownTimeout: shutdownTimeout,
+		addr:            net.JoinHostPort(conf.Host, strconv.Itoa(conf.Port)),
+		log:             ownedLogger,
+	}
+	if err := server.buildMiddlewares(conf); err != nil {
+		return nil, err
 	}
 	if conf.Middlewares.Breaker.Enabled {
 		server.outerMiddlewares = append(server.outerMiddlewares,
@@ -124,19 +121,20 @@ func NewServer(conf Config, opts ...Option) (*Server, error) {
 }
 
 // buildMiddlewares assembles the server chain in execution order: the first
-// entry wraps all later ones. front holds the observability middleware;
-// tail starts with Timeout, so middlewares inserted between them (the breaker)
-// observe timeout responses without running before request IDs and logs.
-func buildMiddlewares(conf Config, log logger.ILogger) (front, tail []chain.Middleware, err error) {
-	front = append(front,
+// entry wraps all later ones. s.frontMiddlewares holds the observability
+// middleware; s.tailMiddlewares starts with Timeout, so middlewares inserted
+// between them (the breaker) observe timeout responses without running before
+// request IDs and logs.
+func (s *Server) buildMiddlewares(conf Config) error {
+	front := []chain.Middleware{
 		resthandler.NewRecoveryHandler(conf.Middlewares.Recovery).Handle,
 		resthandler.NewRequestIDHandler(conf.Middlewares.RequestID).Handle,
 		resthandler.NewTraceHandler(conf.Middlewares.Trace).Handle,
-	)
+	}
 
-	logHandler, err := resthandler.NewLogHandler(conf.Middlewares.Log, log)
+	logHandler, err := resthandler.NewLogHandler(conf.Middlewares.Log, s.log)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 	front = append(front,
 		logHandler.Handle,
@@ -149,14 +147,16 @@ func buildMiddlewares(conf Config, log logger.ILogger) (front, tail []chain.Midd
 	// decompressed payload, otherwise a small gzip body can expand without
 	// bound (decompression bomb). Signature runs after MaxBytes so it sees the
 	// decompressed, already bounded body.
-	tail = append(tail,
+	tail := []chain.Middleware{
 		resthandler.NewTimeoutHandler(conf.Middlewares.Timeout).Handle,
 		resthandler.NewGunzipHandler(conf.Middlewares.Gunzip).Handle,
 		resthandler.NewMaxBytesHandler(conf.Middlewares.MaxBytes).Handle,
 		resthandler.NewSignatureHandler(conf.Middlewares.Signature).Handle,
-	)
+	}
 
-	return front, tail, nil
+	s.frontMiddlewares = front
+	s.tailMiddlewares = tail
+	return nil
 }
 
 // Handle registers a handler for the given method and path pattern.
