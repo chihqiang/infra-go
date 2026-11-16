@@ -34,8 +34,8 @@ func TestOkJSONCtx(t *testing.T) {
 	if err := OkJSONCtx(httptest.NewRequest("GET", "/", nil).Context(), recorder, "pong"); err != nil {
 		t.Fatal(err)
 	}
-	if got := recorder.Body.String(); got != "\"pong\"\n" {
-		t.Fatalf("body = %q, want JSON string pong", got)
+	if got, want := recorder.Body.String(), "{\"code\":0,\"msg\":\"ok\",\"data\":\"pong\"}\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
 
@@ -51,8 +51,9 @@ func TestOkXML(t *testing.T) {
 	if got := recorder.Header().Get("Content-Type"); got != XMLContentType {
 		t.Fatalf("content type = %q, want %q", got, XMLContentType)
 	}
-	if got := recorder.Body.String(); got != "<namedValue><name>ada</name></namedValue>" {
-		t.Fatalf("body = %q", got)
+	want := `<xml version="1.0" encoding="UTF-8"><code>0</code><msg>ok</msg><data><name>ada</name></data></xml>`
+	if got := recorder.Body.String(); got != want {
+		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
 
@@ -111,14 +112,21 @@ func TestJSONWriters(t *testing.T) {
 		name   string
 		write  func(http.ResponseWriter, any) error
 		status int
+		want   string
 	}{
-		{name: "ok", write: OkJSON, status: http.StatusOK},
+		{
+			name:   "ok",
+			write:  OkJSON,
+			status: http.StatusOK,
+			want:   "{\"code\":0,\"msg\":\"ok\",\"data\":{\"status\":\"fine\"}}\n",
+		},
 		{
 			name: "created",
 			write: func(w http.ResponseWriter, v any) error {
 				return WriteJSON(context.Background(), w, http.StatusCreated, v)
 			},
 			status: http.StatusCreated,
+			want:   "{\"status\":\"fine\"}\n",
 		},
 	}
 
@@ -133,8 +141,8 @@ func TestJSONWriters(t *testing.T) {
 		if got := recorder.Header().Get("Content-Type"); got != JSONContentType {
 			t.Errorf("%s: content type = %q", test.name, got)
 		}
-		if recorder.Body.String() != "{\"status\":\"fine\"}\n" {
-			t.Errorf("%s: body = %q", test.name, recorder.Body.String())
+		if got := recorder.Body.String(); got != test.want {
+			t.Errorf("%s: body = %q, want %q", test.name, got, test.want)
 		}
 	}
 }
@@ -199,6 +207,45 @@ func TestErrorJSONCtxCarriesRequestID(t *testing.T) {
 	envelope := decodeEnvelope(t, body)
 	if envelope["request_id"] == nil || envelope["request_id"] == "" {
 		t.Fatalf("request_id missing from error envelope: %v", envelope)
+	}
+}
+
+// TestOkCtxWrapsSuccessIntoBaseResponse keeps success and error payloads on the
+// same code/msg/data envelope.
+func TestOkCtxWrapsSuccessIntoBaseResponse(t *testing.T) {
+	var jsonBody []byte
+	var xmlBody string
+	request := httptest.NewRequest(http.MethodGet, "/users", nil)
+	handler.NewRequestIDHandler(handler.RequestIDConfig{Enabled: true}).Handle(func(w http.ResponseWriter, r *http.Request) {
+		recorder := w.(*httptest.ResponseRecorder)
+		if err := OkJSONCtx(r.Context(), w, namedValue{Name: "ada"}); err != nil {
+			t.Error(err)
+		}
+		jsonBody = recorder.Body.Bytes()
+
+		xmlRecorder := httptest.NewRecorder()
+		if err := OkXMLCtx(r.Context(), xmlRecorder, namedValue{Name: "ada"}); err != nil {
+			t.Error(err)
+		}
+		xmlBody = xmlRecorder.Body.String()
+	}).ServeHTTP(httptest.NewRecorder(), request)
+
+	envelope := decodeEnvelope(t, jsonBody)
+	if envelope["code"] != float64(BusinessCodeOK) || envelope["msg"] != BusinessMsgOK {
+		t.Fatalf("json envelope = %v", envelope)
+	}
+	if envelope["request_id"] == nil || envelope["request_id"] == "" {
+		t.Fatalf("request_id missing from success envelope: %v", envelope)
+	}
+	data, ok := envelope["data"].(map[string]any)
+	if !ok || data["name"] != "ada" {
+		t.Fatalf("json data = %v", envelope["data"])
+	}
+
+	for _, want := range []string{"<code>0</code>", "<msg>ok</msg>", "<name>ada</name>", "<request_id>"} {
+		if !strings.Contains(xmlBody, want) {
+			t.Fatalf("xml success envelope missing %q:\n%s", want, xmlBody)
+		}
 	}
 }
 

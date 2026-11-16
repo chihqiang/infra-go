@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/chihqiang/infra-go/core/logger"
 	"github.com/chihqiang/infra-go/rest/handler"
 	"google.golang.org/grpc/status"
 )
@@ -49,12 +48,11 @@ type xmlEnvelope[T any] struct {
 	BaseResponse[T]
 }
 
-// WriteJSON encodes v as JSON with the given HTTP status, logs encoding and
-// write failures with ctx, and returns them.
-func WriteJSON(ctx context.Context, w http.ResponseWriter, status int, v any) error {
+// WriteJSON encodes v as JSON with the given HTTP status and returns encoding
+// or write failures to the caller.
+func WriteJSON(_ context.Context, w http.ResponseWriter, status int, v any) error {
 	body, err := json.Marshal(v)
 	if err != nil {
-		logger.ErrorCtx(ctx, "rest: write json response", logger.Err(err))
 		return fmt.Errorf("marshal json: %w", err)
 	}
 	body = append(body, '\n')
@@ -66,25 +64,23 @@ func WriteJSON(ctx context.Context, w http.ResponseWriter, status int, v any) er
 	w.WriteHeader(status)
 	n, err := w.Write(body)
 	if err != nil {
-		logger.ErrorCtx(ctx, "rest: write json response", logger.Err(err))
 		return fmt.Errorf("write response: %w", err)
 	}
 	if n < len(body) {
-		err := fmt.Errorf("write response: wrote %d of %d bytes", n, len(body))
-		logger.ErrorCtx(ctx, "rest: write json response", logger.Err(err))
-		return err
+		return fmt.Errorf("write response: wrote %d of %d bytes", n, len(body))
 	}
 	return nil
 }
 
-// OkJSON writes v as JSON with status 200.
+// OkJSON writes v as a JSON BaseResponse with status 200.
 func OkJSON(w http.ResponseWriter, v any) error {
-	return WriteJSON(context.Background(), w, http.StatusOK, v)
+	return OkJSONCtx(context.Background(), w, v)
 }
 
-// OkJSONCtx writes v as JSON with status 200 and logs with ctx.
+// OkJSONCtx writes v as a JSON BaseResponse with status 200 and fills the
+// request ID from ctx.
 func OkJSONCtx(ctx context.Context, w http.ResponseWriter, v any) error {
-	return WriteJSON(ctx, w, http.StatusOK, v)
+	return WriteJSON(ctx, w, http.StatusOK, wrapBaseResponse(ctx, v))
 }
 
 // ErrorJSON writes err as a JSON BaseResponse. The HTTP status comes from
@@ -95,8 +91,7 @@ func ErrorJSON(w http.ResponseWriter, err error) error {
 
 // ErrorJSONCtx is ErrorJSON with a request context.
 func ErrorJSONCtx(ctx context.Context, w http.ResponseWriter, err error) error {
-	status, response := errorResponse(ctx, err)
-	return WriteJSON(ctx, w, status, response)
+	return WriteJSON(ctx, w, StatusOf(err), wrapBaseResponse(ctx, err))
 }
 
 // WriteXML writes v as XML with the given HTTP status.
@@ -119,18 +114,20 @@ func WriteXML(w http.ResponseWriter, status int, v any) error {
 	return nil
 }
 
-// OkXML writes v as XML with status 200.
+// OkXML writes v as an XML BaseResponse with status 200.
 func OkXML(w http.ResponseWriter, v any) error {
-	return WriteXML(w, http.StatusOK, v)
+	return OkXMLCtx(context.Background(), w, v)
 }
 
-// OkXMLCtx writes v as XML with status 200 and logs with ctx.
+// OkXMLCtx writes v as an XML BaseResponse with status 200 and fills the
+// request ID from ctx.
 func OkXMLCtx(ctx context.Context, w http.ResponseWriter, v any) error {
-	if err := WriteXML(w, http.StatusOK, v); err != nil {
-		logger.ErrorCtx(ctx, "rest: write xml response", logger.Err(err))
-		return err
+	body := xmlEnvelope[any]{
+		Version:      xmlVersion,
+		Encoding:     xmlEncoding,
+		BaseResponse: wrapBaseResponse(ctx, v),
 	}
-	return nil
+	return WriteXML(w, http.StatusOK, body)
 }
 
 // ErrorXML writes err as an XML BaseResponse. The HTTP status comes from
@@ -141,17 +138,12 @@ func ErrorXML(w http.ResponseWriter, err error) error {
 
 // ErrorXMLCtx is ErrorXML with a request context.
 func ErrorXMLCtx(ctx context.Context, w http.ResponseWriter, err error) error {
-	status, response := errorResponse(ctx, err)
 	body := xmlEnvelope[any]{
 		Version:      xmlVersion,
 		Encoding:     xmlEncoding,
-		BaseResponse: response,
+		BaseResponse: wrapBaseResponse(ctx, err),
 	}
-	if err := WriteXML(w, status, body); err != nil {
-		logger.ErrorCtx(ctx, "rest: write xml error response", logger.Err(err))
-		return err
-	}
-	return nil
+	return WriteXML(w, StatusOf(err), body)
 }
 
 // WriteHTML writes v as an HTML body with the given HTTP status.
@@ -168,26 +160,9 @@ func WriteHTML(w http.ResponseWriter, status int, v string) error {
 	return nil
 }
 
-func errorResponse(ctx context.Context, err error) (int, BaseResponse[any]) {
-	status := StatusOf(err)
-	if status >= http.StatusInternalServerError {
-		if codeMsg := asCodeMsg(err); codeMsg != nil {
-			// Business 5xx responses are intentional and retain their message.
-			logger.WarnCtx(ctx, "rest: business error response",
-				logger.Int("status", status), logger.Err(err))
-			return status, wrapBaseResponse(ctx, codeMsg)
-		}
-		logger.ErrorCtx(ctx, "rest: request failed", logger.Err(err))
-		err = fmt.Errorf("%s", http.StatusText(status))
-	}
-	return status, wrapBaseResponse(ctx, err)
-}
-
 func wrapBaseResponse(ctx context.Context, v any) BaseResponse[any] {
 	var response BaseResponse[any]
 	switch data := v.(type) {
-	case *CodeMsg:
-		response = BaseResponse[any]{Code: data.Code, Msg: data.Msg}
 	case CodeMsg:
 		response = BaseResponse[any]{Code: data.Code, Msg: data.Msg}
 	case *status.Status:
@@ -196,18 +171,21 @@ func wrapBaseResponse(ctx context.Context, v any) BaseResponse[any] {
 		grpcStatus := data.GRPCStatus()
 		response = BaseResponse[any]{Code: int(grpcStatus.Code()), Msg: grpcStatus.Message()}
 	case error:
-		response = BaseResponse[any]{Code: BusinessCodeError, Msg: data.Error()}
+		var codeMsg *CodeMsg
+		status := StatusOf(data)
+		switch {
+		case errors.As(data, &codeMsg):
+			// Business errors are intentional and retain their code and message.
+			response = BaseResponse[any]{Code: codeMsg.Code, Msg: codeMsg.Msg}
+		case status >= http.StatusInternalServerError:
+			// Hide internal details of unexpected 5xx errors.
+			response = BaseResponse[any]{Code: BusinessCodeError, Msg: http.StatusText(status)}
+		default:
+			response = BaseResponse[any]{Code: BusinessCodeError, Msg: data.Error()}
+		}
 	default:
 		response = BaseResponse[any]{Code: BusinessCodeOK, Msg: BusinessMsgOK, Data: v}
 	}
 	response.RequestID, _ = handler.RequestIDFromContext(ctx)
 	return response
-}
-
-func asCodeMsg(err error) *CodeMsg {
-	var codeMsg *CodeMsg
-	if errors.As(err, &codeMsg) {
-		return codeMsg
-	}
-	return nil
 }

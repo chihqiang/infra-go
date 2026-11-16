@@ -345,8 +345,12 @@ rest.WriteHTML(w, http.StatusOK, "<h1>ok</h1>")
 w.WriteHeader(http.StatusNoContent) // 204, no body
 ```
 
-`rest.ErrorJSON` and `rest.ErrorXML` hide details for 5xx (body keeps `code`/`msg`, the real error is logged) and echo
-the message for 4xx.
+`rest.OkJSON`/`rest.OkJSONCtx` and `rest.OkXML`/`rest.OkXMLCtx` wrap the value in `BaseResponse` so success and
+failure share the same `code`/`msg`/`data` structure; `request_id` is filled from the request context when the
+request ID middleware is in the chain. Use `rest.WriteJSON`/`rest.WriteXML` when a raw, unwrapped body is needed.
+
+`rest.ErrorJSON` and `rest.ErrorXML` hide details for 5xx (the body keeps `code`/`msg` with the HTTP status text) and
+echo the message for 4xx. The response writers do not log; log the error in your handler if you need it.
 
 Middleware-generated failures (auth, rate/concurrency limits, timeout, breaker, signature, body
 limit, recovery and gunzip) only set the HTTP status and protocol headers
