@@ -82,8 +82,9 @@ func validHealthPath(path string) bool {
 type HealthConfig struct {
 	// Enabled registers the endpoint when the server is created. Default false.
 	Enabled bool `json:",optional"`
-	// Path is the health endpoint path, default "/health".
-	Path string `json:",default=/health"`
+	// Path is the health endpoint path. It is only defaulted to "/health" when
+	// Enabled is true, so a disabled health endpoint keeps its path empty.
+	Path string `json:",optional"`
 }
 
 // MiddlewaresConf groups the configuration of the built-in middleware handlers.
@@ -112,7 +113,6 @@ func DefaultConfig() Config {
 		IdleTimeout:     120 * time.Second,
 		ShutdownTimeout: defaultShutdownTimeout,
 		MaxHeaderBytes:  1 << 20,
-		Health:          HealthConfig{Path: defaultHealthPath},
 		Middlewares: MiddlewaresConf{
 			Recovery:  resthandler.RecoveryConfig{Enabled: true},
 			RequestID: resthandler.RequestIDConfig{Enabled: true},

@@ -53,9 +53,6 @@ type Server struct {
 // the same instance. Use WithLogger to inject a pre-built logger instead.
 func NewServer(conf Config, opts ...Option) (*Server, error) {
 	conf = conf.withDefaults()
-	// Normalize before Validate so a partial Config with Health.Enabled but no
-	// Path still registers the default path.
-	conf.Health.Path = normalizeHealthPath(conf.Health.Path)
 	if err := conf.Validate(); err != nil {
 		return nil, err
 	}
@@ -91,7 +88,10 @@ func NewServer(conf Config, opts ...Option) (*Server, error) {
 		opt(server)
 	}
 	if conf.Health.Enabled {
-		server.Handle(http.MethodGet, conf.Health.Path, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Normalize next to the registration so a disabled Health config is never
+		// touched and an empty Path still becomes "/health".
+		healthPath := normalizeHealthPath(conf.Health.Path)
+		server.Handle(http.MethodGet, healthPath, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_ = OkJSON(w, map[string]string{"status": "ok"})
 		}))
 	}

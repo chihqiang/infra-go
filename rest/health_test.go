@@ -21,8 +21,8 @@ func TestHealthEndpointDisabledByDefault(t *testing.T) {
 	srv, err := NewServer(DefaultConfig())
 	require.NoError(t, err)
 
-	assert.Equal(t, defaultHealthPath, DefaultConfig().Health.Path)
 	assert.False(t, DefaultConfig().Health.Enabled)
+	assert.Empty(t, DefaultConfig().Health.Path, "a disabled health endpoint must not get a default path")
 
 	recorder := serveHealth(t, srv, http.MethodGet, defaultHealthPath)
 	assert.Equal(t, http.StatusNotFound, recorder.Code)

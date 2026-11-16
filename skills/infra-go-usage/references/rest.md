@@ -115,7 +115,7 @@ type Config struct {
 
 type HealthConfig struct {
     Enabled bool   `json:",optional"`          // register the endpoint, default false
-    Path    string `json:",default=/health"`   // static path, default "/health"
+    Path    string `json:",optional"`          // static path; "/health" when Enabled and empty
 }
 
 type MiddlewaresConf struct {
@@ -141,7 +141,7 @@ The built-in health route is disabled by default, so an application that already
 
 ```go
 server, err := rest.NewServer(rest.Config{
-    Health: rest.HealthConfig{Enabled: true, Path: "/healthz"}, // Path defaults to /health
+    Health: rest.HealthConfig{Enabled: true, Path: "/healthz"}, // empty Path becomes /health
 })
 ```
 
