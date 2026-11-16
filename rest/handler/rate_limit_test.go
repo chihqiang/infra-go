@@ -11,7 +11,7 @@ import (
 )
 
 func TestRateLimitRejectsAfterBurst(t *testing.T) {
-	handlerFn := RateLimitPerSecondHandler(1, 2)(func(w http.ResponseWriter, _ *http.Request) {
+	handlerFn := NewRateLimitPerSecondHandler(1, 2).Handle(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -32,7 +32,7 @@ func TestRateLimitRejectsAfterBurst(t *testing.T) {
 
 func TestRateLimitNilLimiterPassesThrough(t *testing.T) {
 	called := false
-	handlerFn := RateLimitHandler(nil)(func(http.ResponseWriter, *http.Request) {
+	handlerFn := NewRateLimitHandler(RateLimitConfig{Enabled: true, Limiter: nil}).Handle(func(http.ResponseWriter, *http.Request) {
 		called = true
 	})
 
@@ -46,7 +46,7 @@ func TestRateLimitNilLimiterPassesThrough(t *testing.T) {
 func TestMaxConnsRejectsWhenSaturated(t *testing.T) {
 	release := make(chan struct{})
 	entered := make(chan struct{})
-	handlerFn := MaxConnsHandler(1)(func(w http.ResponseWriter, _ *http.Request) {
+	handlerFn := NewMaxConnsHandler(MaxConnsConfig{Enabled: true, Limit: 1}).Handle(func(w http.ResponseWriter, _ *http.Request) {
 		close(entered)
 		<-release
 		w.WriteHeader(http.StatusOK)
@@ -76,7 +76,7 @@ func TestMaxConnsReleasesSlot(t *testing.T) {
 	guard.Release()
 
 	done := make(chan int, 1)
-	handlerFn := MaxConnsHandler(1)(func(w http.ResponseWriter, _ *http.Request) {
+	handlerFn := NewMaxConnsHandler(MaxConnsConfig{Enabled: true, Limit: 1}).Handle(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	go func() {
@@ -114,7 +114,7 @@ func (l *suggestingLimiter) AllowContext(context.Context) (bool, error) {
 func (l *suggestingLimiter) RetryAfter() time.Duration { return l.delay }
 
 func TestRateLimitHandlerSetsRetryAfterFromLimiter(t *testing.T) {
-	handlerFn := RateLimitHandler(&suggestingLimiter{delay: 2500 * time.Millisecond})(
+	handlerFn := NewRateLimitHandler(RateLimitConfig{Enabled: true, Limiter: &suggestingLimiter{delay: 2500 * time.Millisecond}}).Handle(
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 	)
 
@@ -136,7 +136,7 @@ func TestRateLimitHandlerSetsRetryAfterFromLimiter(t *testing.T) {
 
 func TestRateLimitHandlerOmitsRetryAfterWithoutHint(t *testing.T) {
 	slowBucket := ratelimit.NewTokenBucket(1, 1)
-	handlerFn := RateLimitHandler(slowBucket)(func(w http.ResponseWriter, _ *http.Request) {})
+	handlerFn := NewRateLimitHandler(RateLimitConfig{Enabled: true, Limiter: slowBucket}).Handle(func(w http.ResponseWriter, _ *http.Request) {})
 
 	handlerFn.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
 	recorder := httptest.NewRecorder()

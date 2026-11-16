@@ -3,12 +3,15 @@ package rest
 import (
 	"encoding/json"
 	stderrors "errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/chihqiang/infra-go/rest/handler"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -193,7 +196,7 @@ func TestNoContent(t *testing.T) {
 
 func TestErrorMapsStatusAndHidesInternalDetails(t *testing.T) {
 	clientRecorder := httptest.NewRecorder()
-	if err := Error(clientRecorder, ErrNotFound); err != nil {
+	if err := Error(clientRecorder, ErrResourceNotFound); err != nil {
 		t.Fatal(err)
 	}
 	if clientRecorder.Code != http.StatusNotFound {
@@ -241,7 +244,7 @@ func TestJSONBaseResponseCtxCarriesRequestID(t *testing.T) {
 	var code int
 
 	request := httptest.NewRequest(http.MethodGet, "/users", nil)
-	handler.RequestIDHandler(func(w http.ResponseWriter, r *http.Request) {
+	handler.NewRequestIDHandler(handler.RequestIDConfig{Enabled: true}).Handle(func(w http.ResponseWriter, r *http.Request) {
 		JSONBaseResponseCtx(r.Context(), w, namedValue{Name: "ada"})
 		body = w.(*httptest.ResponseRecorder).Body.Bytes()
 		code = w.(*httptest.ResponseRecorder).Code
@@ -273,8 +276,8 @@ func TestEnvelopeOmitsRequestIDWithoutMiddleware(t *testing.T) {
 func TestErrorCtxCarriesRequestID(t *testing.T) {
 	var body []byte
 	request := httptest.NewRequest(http.MethodGet, "/users", nil)
-	handler.RequestIDHandler(func(w http.ResponseWriter, r *http.Request) {
-		_ = ErrorCtx(r.Context(), w, ErrNotFound)
+	handler.NewRequestIDHandler(handler.RequestIDConfig{Enabled: true}).Handle(func(w http.ResponseWriter, r *http.Request) {
+		_ = ErrorCtx(r.Context(), w, ErrResourceNotFound)
 		body = w.(*httptest.ResponseRecorder).Body.Bytes()
 	}).ServeHTTP(httptest.NewRecorder(), request)
 
@@ -287,7 +290,7 @@ func TestErrorCtxCarriesRequestID(t *testing.T) {
 func TestXMLBaseResponseCtxCarriesRequestID(t *testing.T) {
 	var body string
 	request := httptest.NewRequest(http.MethodGet, "/users", nil)
-	handler.RequestIDHandler(func(w http.ResponseWriter, r *http.Request) {
+	handler.NewRequestIDHandler(handler.RequestIDConfig{Enabled: true}).Handle(func(w http.ResponseWriter, r *http.Request) {
 		XMLBaseResponseCtx(r.Context(), w, namedValue{Name: "ada"})
 		body = w.(*httptest.ResponseRecorder).Body.String()
 	}).ServeHTTP(httptest.NewRecorder(), request)
@@ -310,4 +313,40 @@ func TestOkHTMLCtxWritesHTML(t *testing.T) {
 	if recorder.Body.String() != "<p>ok</p>" {
 		t.Fatalf("body = %q", recorder.Body.String())
 	}
+}
+
+// TestError_CodeMsg5xxKeepsBusinessMessage is a regression test: 5xx responses
+// replaced every message with http.StatusText, so a business 503 such as a
+// maintenance window lost its code and message.
+func TestError_CodeMsg5xxKeepsBusinessMessage(t *testing.T) {
+	w := httptest.NewRecorder()
+	require.NoError(t, Error(w, NewCodeError(http.StatusServiceUnavailable, "maintenance window")))
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	var body BaseResponse[any]
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, http.StatusServiceUnavailable, body.Code)
+	assert.Equal(t, "maintenance window", body.Msg)
+}
+
+// TestError_Unknown5xxStillHidden keeps internal error details out of the response.
+func TestError_Unknown5xxStillHidden(t *testing.T) {
+	w := httptest.NewRecorder()
+	require.NoError(t, Error(w, stderrors.New("db password leaked here")))
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.NotContains(t, w.Body.String(), "db password")
+	assert.Contains(t, w.Body.String(), http.StatusText(http.StatusInternalServerError))
+}
+
+// TestError_WrappedCodeMsgKeepsBusinessMessage covers fmt.Errorf("%w") wrapping.
+func TestError_WrappedCodeMsgKeepsBusinessMessage(t *testing.T) {
+	w := httptest.NewRecorder()
+	err := fmt.Errorf("load failed: %w", NewCodeError(http.StatusBadGateway, "upstream down"))
+	require.NoError(t, Error(w, err))
+
+	var body BaseResponse[any]
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, http.StatusBadGateway, body.Code)
+	assert.Equal(t, "upstream down", body.Msg)
 }

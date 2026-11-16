@@ -2,123 +2,113 @@ package handler
 
 import (
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/chihqiang/infra-go/core/logger"
-	"github.com/chihqiang/infra-go/rest/chain"
 	"github.com/chihqiang/infra-go/rest/internal/pathmatch"
 	"github.com/chihqiang/infra-go/rest/internal/realip"
 	"github.com/chihqiang/infra-go/rest/internal/response"
 )
 
-// LogOption customizes LogHandler.
-type LogOption func(*logOptions)
-
-type logOptions struct {
-	skipPaths   []string
-	serviceName string
-	clientIP    func(*http.Request) string
+// LogConfig configures LogHandler.
+type LogConfig struct {
+	Enabled        bool     `json:",default=true"`
+	ServiceName    string   `json:",optional"`
+	SkipPaths      []string `json:",optional"`
+	TrustedProxies []string `json:",optional"`
+	// ClientIP overrides how the access-log client IP is resolved.
+	ClientIP func(*http.Request) string `json:"-"`
 }
 
-// WithLogSkipPaths omits matching request paths from the access log. Rules
-// accept exact paths, a trailing "*" prefix and glob wildcards.
-func WithLogSkipPaths(paths ...string) LogOption {
-	return func(opts *logOptions) {
-		opts.skipPaths = append(opts.skipPaths, paths...)
+// LogHandler writes one access-log line per request.
+type LogHandler struct {
+	config    LogConfig
+	log       logger.ILogger
+	skipPaths *pathmatch.Matcher
+	trusted   []netip.Prefix
+}
+
+// NewLogHandler creates a LogHandler. A nil log resolves the global logger on
+// every request, so a later logger replacement still takes effect.
+func NewLogHandler(config LogConfig, log logger.ILogger) (*LogHandler, error) {
+	trusted, err := realip.ParseTrustedProxies(config.TrustedProxies)
+	if err != nil {
+		return nil, err
 	}
+	return &LogHandler{
+		config:    config,
+		log:       log,
+		skipPaths: pathmatch.New(config.SkipPaths),
+		trusted:   trusted,
+	}, nil
 }
 
-// WithLogServiceName adds a service field to every access-log line.
-func WithLogServiceName(name string) LogOption {
-	return func(opts *logOptions) {
-		opts.serviceName = name
+// Handle wraps next with access logging.
+func (h *LogHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
+	if !h.config.Enabled {
+		return next
 	}
-}
 
-// WithLogClientIP overrides how the access-log client IP is resolved. It is
-// useful to only trust forwarding headers from known proxies.
-func WithLogClientIP(fn func(*http.Request) string) LogOption {
-	return func(opts *logOptions) {
-		opts.clientIP = fn
-	}
-}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if h.skipPaths.Match(r.URL.Path) {
+			next(w, r)
+			return
+		}
 
-// LogHandler writes one access-log line per request using the global logger,
-// resolved per request so a later logger replacement still takes effect.
-func LogHandler(opts ...LogOption) chain.Middleware {
-	return logHandler(func() logger.ILogger { return logger.GetGlobal() }, opts...)
-}
-
-// LogHandlerWith writes access logs through the given logger.
-func LogHandlerWith(log logger.ILogger, opts ...LogOption) chain.Middleware {
-	return logHandler(func() logger.ILogger { return log }, opts...)
-}
-
-func logHandler(resolveLogger func() logger.ILogger, opts ...LogOption) chain.Middleware {
-	options := logOptions{}
-	for _, opt := range opts {
-		opt(&options)
-	}
-	skipPaths := pathmatch.New(options.skipPaths)
-
-	return func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			if skipPaths.Match(r.URL.Path) {
-				next(w, r)
-				return
+		start := time.Now()
+		recorder := response.NewStatusWriter(w)
+		completed := false
+		// Log from a defer so a panicking handler still leaves an access-log
+		// line before the stack unwinds to RecoveryHandler (which will answer
+		// with 500).
+		defer func() {
+			status := recorder.Status()
+			if !completed {
+				status = http.StatusInternalServerError
 			}
 
-			start := time.Now()
-			recorder := response.NewStatusWriter(w)
-			completed := false
-			// Log from a defer so a panicking handler still leaves an access-log
-			// line before the stack unwinds to RecoverHandler (which will answer
-			// with 500).
-			defer func() {
-				status := recorder.Status()
-				if !completed {
-					status = http.StatusInternalServerError
-				}
-				log := resolveLogger()
-				fields := []logger.Field{
-					logger.String("method", r.Method),
-					logger.String("path", r.URL.Path),
-					logger.Int("status", status),
-					logger.Duration("duration", time.Since(start)),
-					logger.String("ip", clientIP(r, options)),
-				}
-				if options.serviceName != "" {
-					fields = append(fields, logger.String("service", options.serviceName))
-				}
-				if pattern := PatternFromContext(r.Context()); pattern != "" {
-					fields = append(fields, logger.String("pattern", pattern))
-				}
-				if id, ok := RequestIDFromContext(r.Context()); ok {
-					fields = append(fields, logger.String("request_id", id))
-				}
+			log := h.log
+			if log == nil {
+				log = logger.GetGlobal()
+			}
 
-				message := "http request"
-				switch {
-				case status >= http.StatusInternalServerError:
-					log.ErrorCtx(r.Context(), message, fields...)
-				case status >= http.StatusBadRequest:
-					log.WarnCtx(r.Context(), message, fields...)
-				default:
-					log.InfoCtx(r.Context(), message, fields...)
-				}
-			}()
+			fields := []logger.Field{
+				logger.String("method", r.Method),
+				logger.String("path", r.URL.Path),
+				logger.Int("status", status),
+				logger.Duration("duration", time.Since(start)),
+				logger.String("ip", h.clientIP(r)),
+			}
+			if h.config.ServiceName != "" {
+				fields = append(fields, logger.String("service", h.config.ServiceName))
+			}
+			if pattern := PatternFromContext(r.Context()); pattern != "" {
+				fields = append(fields, logger.String("pattern", pattern))
+			}
+			if id, ok := RequestIDFromContext(r.Context()); ok {
+				fields = append(fields, logger.String("request_id", id))
+			}
 
-			next(recorder, r)
-			completed = true
-		}
+			message := "http request"
+			switch {
+			case status >= http.StatusInternalServerError:
+				log.ErrorCtx(r.Context(), message, fields...)
+			case status >= http.StatusBadRequest:
+				log.WarnCtx(r.Context(), message, fields...)
+			default:
+				log.InfoCtx(r.Context(), message, fields...)
+			}
+		}()
+
+		next(recorder, r)
+		completed = true
 	}
 }
 
-func clientIP(r *http.Request, options logOptions) string {
-	if options.clientIP != nil {
-		return options.clientIP(r)
+func (h *LogHandler) clientIP(r *http.Request) string {
+	if h.config.ClientIP != nil {
+		return h.config.ClientIP(r)
 	}
-	// Default to the direct peer: forwarding headers are only trusted when a
-	// resolver is configured (for example via Config.TrustedProxies).
-	return realip.FromRequestTrusted(r, nil)
+	return realip.FromRequestTrusted(r, h.trusted)
 }

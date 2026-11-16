@@ -2,9 +2,14 @@ package orm
 
 import (
 	"fmt"
+	"net"
 	"os"
+	"strconv"
+	"strings"
 	"sync/atomic"
+	"time"
 
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
@@ -21,6 +26,28 @@ func New(cfg Config) (*gorm.DB, error) {
 	// Use the driver default port when no port is set
 	if c.Port == 0 {
 		c.Port = defaultPort(c.Driver)
+	}
+
+	// In-memory SQLite databases need a dedicated pool configuration; without it
+	// the pool opens extra connections that see a different (empty) database, or
+	// the last idle connection is closed and the whole database disappears.
+	if memory, shared := sqliteMemoryMode(c); memory {
+		if shared {
+			// cache=shared databases survive while at least one connection is open,
+			// so connections must never be recycled or closed for being idle.
+			c.ConnMaxIdleTime = 0
+			c.ConnMaxLifetime = 0
+			if c.MaxIdleConns < 1 {
+				c.MaxIdleConns = 1
+			}
+		} else {
+			// ":memory:" (and mode=memory without cache=shared) is per connection:
+			// a second pooled connection would see an empty database.
+			c.MaxOpenConns = 1
+			c.MaxIdleConns = 1
+			c.ConnMaxIdleTime = 0
+			c.ConnMaxLifetime = 0
+		}
 	}
 
 	dialector, err := buildDialector(c)
@@ -92,8 +119,9 @@ func MustNewPostgres(cfg Config) *gorm.DB {
 
 // NewSQLite creates a SQLite database connection.
 // The Config.Driver field is ignored and the SQLite driver is forced.
-// Config.Database is the database file path; set it to ":memory:" to use an in-memory
-// database.
+// Config.Database is the database file path. Leave it empty for an isolated
+// in-memory database (recommended); ":memory:" also works, but it is scoped to a
+// single connection, so New forces the pool to one connection in that case.
 func NewSQLite(cfg Config) (*gorm.DB, error) {
 	cfg.Driver = DriverSQLite
 	return New(cfg)
@@ -170,10 +198,22 @@ func dialectorFromDSN(driver Driver, dsn string) (gorm.Dialector, error) {
 }
 
 // buildMySQLDSN builds the MySQL connection string.
-// Format: username:password@tcp(host:port)/database?charset=utf8mb4&parseTime=true&loc=Local
+//
+// The DSN is built through the driver's own Config.FormatDSN instead of
+// fmt.Sprintf: characters such as '@', '/', ':' or spaces in a username or
+// password are escaped correctly, while a hand-written string silently produced
+// a broken DSN (the driver splits the address at the last '@').
 func buildMySQLDSN(c Config) string {
-	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&loc=Local",
-		c.Username, c.Password, c.Host, c.Port, c.Database)
+	cfg := mysqldriver.NewConfig()
+	cfg.User = c.Username
+	cfg.Passwd = c.Password
+	cfg.Net = "tcp"
+	cfg.Addr = net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
+	cfg.DBName = c.Database
+	cfg.ParseTime = true
+	cfg.Loc = time.Local
+	cfg.Params = map[string]string{"charset": "utf8mb4"}
+	return cfg.FormatDSN()
 }
 
 // buildPostgresDSN builds the PostgreSQL connection string, in the format
@@ -190,11 +230,50 @@ func buildPostgresDSN(c Config) string {
 		timeZone = "Asia/Shanghai"
 	}
 	return fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=%s TimeZone=%s",
-		c.Host, c.Username, c.Password, c.Database, c.Port, sslMode, timeZone)
+		pgDSNValue(c.Host), pgDSNValue(c.Username), pgDSNValue(c.Password),
+		pgDSNValue(c.Database), c.Port, pgDSNValue(sslMode), pgDSNValue(timeZone))
+}
+
+// pgDSNValue quotes a value for a libpq keyword/value connection string. Values
+// containing spaces, quotes or backslashes have to be single-quoted with the
+// special characters escaped, otherwise a password such as "p a'ss" produces an
+// unparsable DSN.
+func pgDSNValue(value string) string {
+	if value != "" && !strings.ContainsAny(value, ` '\\`) {
+		return value
+	}
+	escaped := strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(value)
+	return "'" + escaped + "'"
 }
 
 // sqliteMemCounter generates a unique sequence number for each in-memory database instance.
 var sqliteMemCounter atomic.Uint64
+
+// sqliteMemoryMode reports whether the configuration describes an in-memory SQLite
+// database, and whether it is shared between connections (cache=shared).
+//
+// An empty Database produces the generated DSN from buildSQLiteDSN, which uses
+// cache=shared. A plain ":memory:" is per connection.
+func sqliteMemoryMode(c Config) (memory, shared bool) {
+	if c.Driver != DriverSQLite {
+		return false, false
+	}
+	dsn := strings.TrimSpace(strings.ToLower(c.DSN))
+	if dsn == "" {
+		dsn = strings.TrimSpace(strings.ToLower(c.Database))
+	}
+	shared = strings.Contains(dsn, "cache=shared")
+	switch {
+	case dsn == "":
+		return true, true
+	case dsn == ":memory:":
+		return true, false
+	case strings.Contains(dsn, "mode=memory"), strings.HasPrefix(dsn, "file::memory:"):
+		return true, shared
+	default:
+		return false, false
+	}
+}
 
 // buildSQLiteDSN builds the SQLite connection string.
 // Config.Database is the file path; when it is empty an in-memory database **exclusive to

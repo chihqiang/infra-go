@@ -884,3 +884,62 @@ func TestBindJSONSniffMapsBodyLimitTo413(t *testing.T) {
 		t.Fatalf("status = %d, want 413", statusOf(t, err))
 	}
 }
+
+// TestFormReadsBodyForDelete is a regression test: ParseForm does not read the
+// body for DELETE/OPTIONS, so the urlencoded body was silently dropped and a
+// same-named query parameter won.
+func TestFormReadsBodyForDelete(t *testing.T) {
+	req := httptest.NewRequest(http.MethodDelete, "/?name=query&limit=5", strings.NewReader("name=body&limit=3"))
+	req.Header.Set("Content-Type", MIMEPOSTForm)
+
+	var payload formPayload
+	if err := Bind(req, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Name != "body" || payload.Limit != 3 {
+		t.Fatalf("payload = %+v, want the body values", payload)
+	}
+}
+
+func TestFormPostReadsBodyForDelete(t *testing.T) {
+	req := httptest.NewRequest(http.MethodDelete, "/?name=query", strings.NewReader("limit=3"))
+	req.Header.Set("Content-Type", MIMEPOSTForm)
+
+	var payload formPayload
+	if err := FormPost.Bind(req, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Name != "" || payload.Limit != 3 {
+		t.Fatalf("payload = %+v", payload)
+	}
+}
+
+// TestFormBodyWithoutContentTypeMergesQuery keeps the no-Content-Type path
+// consistent with the typed form path (query merged, body values win).
+func TestFormBodyWithoutContentTypeMergesQuery(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/?name=query&limit=5", strings.NewReader("name=body&limit=3"))
+
+	var payload formPayload
+	if err := Bind(req, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Name != "body" || payload.Limit != 3 {
+		t.Fatalf("payload = %+v", payload)
+	}
+}
+
+// TestFormManualReadEnforcesBodyLimit verifies that the manual DELETE read is
+// bounded; previously it used io.ReadAll with no cap.
+func TestFormManualReadEnforcesBodyLimit(t *testing.T) {
+	body := "name=" + strings.Repeat("a", maxFormBodySize)
+	req := httptest.NewRequest(http.MethodDelete, "/", strings.NewReader(body))
+	req.Header.Set("Content-Type", MIMEPOSTForm)
+
+	err := Form.Bind(req, &formPayload{})
+	if err == nil {
+		t.Fatal("oversized form body should fail")
+	}
+	if statusOf(t, err) != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", statusOf(t, err))
+	}
+}

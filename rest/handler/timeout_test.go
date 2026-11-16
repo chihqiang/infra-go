@@ -11,7 +11,7 @@ import (
 )
 
 func TestTimeoutPassesThroughCompletedResponse(t *testing.T) {
-	handler := TimeoutHandler(time.Second)(func(w http.ResponseWriter, _ *http.Request) {
+	handler := NewTimeoutHandler(TimeoutConfig{Enabled: true, Timeout: time.Second}).Handle(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("X-Done", "yes")
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte("ok"))
@@ -30,7 +30,7 @@ func TestTimeoutPassesThroughCompletedResponse(t *testing.T) {
 
 func TestTimeoutDiscardsSlowHandlerOutput(t *testing.T) {
 	release := make(chan struct{})
-	handler := TimeoutHandler(10 * time.Millisecond)(func(w http.ResponseWriter, r *http.Request) {
+	handler := NewTimeoutHandler(TimeoutConfig{Enabled: true, Timeout: 10 * time.Millisecond}).Handle(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 		_, _ = w.Write([]byte("too late"))
 		close(release)
@@ -54,7 +54,7 @@ func TestTimeoutDiscardsSlowHandlerOutput(t *testing.T) {
 
 func TestTimeoutCancelsHandlerContext(t *testing.T) {
 	canceled := make(chan error, 1)
-	handler := TimeoutHandler(10 * time.Millisecond)(func(_ http.ResponseWriter, r *http.Request) {
+	handler := NewTimeoutHandler(TimeoutConfig{Enabled: true, Timeout: 10 * time.Millisecond}).Handle(func(_ http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 		canceled <- r.Context().Err()
 	})
@@ -72,7 +72,7 @@ func TestTimeoutCancelsHandlerContext(t *testing.T) {
 }
 
 func TestTimeoutRecoversHandlerPanicOnCallerGoroutine(t *testing.T) {
-	handler := RecoverHandler(TimeoutHandler(time.Second)(func(http.ResponseWriter, *http.Request) {
+	handler := NewRecoveryHandler(RecoveryConfig{Enabled: true}).Handle(NewTimeoutHandler(TimeoutConfig{Enabled: true, Timeout: time.Second}).Handle(func(http.ResponseWriter, *http.Request) {
 		panic("boom")
 	}))
 	recorder := httptest.NewRecorder()
@@ -85,7 +85,7 @@ func TestTimeoutRecoversHandlerPanicOnCallerGoroutine(t *testing.T) {
 }
 
 func TestTimeoutPropagatesHandlerPanic(t *testing.T) {
-	handler := TimeoutHandler(time.Second)(func(http.ResponseWriter, *http.Request) {
+	handler := NewTimeoutHandler(TimeoutConfig{Enabled: true, Timeout: time.Second}).Handle(func(http.ResponseWriter, *http.Request) {
 		panic("boom")
 	})
 
@@ -99,7 +99,7 @@ func TestTimeoutPropagatesHandlerPanic(t *testing.T) {
 
 func TestTimeoutContainsPanicAfterTimeout(t *testing.T) {
 	returned := make(chan struct{})
-	handler := TimeoutHandler(5 * time.Millisecond)(func(_ http.ResponseWriter, r *http.Request) {
+	handler := NewTimeoutHandler(TimeoutConfig{Enabled: true, Timeout: 5 * time.Millisecond}).Handle(func(_ http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 		close(returned)
 		panic("late boom")
@@ -123,7 +123,7 @@ func TestTimeoutContainsPanicAfterTimeout(t *testing.T) {
 
 func TestTimeoutNonPositiveDisablesMiddleware(t *testing.T) {
 	called := false
-	handler := TimeoutHandler(0)(func(http.ResponseWriter, *http.Request) {
+	handler := NewTimeoutHandler(TimeoutConfig{Enabled: true, Timeout: 0}).Handle(func(http.ResponseWriter, *http.Request) {
 		called = true
 	})
 
@@ -131,5 +131,42 @@ func TestTimeoutNonPositiveDisablesMiddleware(t *testing.T) {
 
 	if !called {
 		t.Fatal("handler was not called")
+	}
+}
+
+// TestTimeoutRejectsStreamingUntilDone documents (and locks in) the buffering
+// trade-off: flushing behind the timeout is refused with http.ErrHandlerTimeout
+// and hijacking with http.ErrNotSupported, instead of the opaque
+// "feature not supported" of a writer with no Flush/Hijack method at all.
+func TestTimeoutRejectsStreamingUntilDone(t *testing.T) {
+	var flushErr, hijackErr error
+	handler := NewTimeoutHandler(TimeoutConfig{Enabled: true, Timeout: time.Second}).Handle(
+		func(w http.ResponseWriter, _ *http.Request) {
+			flushErr = http.NewResponseController(w).Flush()
+			_, _, hijackErr = http.NewResponseController(w).Hijack()
+			w.WriteHeader(http.StatusNoContent)
+		})
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if !errors.Is(flushErr, http.ErrHandlerTimeout) {
+		t.Fatalf("flush error = %v, want http.ErrHandlerTimeout", flushErr)
+	}
+	if !errors.Is(hijackErr, http.ErrNotSupported) {
+		t.Fatalf("hijack error = %v, want http.ErrNotSupported", hijackErr)
+	}
+}
+
+// TestTimeoutResponseHasContentType makes the generated 503 a complete response.
+func TestTimeoutResponseHasContentType(t *testing.T) {
+	handler := NewTimeoutHandler(TimeoutConfig{Enabled: true, Timeout: 10 * time.Millisecond}).Handle(
+		func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() })
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if got := recorder.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
+		t.Fatalf("content type = %q", got)
 	}
 }

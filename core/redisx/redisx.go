@@ -14,6 +14,9 @@ import (
 var (
 	// ErrLockNotAcquired means the lock was not acquired (another client holds it).
 	ErrLockNotAcquired = errors.New("redisx: lock not acquired")
+	// ErrLockLost means the lock was lost while it was held (expired and taken over, or
+	// the key was deleted), so the critical section may no longer be protected.
+	ErrLockLost = errors.New("redisx: lock lost while held")
 	// ErrLockOwnershipMismatch means the release failed (the lock does not belong to the
 	// current holder).
 	ErrLockOwnershipMismatch = errors.New("redisx: lock ownership mismatch")
@@ -215,6 +218,28 @@ func (c *Client) Incr(ctx context.Context, key string) (int64, error) {
 // IncrBy increments the value of a key by the given amount.
 func (c *Client) IncrBy(ctx context.Context, key string, value int64) (int64, error) {
 	n, err := c.client.IncrBy(ctx, c.wrapKey(key), value).Result()
+	if err != nil {
+		return 0, wrapErr(err)
+	}
+	return n, nil
+}
+
+// incrWithTTLScript increments a counter atomically and applies ttl only when the
+// key has no expiry yet, so repeated increments do not extend the lifetime.
+var incrWithTTLScript = redis.NewScript(`
+local value = redis.call('incrby', KEYS[1], ARGV[1])
+if tonumber(ARGV[2]) > 0 and redis.call('ttl', KEYS[1]) == -1 then
+    redis.call('pexpire', KEYS[1], ARGV[2])
+end
+return value
+`)
+
+// IncrByWithTTL increments the value of a key by the given amount and, when the key
+// did not have an expiry, applies ttl. The check and the increment are atomic, and
+// the key prefix configured on the client is applied like every other operation.
+func (c *Client) IncrByWithTTL(ctx context.Context, key string, value int64, ttl time.Duration) (int64, error) {
+	n, err := incrWithTTLScript.Run(ctx, c.client, []string{c.wrapKey(key)},
+		value, ttl.Milliseconds()).Int64()
 	if err != nil {
 		return 0, wrapErr(err)
 	}

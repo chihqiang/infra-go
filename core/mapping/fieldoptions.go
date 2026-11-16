@@ -99,6 +99,11 @@ func (o *fieldOptions) isInRange(v float64) bool {
 	if o == nil || o.Range == nil {
 		return true
 	}
+	// NaN compares false against every bound, so without this check it would be
+	// reported as "in range" and bypass the constraint entirely.
+	if math.IsNaN(v) {
+		return false
+	}
 	nr := o.Range
 	if nr.leftInclude && v < nr.left {
 		return false

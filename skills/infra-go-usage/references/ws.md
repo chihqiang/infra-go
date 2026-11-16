@@ -189,7 +189,7 @@ srv := ws.MustNew(ws.Config{}, handler,
 | `WithLogger(l logger.ILogger)` | Set the logger; defaults to `logger.GetGlobal()` |
 | `WithRedisClient(client)` | Set the Redis client (used for Redis rooms) |
 | `WithPubSub(ps)` | Set a custom PubSub implementation (used for cluster broadcast) |
-| `WithCheckOrigin(fn)` | Set the Origin check function; allows every origin by default |
+| `WithCheckOrigin(fn)` | Set the Origin check function; the default is gorilla/websocket's same-origin check (a cross-origin handshake is rejected with 403) |
 | `WithSubprotocols(protocols...)` | Set the subprotocol negotiation list |
 
 ### Server methods
@@ -357,8 +357,8 @@ require a larger value.
 
 | Field | Type | Default | Description |
 | ------ | ------ | -------- | ------ |
-| `PingInterval` | `time.Duration` | `25s` | Heartbeat interval |
-| `PingTimeout` | `time.Duration` | `60s` | Heartbeat timeout |
+| `PingInterval` | `time.Duration` | `25s` | Heartbeat interval; non-positive values fall back to the default |
+| `PingTimeout` | `time.Duration` | `60s` | Heartbeat timeout; non-positive values fall back to the default |
 | `ReadBufferSize` | `int` | `4096` | Read buffer size (bytes) |
 | `WriteBufferSize` | `int` | `4096` | Write buffer size (bytes) |
 | `WriteTimeout` | `time.Duration` | `10s` | Timeout for a single write; set to a negative value to disable |

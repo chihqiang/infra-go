@@ -4,39 +4,47 @@ import (
 	"errors"
 	"io"
 	"net/http"
-
-	"github.com/chihqiang/infra-go/rest/chain"
 )
 
-// MaxBytesHandler limits the amount of request body data that can be read.
-// A nonpositive limit disables the check.
-func MaxBytesHandler(limit int64) chain.Middleware {
-	return func(next http.HandlerFunc) http.HandlerFunc {
-		if limit <= 0 {
-			return next
-		}
+// MaxBytesConfig configures MaxBytesHandler.
+type MaxBytesConfig struct {
+	Enabled bool  `json:",default=true"`
+	Limit   int64 `json:",default=1048576"`
+}
 
-		return func(w http.ResponseWriter, r *http.Request) {
-			if r.ContentLength > limit {
-				markConnectionClose(w)
-				w.WriteHeader(http.StatusRequestEntityTooLarge)
-				return
-			}
-			if r.Body != nil {
-				r.Body = &maxBytesBody{
-					ReadCloser: http.MaxBytesReader(w, r.Body, limit),
-					onLimit:    func() { markConnectionClose(w) },
-				}
-			}
-			next(w, r)
+// MaxBytesHandler limits the amount of request body data that can be read.
+type MaxBytesHandler struct {
+	config MaxBytesConfig
+}
+
+// NewMaxBytesHandler creates a MaxBytesHandler.
+func NewMaxBytesHandler(config MaxBytesConfig) *MaxBytesHandler {
+	return &MaxBytesHandler{config: config}
+}
+
+// Handle wraps next with the request body limit.
+func (h *MaxBytesHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
+	if !h.config.Enabled || h.config.Limit <= 0 {
+		return next
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.ContentLength > h.config.Limit {
+			markConnectionClose(w)
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
 		}
+		if r.Body != nil {
+			r.Body = &maxBytesBody{
+				ReadCloser: http.MaxBytesReader(w, r.Body, h.config.Limit),
+				onLimit:    func() { markConnectionClose(w) },
+			}
+		}
+		next(w, r)
 	}
 }
 
-// maxBytesBody observes the limit error returned by http.MaxBytesReader. The
-// underlying reader calls net/http's unexported requestTooLarge hook only when
-// the ResponseWriter is the server's concrete response; middleware writers hide
-// it, so the header is set here instead.
+// maxBytesBody observes the limit error returned by http.MaxBytesReader.
 type maxBytesBody struct {
 	io.ReadCloser
 	onLimit  func()

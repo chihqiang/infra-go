@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -72,8 +73,8 @@ func TestFillDefault_SamplerZeroViaOption(t *testing.T) {
 }
 
 // TestFillDefault_SamplerZeroWithoutOption pins down a known limitation: writing
-// Config.Sampler = 0 directly is still treated as unset and falls back to the default
-// 1.0, so an explicit 0 requires WithSampler(0).
+// Config.Sampler = 0 directly is still treated as unset and falls back to the
+// default sampling ratio, so an explicit 0 requires WithSampler(0).
 func TestFillDefault_SamplerZeroWithoutOption(t *testing.T) {
 	c := fillDefault(Config{Sampler: 0})
 	assert.InDelta(t, 1.0, c.Sampler, 0.001)
@@ -652,4 +653,113 @@ func readFile(path string) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+func TestEnsureAgentStartsOnlyOnce(t *testing.T) {
+	StopAgent()
+	t.Cleanup(StopAgent)
+
+	if EnsureAgent(Config{Disabled: true}) {
+		t.Fatal("EnsureAgent must not start a disabled agent")
+	}
+	if !EnsureAgent(Config{}) {
+		t.Fatal("EnsureAgent should start an idle agent")
+	}
+	if EnsureAgent(Config{}) {
+		t.Fatal("EnsureAgent should not claim an already-running agent")
+	}
+	if !IsAgentRunning() {
+		t.Fatal("IsAgentRunning should report the started agent")
+	}
+
+	StopAgent()
+	if IsAgentRunning() {
+		t.Fatal("IsAgentRunning should be false after StopAgent")
+	}
+	if !EnsureAgent(Config{}) {
+		t.Fatal("EnsureAgent should start again after StopAgent")
+	}
+}
+
+// TestTracerFromContext_RemoteSpanContext is a regression test: a span restored
+// from the traceparent header is a non-recording remote span whose TracerProvider
+// is noop. Starting a child span from it used to produce a non-recording span, so
+// the server-side trace silently disappeared.
+func TestTracerFromContext_RemoteSpanContext(t *testing.T) {
+	resetOnce()
+	defer func() {
+		StopAgent()
+		resetOnce()
+	}()
+
+	StartAgent(Config{Name: "remote-parent-test", Sampler: 1.0})
+
+	header := http.Header{}
+	header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+	ctx, spanContext := ExtractHeader(context.Background(), header)
+	require.True(t, spanContext.IsValid())
+
+	_, span := StartSpan(ctx, "child")
+	defer span.End()
+	assert.True(t, span.IsRecording(), "a child of an extracted remote span must be recorded")
+}
+
+// markerPropagator is a custom propagator used to prove StartAgent does not
+// clobber an application-provided global propagator.
+type markerPropagator struct{}
+
+func (markerPropagator) Inject(context.Context, propagation.TextMapCarrier) {}
+func (markerPropagator) Extract(ctx context.Context, _ propagation.TextMapCarrier) context.Context {
+	return ctx
+}
+func (markerPropagator) Fields() []string { return []string{"x-marker"} }
+
+// TestActivePropagator_Default verifies the package falls back to W3C when neither
+// WithPropagator nor the application configured a propagator.
+func TestActivePropagator_Default(t *testing.T) {
+	resetOnce()
+	setCustomPropagator(nil)
+
+	assert.Contains(t, activePropagator().Fields(), "traceparent")
+}
+
+// TestActivePropagator_WithPropagator verifies WithPropagator wins and does not
+// modify the global OpenTelemetry propagator.
+func TestActivePropagator_WithPropagator(t *testing.T) {
+	resetOnce()
+	defer resetOnce()
+
+	globalBefore := otel.GetTextMapPropagator()
+
+	StartAgent(Config{Name: "propagator-option", Sampler: 1.0}, WithPropagator(markerPropagator{}))
+	assert.Equal(t, []string{"x-marker"}, activePropagator().Fields())
+	assert.Equal(t, globalBefore, otel.GetTextMapPropagator(),
+		"the library must not replace the application's global propagator")
+}
+
+// TestStartAgent_DoesNotTouchGlobalPropagator is the regression test for the old
+// init()-time override: merely importing/starting the package must leave the global
+// propagator alone.
+func TestStartAgent_DoesNotTouchGlobalPropagator(t *testing.T) {
+	resetOnce()
+	setCustomPropagator(nil)
+
+	globalBefore := otel.GetTextMapPropagator()
+	StartAgent(Config{Name: "no-global-change", Sampler: 1.0})
+	defer resetOnce()
+
+	assert.Equal(t, globalBefore, otel.GetTextMapPropagator())
+}
+
+// TestStopAgent_ResetsGlobalProvider verifies spans after StopAgent go to the noop
+// provider instead of a shut-down provider that can never export them.
+func TestStopAgent_ResetsGlobalProvider(t *testing.T) {
+	resetOnce()
+
+	StartAgent(Config{Name: "stop-test", Sampler: 1.0})
+	StopAgent()
+
+	_, span := otel.Tracer(TraceName).Start(context.Background(), "after-stop")
+	defer span.End()
+	assert.False(t, span.IsRecording(), "spans after StopAgent must not be recorded by a shut-down provider")
 }

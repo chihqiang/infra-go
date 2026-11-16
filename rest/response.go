@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -97,7 +98,9 @@ func NoContent(w http.ResponseWriter) {
 
 // Error writes err as a BaseResponse envelope. The HTTP status comes from
 // StatusOf, while Code stays a business code (-1 for generic errors or the
-// CodeMsg code). Internal failure details are hidden from the response.
+// CodeMsg code). For 5xx responses, details of unknown internal errors are
+// hidden; a CodeMsg keeps its code and message because the caller chose them to
+// be user visible (for example a maintenance-window 503).
 func Error(w http.ResponseWriter, err error) error {
 	return ErrorCtx(context.Background(), w, err)
 }
@@ -107,10 +110,29 @@ func Error(w http.ResponseWriter, err error) error {
 func ErrorCtx(ctx context.Context, w http.ResponseWriter, err error) error {
 	status := StatusOf(err)
 	if status >= http.StatusInternalServerError {
+		if codeMsg := asCodeMsg(err); codeMsg != nil {
+			// An expected business failure (a maintenance window, an upstream 502).
+			// It is not an internal error: log it without a stack trace so it does not
+			// pollute the error log.
+			logger.WarnCtx(ctx, "rest: business error response",
+				logger.Int("status", status), logger.Err(err))
+			return WriteJSON(w, status, WrapBaseResponseCtx(ctx, codeMsg))
+		}
 		logger.ErrorCtx(ctx, "rest: request failed", logger.Err(err))
 		return WriteJSON(w, status, WrapBaseResponseCtx(ctx, fmt.Errorf("%s", http.StatusText(status))))
 	}
 	return WriteJSON(w, status, WrapBaseResponseCtx(ctx, err))
+}
+
+// asCodeMsg reports the business error carried by err, including wrapped ones.
+// CodeMsg is the only error type whose message is safe to expose on a 5xx
+// response; arbitrary errors may contain internal details.
+func asCodeMsg(err error) *CodeMsg {
+	var codeMsg *CodeMsg
+	if errors.As(err, &codeMsg) {
+		return codeMsg
+	}
+	return nil
 }
 
 // WrapBaseResponseCtx is WrapBaseResponse with the request ID taken from ctx.

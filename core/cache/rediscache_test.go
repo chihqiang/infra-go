@@ -386,3 +386,51 @@ func TestRedisExpireImmediate(t *testing.T) {
 	_, err := c.Get(ctx, "k")
 	assert.ErrorIs(t, err, ErrNotFound)
 }
+
+// TestRedisTakeNilNotCached is a regression test: Take used to cache the
+// (nil, nil) result as JSON null with the default expiry, so every later call was
+// a hit and data written afterwards stayed invisible for up to 7 days.
+func TestRedisTakeNilNotCached(t *testing.T) {
+	ctx := context.Background()
+	c := newTestRedisCache(t)
+
+	var calls int32
+	fetch := func() (any, error) {
+		atomic.AddInt32(&calls, 1)
+		return nil, nil
+	}
+
+	v, err := c.Take(ctx, "nil-key", fetch)
+	require.NoError(t, err)
+	assert.Nil(t, v)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls))
+
+	// Nothing must have been written, so the next Take goes back to fetch.
+	v, err = c.Take(ctx, "nil-key", fetch)
+	require.NoError(t, err)
+	assert.Nil(t, v)
+	assert.Equal(t, int32(2), atomic.LoadInt32(&calls), "a nil result must not be cached")
+}
+
+// TestRedisIncrementAppliesDefaultTTL keeps Increment consistent with MemCache:
+// counters created through the unified Cache interface must expire with the default
+// TTL instead of living forever in Redis.
+func TestRedisIncrementAppliesDefaultTTL(t *testing.T) {
+	ctx := context.Background()
+	rds, _ := newMiniRedis(t)
+	c := NewRedisCache(rds, WithExpire(time.Minute))
+
+	require.NoError(t, c.Increment(ctx, "counter", 1))
+	ttl, err := rds.TTL(ctx, "counter")
+	require.NoError(t, err)
+	assert.Positive(t, ttl)
+	assert.LessOrEqual(t, ttl, time.Minute)
+
+	// A second increment must not extend the expiry (the script only sets it when the
+	// key has no TTL).
+	require.NoError(t, c.Increment(ctx, "counter", 1))
+	ttl2, err := rds.TTL(ctx, "counter")
+	require.NoError(t, err)
+	assert.Positive(t, ttl2)
+	assert.LessOrEqual(t, ttl2, time.Minute)
+}

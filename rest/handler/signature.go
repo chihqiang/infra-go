@@ -3,14 +3,13 @@ package handler
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/chihqiang/infra-go/core/hash"
-	"github.com/chihqiang/infra-go/rest/chain"
 )
 
 const (
@@ -22,58 +21,83 @@ const (
 
 // SignatureConfig configures SignatureHandler.
 type SignatureConfig struct {
+	Enabled bool `json:",optional"`
 	// Keys holds the accepted HMAC keys; several keys allow key rotation.
-	Keys [][]byte
-	// TTL bounds the accepted clock skew of the signed timestamp. Zero disables
-	// the freshness check.
-	TTL time.Duration
+	Keys [][]byte `json:",optional"`
+	// TTL bounds the accepted clock skew of the signed timestamp.
+	// Zero uses the secure default (5 minutes); a negative value explicitly
+	// disables the freshness check (not recommended: captured requests can be
+	// replayed forever).
+	TTL time.Duration `json:",optional"`
 	// MaxBody caps the body size read for verification. Zero means unlimited;
-	// keep MaxBytesHandler in front of this handler to bound memory use.
-	MaxBody int64
+	// keep a MaxBytesHandler in front of this handler to bound memory use.
+	MaxBody int64 `json:",optional"`
 	// Now overrides the clock, mainly for tests.
-	Now func() time.Time
+	Now func() time.Time `json:"-"`
 }
 
-// SignatureHandler rejects requests whose body is not signed with one of the
-// configured HMAC keys.
-func SignatureHandler(cfg SignatureConfig) chain.Middleware {
-	if len(cfg.Keys) == 0 {
+// SignatureHandler rejects requests whose body is not HMAC signed.
+type SignatureHandler struct {
+	config SignatureConfig
+}
+
+// defaultSignatureTTL is the freshness window applied when TTL is zero, so
+// enabling the middleware never silently disables replay protection.
+const defaultSignatureTTL = 5 * time.Minute
+
+// NewSignatureHandler creates a SignatureHandler. It panics when enabled without
+// any keys, since no request could ever be verified. A zero TTL is replaced by the
+// secure default (5 minutes); use a negative TTL to disable the check explicitly.
+func NewSignatureHandler(config SignatureConfig) *SignatureHandler {
+	if config.Enabled && len(config.Keys) == 0 {
 		panic("handler: SignatureHandler requires at least one key")
 	}
+	if config.TTL == 0 {
+		config.TTL = defaultSignatureTTL
+	}
+	return &SignatureHandler{config: config}
+}
 
-	return func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			// Validate the timestamp before reading the body: a stale or missing
-			// timestamp must not cost a full body read.
-			timestamp, err := signedTimestamp(r, cfg)
-			if err != nil {
-				w.WriteHeader(http.StatusUnauthorized)
-				return
-			}
+// Handle wraps next with signature verification.
+func (h *SignatureHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
+	if !h.config.Enabled {
+		return next
+	}
 
-			body, err := readSignedBody(r, cfg.MaxBody)
-			if err != nil {
-				var maxBytesErr *http.MaxBytesError
-				if errors.Is(err, errBodyTooLarge) || errors.As(err, &maxBytesErr) {
-					w.WriteHeader(http.StatusRequestEntityTooLarge)
-					return
-				}
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			r.Body = io.NopCloser(bytes.NewReader(body))
-
-			payload := fmt.Sprintf("%d.%s", timestamp, body)
-			signature := r.Header.Get(HeaderSignature)
-			for _, key := range cfg.Keys {
-				if hash.HMACVerify(key, payload, signature) {
-					next(w, r)
-					return
-				}
-			}
-
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Validate the timestamp before reading the body: a stale or missing
+		// timestamp must not cost a full body read.
+		timestamp, err := signedTimestamp(r, h.config)
+		if err != nil {
 			w.WriteHeader(http.StatusUnauthorized)
+			return
 		}
+
+		body, err := readSignedBody(r, h.config.MaxBody)
+		if err != nil {
+			var maxBytesErr *http.MaxBytesError
+			if errors.Is(err, errBodyTooLarge) || errors.As(err, &maxBytesErr) {
+				w.WriteHeader(http.StatusRequestEntityTooLarge)
+				return
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+
+		// The signature covers the request target as well as the body, so a captured
+		// signature cannot be replayed against another endpoint that accepts the same
+		// payload.
+		payload := signaturePayload(r.Method, signaturePath(r), r.URL.RawQuery, timestamp, body)
+		signature := r.Header.Get(HeaderSignature)
+		for _, key := range h.config.Keys {
+			if hash.HMACVerify(key, payload, signature) {
+				next(w, r)
+				return
+			}
+		}
+
+		w.WriteHeader(http.StatusUnauthorized)
 	}
 }
 
@@ -84,9 +108,52 @@ var (
 	errStaleTimestamp   = errors.New("signature timestamp expired")
 )
 
-// Sign returns the signature value a client must send for body.
-func Sign(key []byte, timestamp int64, body []byte) string {
-	return hash.HMACSign(key, fmt.Sprintf("%d.%s", timestamp, body))
+// Sign returns the signature value a client must send for a request.
+//
+// method, path and query must match what the server sees: path is the escaped URL
+// path (r.URL.EscapedPath()) and query is the raw query string (r.URL.RawQuery).
+// SignRequest is the convenience wrapper for an *http.Request.
+func Sign(key []byte, timestamp int64, method, path, query string, body []byte) string {
+	return hash.HMACSign(key, signaturePayload(method, path, query, timestamp, body))
+}
+
+// SignRequest signs an *http.Request using its method, escaped path and raw query.
+func SignRequest(key []byte, timestamp int64, r *http.Request, body []byte) string {
+	if r == nil || r.URL == nil {
+		return Sign(key, timestamp, http.MethodGet, "/", "", body)
+	}
+	return Sign(key, timestamp, r.Method, signaturePath(r), r.URL.RawQuery, body)
+}
+
+// signaturePayload builds the canonical string covered by the HMAC:
+//
+//	METHOD \n escaped-path \n raw-query \n timestamp \n body
+//
+// The method/path/query prefix binds a signature to one endpoint; the body is
+// last so it may contain arbitrary bytes.
+func signaturePayload(method, path, query string, timestamp int64, body []byte) string {
+	var buf bytes.Buffer
+	buf.WriteString(strings.ToUpper(method))
+	buf.WriteByte('\n')
+	buf.WriteString(path)
+	buf.WriteByte('\n')
+	buf.WriteString(query)
+	buf.WriteByte('\n')
+	buf.WriteString(strconv.FormatInt(timestamp, 10))
+	buf.WriteByte('\n')
+	buf.Write(body)
+	return buf.String()
+}
+
+// signaturePath returns the escaped path the server signed, defaulting to "/".
+func signaturePath(r *http.Request) string {
+	if r == nil || r.URL == nil {
+		return "/"
+	}
+	if path := r.URL.EscapedPath(); path != "" {
+		return path
+	}
+	return "/"
 }
 
 func readSignedBody(r *http.Request, maxBody int64) ([]byte, error) {

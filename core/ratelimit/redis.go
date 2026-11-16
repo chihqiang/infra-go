@@ -62,6 +62,13 @@ type RedisTokenBucket struct {
 // client is the Redis client and key is the rate limit key (it should be globally unique).
 // rate is the number of tokens generated per second and burst is the bucket capacity.
 func NewRedisTokenBucket(client RedisClient, key string, rate, burst float64) *RedisTokenBucket {
+	// Keep the in-memory and Redis backends consistent for invalid configuration.
+	if rate < 0 {
+		rate = 0
+	}
+	if burst < 0 {
+		burst = 0
+	}
 	return &RedisTokenBucket{
 		client: client,
 		key:    key,
@@ -95,9 +102,14 @@ end
 
 -- Persist the state
 redis.call('hmset', key, 'tokens', tokens, 'last_update', now)
--- Expire the key after the time needed to refill the bucket, plus 1 second
-local ttl = math.ceil(burst / rate) + 1
-redis.call('expire', key, ttl)
+-- Expire the key after the time needed to refill the bucket, plus 1 second.
+-- rate=0 means "no refill": burst/rate is infinite, and passing inf to EXPIRE made
+-- the script fail after the state had already been written (a key without a TTL
+-- and an error on every request). Skip the expiry in that case.
+if rate > 0 then
+    local ttl = math.ceil(burst / rate) + 1
+    redis.call('expire', key, ttl)
+end
 
 return allowed
 `)
@@ -152,6 +164,12 @@ type RedisSlidingWindow struct {
 // client is the Redis client and key is the rate limit key (it should be globally unique).
 // limit is the maximum number of requests within the window and window is the window size.
 func NewRedisSlidingWindow(client RedisClient, key string, limit int, window time.Duration) *RedisSlidingWindow {
+	if limit < 0 {
+		limit = 0
+	}
+	if window < 0 {
+		window = 0
+	}
 	return &RedisSlidingWindow{
 		client: client,
 		key:    key,

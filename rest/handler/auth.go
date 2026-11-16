@@ -8,13 +8,12 @@ import (
 	"github.com/chihqiang/infra-go/rest/token"
 )
 
-// AuthorizationHeader is the request header that carries the bearer token.
-const AuthorizationHeader = "Authorization"
-
 const (
-	bearerPrefix = "bearer "
-	bearerScheme = "bearer"
-	// authRealm names the protection space in the WWW-Authenticate challenge.
+	// AuthorizationHeader is the request header that carries the bearer token.
+	AuthorizationHeader = "Authorization"
+	bearerPrefix        = "bearer "
+	bearerScheme        = "bearer"
+	// authRealm names the default protection space in the WWW-Authenticate challenge.
 	authRealm = "api"
 )
 
@@ -22,8 +21,8 @@ var (
 	// ErrMalformedAuthorization reports a syntactically invalid bearer
 	// Authorization header.
 	ErrMalformedAuthorization = errors.New("handler: malformed authorization header")
-	// ErrAuthUnavailable reports that Authorize was constructed without a parser,
-	// which is a server configuration error rather than a client failure.
+	// ErrAuthUnavailable reports that AuthHandler was constructed without a
+	// parser, which is a server configuration error rather than a client failure.
 	ErrAuthUnavailable = errors.New("handler: token parser is not configured")
 )
 
@@ -34,49 +33,53 @@ var (
 // challenge.
 type UnauthorizedCallback func(w http.ResponseWriter, r *http.Request, err error)
 
-// AuthorizeOption customizes Authorize.
-type AuthorizeOption func(*authorizeOptions)
-
-type authorizeOptions struct {
-	callback UnauthorizedCallback
+// AuthConfig configures AuthHandler.
+type AuthConfig struct {
+	Enabled bool `json:",optional"`
+	// Parser verifies bearer tokens; it is required when Enabled is true.
+	Parser *token.Parser `json:"-"`
+	// Realm is the WWW-Authenticate realm; it defaults to "api".
+	Realm string `json:",optional"`
+	// Callback optionally customises the rejection response.
+	Callback UnauthorizedCallback `json:"-"`
 }
 
-// WithUnauthorizedCallback installs a custom rejection handler.
-func WithUnauthorizedCallback(callback UnauthorizedCallback) AuthorizeOption {
-	return func(opts *authorizeOptions) {
-		opts.callback = callback
-	}
+// AuthHandler rejects requests without a valid bearer token.
+type AuthHandler struct {
+	config AuthConfig
 }
 
-// Authorize rejects requests without a valid bearer token and stores the
-// verified claims in the request context.
-func Authorize(parser *token.Parser, opts ...AuthorizeOption) func(http.HandlerFunc) http.HandlerFunc {
-	var options authorizeOptions
-	for _, opt := range opts {
-		opt(&options)
+// NewAuthHandler creates an AuthHandler.
+func NewAuthHandler(config AuthConfig) *AuthHandler {
+	return &AuthHandler{config: config}
+}
+
+// Handle wraps next with bearer-token authorization and stores verified claims
+// in the request context.
+func (h *AuthHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
+	if !h.config.Enabled {
+		return next
 	}
 
-	return func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			if parser == nil {
-				reject(w, r, ErrAuthUnavailable, options.callback)
-				return
-			}
-
-			value, err := bearerToken(r)
-			if err != nil {
-				reject(w, r, err, options.callback)
-				return
-			}
-
-			claims, err := parser.Parse(value)
-			if err != nil {
-				reject(w, r, err, options.callback)
-				return
-			}
-
-			next(w, r.WithContext(token.WithClaims(r.Context(), claims)))
+	return func(w http.ResponseWriter, r *http.Request) {
+		if h.config.Parser == nil {
+			h.reject(w, r, ErrAuthUnavailable)
+			return
 		}
+
+		value, err := bearerToken(r)
+		if err != nil {
+			h.reject(w, r, err)
+			return
+		}
+
+		claims, err := h.config.Parser.Parse(value)
+		if err != nil {
+			h.reject(w, r, err)
+			return
+		}
+
+		next(w, r.WithContext(token.WithClaims(r.Context(), claims)))
 	}
 }
 
@@ -108,7 +111,7 @@ func bearerToken(r *http.Request) (string, error) {
 	return value, nil
 }
 
-func reject(w http.ResponseWriter, r *http.Request, err error, callback UnauthorizedCallback) {
+func (h *AuthHandler) reject(w http.ResponseWriter, r *http.Request, err error) {
 	status := http.StatusUnauthorized
 	errorCode, description := "", ""
 
@@ -126,17 +129,37 @@ func reject(w http.ResponseWriter, r *http.Request, err error, callback Unauthor
 	}
 
 	if status != http.StatusInternalServerError {
-		setBearerChallenge(w, errorCode, description)
+		setBearerChallenge(w, h.realm(), errorCode, description)
 	}
 
-	if callback != nil {
+	if h.config.Callback != nil {
 		writer := &unauthorizedWriter{ResponseWriter: w, status: status}
-		callback(writer, r, err)
+		h.config.Callback(writer, r, err)
 		// The callback may set its own status; otherwise apply the default.
 		writer.WriteHeader(status)
 		return
 	}
 	w.WriteHeader(status)
+}
+
+func (h *AuthHandler) realm() string {
+	if h.config.Realm != "" {
+		return h.config.Realm
+	}
+	return authRealm
+}
+
+// setBearerChallenge writes the RFC 6750 challenge. code and description are
+// fixed literals here, so no quoted-string escaping is required.
+func setBearerChallenge(w http.ResponseWriter, realm, code, description string) {
+	challenge := `Bearer realm="` + realm + `"`
+	if code != "" {
+		challenge += `, error="` + code + `"`
+	}
+	if description != "" {
+		challenge += `, error_description="` + description + `"`
+	}
+	w.Header().Set("WWW-Authenticate", challenge)
 }
 
 // unauthorizedWriter applies the default unauthorized status once, even when
@@ -165,17 +188,4 @@ func (w *unauthorizedWriter) Write(p []byte) (int, error) {
 // Unwrap exposes the underlying writer to http.ResponseController.
 func (w *unauthorizedWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
-}
-
-// setBearerChallenge writes the RFC 6750 challenge. code and description are
-// fixed literals here, so no quoted-string escaping is required.
-func setBearerChallenge(w http.ResponseWriter, code, description string) {
-	challenge := `Bearer realm="` + authRealm + `"`
-	if code != "" {
-		challenge += `, error="` + code + `"`
-	}
-	if description != "" {
-		challenge += `, error_description="` + description + `"`
-	}
-	w.Header().Set("WWW-Authenticate", challenge)
 }

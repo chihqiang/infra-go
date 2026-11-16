@@ -7,8 +7,27 @@ import (
 	"github.com/chihqiang/infra-go/core/logger"
 )
 
-// RecoveryHandler recovers panics from the next handler and returns HTTP 500.
-func RecoverHandler(next http.HandlerFunc) http.HandlerFunc {
+// RecoveryConfig configures RecoveryHandler.
+type RecoveryConfig struct {
+	Enabled bool `json:",default=true"`
+}
+
+// RecoveryHandler recovers panics from the next handler and writes HTTP 500.
+type RecoveryHandler struct {
+	config RecoveryConfig
+}
+
+// NewRecoveryHandler creates a RecoveryHandler.
+func NewRecoveryHandler(config RecoveryConfig) *RecoveryHandler {
+	return &RecoveryHandler{config: config}
+}
+
+// Handle wraps next with panic recovery.
+func (h *RecoveryHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
+	if !h.config.Enabled {
+		return next
+	}
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if recovered := recover(); recovered != nil {

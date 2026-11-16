@@ -6,17 +6,24 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/chihqiang/infra-go/core/breaker"
+	"github.com/chihqiang/infra-go/core/logger"
+	"github.com/chihqiang/infra-go/core/ratelimit"
+	"github.com/chihqiang/infra-go/core/service"
+	"github.com/chihqiang/infra-go/core/trace"
 	resthandler "github.com/chihqiang/infra-go/rest/handler"
+	"github.com/chihqiang/infra-go/rest/token"
 )
 
 func TestServerServeAndStop(t *testing.T) {
@@ -162,7 +169,7 @@ func TestServerUseIsSafeDuringRequests(t *testing.T) {
 }
 
 func TestServerRecoveryMiddlewareFromConfig(t *testing.T) {
-	server, err := NewServer(Config{Middlewares: MiddlewaresConf{Recovery: true}})
+	server, err := NewServer(Config{Middlewares: MiddlewaresConf{Recovery: resthandler.RecoveryConfig{Enabled: true}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +207,7 @@ func TestServerUseAppliesMiddleware(t *testing.T) {
 }
 
 func TestServerRequestIDMiddlewareFromConfig(t *testing.T) {
-	server, err := NewServer(Config{Middlewares: MiddlewaresConf{RequestID: true}})
+	server, err := NewServer(Config{Middlewares: MiddlewaresConf{RequestID: resthandler.RequestIDConfig{Enabled: true}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,8 +232,10 @@ func TestServerRequestIDMiddlewareFromConfig(t *testing.T) {
 
 func TestServerMaxBodyBytesFromConfig(t *testing.T) {
 	server, err := NewServer(Config{
-		MaxBodyBytes: 4,
-		Middlewares:  MiddlewaresConf{RequestID: true},
+		Middlewares: MiddlewaresConf{
+			RequestID: resthandler.RequestIDConfig{Enabled: true},
+			MaxBytes:  resthandler.MaxBytesConfig{Enabled: true, Limit: 4},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -252,7 +261,7 @@ func TestServerMaxBodyBytesFromConfig(t *testing.T) {
 }
 
 func TestServerMaxBodyBytesChunkedRequest(t *testing.T) {
-	server, err := NewServer(Config{MaxBodyBytes: 16, Middlewares: MiddlewaresConf{}})
+	server, err := NewServer(Config{Middlewares: MiddlewaresConf{MaxBytes: resthandler.MaxBytesConfig{Enabled: true, Limit: 16}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,8 +292,10 @@ func TestServerMaxBodyBytesChunkedRequest(t *testing.T) {
 
 func TestServerMaxBodyBytesAppliesAfterGunzip(t *testing.T) {
 	server, err := NewServer(Config{
-		MaxBodyBytes: 2048,
-		Middlewares:  MiddlewaresConf{Gunzip: true},
+		Middlewares: MiddlewaresConf{
+			Gunzip:   resthandler.GunzipConfig{Enabled: true},
+			MaxBytes: resthandler.MaxBytesConfig{Enabled: true, Limit: 2048},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -326,7 +337,7 @@ func TestServerMaxBodyBytesAppliesAfterGunzip(t *testing.T) {
 }
 
 func TestServerTimeoutFromConfig(t *testing.T) {
-	server, err := NewServer(Config{Middlewares: MiddlewaresConf{Timeout: 10 * time.Millisecond}})
+	server, err := NewServer(Config{Middlewares: MiddlewaresConf{Timeout: resthandler.TimeoutConfig{Enabled: true, Timeout: 10 * time.Millisecond}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +354,7 @@ func TestServerTimeoutFromConfig(t *testing.T) {
 }
 
 func TestServerGunzipFromConfig(t *testing.T) {
-	server, err := NewServer(Config{Middlewares: MiddlewaresConf{Gunzip: true}})
+	server, err := NewServer(Config{Middlewares: MiddlewaresConf{Gunzip: resthandler.GunzipConfig{Enabled: true}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -577,7 +588,7 @@ func (b *recordingBreaker) DoWithFallbackAcceptableCtx(
 func TestWithBreakerCountsTimeoutResponses(t *testing.T) {
 	br := &recordingBreaker{promise: &recordingPromise{}}
 	server, err := NewServer(Config{
-		Middlewares: MiddlewaresConf{Timeout: 5 * time.Millisecond},
+		Middlewares: MiddlewaresConf{Timeout: resthandler.TimeoutConfig{Enabled: true, Timeout: 5 * time.Millisecond}},
 	}, WithBreaker(br))
 	if err != nil {
 		t.Fatal(err)
@@ -635,5 +646,260 @@ func TestNewServerLeavesPartialConfigLiteral(t *testing.T) {
 	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/missing", nil))
 	if got := recorder.Header().Get(resthandler.RequestIDHeader); got != "" {
 		t.Fatalf("request ID header = %q, want no default middleware", got)
+	}
+}
+
+func TestServerAuthMiddlewareFromConfig(t *testing.T) {
+	parser, err := token.NewParser(token.Config{Secret: "a-sufficiently-long-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, err := parser.Generate("user-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server, err := NewServer(Config{Middlewares: MiddlewaresConf{
+		Auth: resthandler.AuthConfig{Enabled: true, Parser: parser},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.HandleFunc(http.MethodGet, "/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d, want 401", recorder.Code)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set(resthandler.AuthorizationHeader, "Bearer "+signed)
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("authenticated status = %d, want 204", recorder.Code)
+	}
+}
+
+func TestServerRateLimitFromConfig(t *testing.T) {
+	server, err := NewServer(Config{Middlewares: MiddlewaresConf{
+		RateLimit: resthandler.RateLimitConfig{
+			Enabled: true,
+			Limiter: ratelimit.NewTokenBucket(1, 1),
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.HandleFunc(http.MethodGet, "/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	first := httptest.NewRecorder()
+	server.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/", nil))
+	if first.Code != http.StatusNoContent {
+		t.Fatalf("first status = %d, want 204", first.Code)
+	}
+
+	second := httptest.NewRecorder()
+	server.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/", nil))
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, want 429", second.Code)
+	}
+}
+
+func TestServerSignatureFromConfig(t *testing.T) {
+	key := []byte("signing-key")
+	body := []byte(`{"amount":10}`)
+	server, err := NewServer(Config{Middlewares: MiddlewaresConf{
+		Signature: resthandler.SignatureConfig{Enabled: true, Keys: [][]byte{key}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.HandleFunc(http.MethodPost, "/pay", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	request := httptest.NewRequest(http.MethodPost, "/pay", bytes.NewReader(body))
+	timestamp := time.Now().Unix()
+	request.Header.Set(resthandler.HeaderTimestamp, fmt.Sprint(timestamp))
+	request.Header.Set(resthandler.HeaderSignature, resthandler.SignRequest(key, timestamp, request, body))
+
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", recorder.Code)
+	}
+}
+
+func TestServerBreakerFromConfig(t *testing.T) {
+	promise := &recordingPromise{}
+	server, err := NewServer(Config{Middlewares: MiddlewaresConf{
+		Breaker: resthandler.BreakerConfig{
+			Enabled: true,
+			Breaker: &recordingBreaker{promise: promise},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.HandleFunc(http.MethodGet, "/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", recorder.Code)
+	}
+	if !promise.accepted {
+		t.Fatal("configured breaker did not accept a successful response")
+	}
+}
+
+func TestServerRegisterAddsTraceAgentToServiceGroup(t *testing.T) {
+	trace.StopAgent()
+	t.Cleanup(trace.StopAgent)
+
+	server, err := NewServer(Config{
+		Host: "127.0.0.1",
+		Port: 0,
+		Middlewares: MiddlewaresConf{
+			Trace: resthandler.TraceConfig{
+				Enabled: true,
+				Agent: trace.Config{
+					Name:     "test-service",
+					Batcher:  trace.BatcherFile,
+					Endpoint: filepath.Join(t.TempDir(), "traces.json"),
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	group := service.NewServiceGroup()
+	server.Register(group)
+
+	done := make(chan struct{})
+	go func() {
+		group.Start()
+		close(done)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for !trace.IsAgentRunning() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !trace.IsAgentRunning() {
+		t.Fatal("ServiceGroup did not start the trace agent")
+	}
+
+	group.Stop()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ServiceGroup did not stop")
+	}
+	if trace.IsAgentRunning() {
+		t.Fatal("ServiceGroup did not stop the trace agent it started")
+	}
+}
+
+type lifecycleService struct {
+	started chan struct{}
+	stopped chan struct{}
+}
+
+func newLifecycleService() *lifecycleService {
+	return &lifecycleService{started: make(chan struct{}), stopped: make(chan struct{})}
+}
+
+func (s *lifecycleService) Start() { close(s.started) }
+func (s *lifecycleService) Stop()  { close(s.stopped) }
+
+func TestServerAddServiceIsRegisteredWithGroup(t *testing.T) {
+	server, err := NewServer(Config{Host: "127.0.0.1", Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra := newLifecycleService()
+	server.AddService(extra)
+	server.AddService(nil) // no-op
+
+	group := service.NewServiceGroup()
+	server.Register(group)
+
+	done := make(chan struct{})
+	go func() {
+		group.Start()
+		close(done)
+	}()
+
+	select {
+	case <-extra.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("registered auxiliary service was not started")
+	}
+
+	group.Stop()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ServiceGroup did not stop")
+	}
+	select {
+	case <-extra.stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("registered auxiliary service was not stopped")
+	}
+}
+
+func TestNewServerConfiguresGlobalLogger(t *testing.T) {
+	previous := logger.GetGlobal()
+	t.Cleanup(func() { logger.SetGlobal(previous) })
+
+	server, err := NewServer(Config{Logger: logger.Config{
+		ServiceName: "rest-test",
+		Mode:        "console",
+		Encoding:    "json",
+		Level:       "info",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := logger.GetGlobal()
+	if got == previous {
+		t.Fatal("NewServer did not replace the global logger")
+	}
+	if err := server.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if logger.GetGlobal() != got {
+		t.Fatal("Shutdown must not replace the global logger")
+	}
+	if concrete, ok := got.(*logger.Logger); ok {
+		_ = concrete.Close()
+	}
+}
+
+func TestNewServerLeavesGlobalLoggerWhenUnconfigured(t *testing.T) {
+	previous := logger.GetGlobal()
+	t.Cleanup(func() { logger.SetGlobal(previous) })
+
+	server, err := NewServer(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if logger.GetGlobal() != previous {
+		t.Fatal("zero Logger config must not replace the global logger")
+	}
+	if err := server.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

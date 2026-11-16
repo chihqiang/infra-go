@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chihqiang/infra-go/core/logger"
@@ -139,6 +140,11 @@ type loggedThrottle struct {
 	name string
 	internalThrottle
 	errWin *errorWindow
+	// openLogged makes the "breaker is open" message fire once per open episode.
+	// Logging every rejected request turned an overload into a log storm: each line
+	// also captured a stack trace, and the logger serialises writes on a global
+	// mutex.
+	openLogged atomic.Bool
 }
 
 func newLoggedThrottle(name string, t internalThrottle) *loggedThrottle {
@@ -162,6 +168,7 @@ func (lt *loggedThrottle) allow() (Promise, error) {
 	if err != nil {
 		return nil, lt.logError(err)
 	}
+	lt.openLogged.Store(false)
 	return promiseWithReason{
 		promise: promise,
 		errWin:  lt.errWin,
@@ -169,19 +176,23 @@ func (lt *loggedThrottle) allow() (Promise, error) {
 }
 
 func (lt *loggedThrottle) doReq(req func() error, fallback Fallback, acceptable Acceptable) error {
-	return lt.logError(lt.internalThrottle.doReq(req, fallback, func(err error) bool {
+	err := lt.internalThrottle.doReq(req, fallback, func(err error) bool {
 		accept := acceptable(err)
 		if !accept && err != nil {
 			lt.errWin.add(err.Error())
 		}
 		return accept
-	}))
+	})
+	if err == nil {
+		lt.openLogged.Store(false)
+	}
+	return lt.logError(err)
 }
 
 // logError logs a warning when the breaker is open, including the recent failure
 // reasons.
 func (lt *loggedThrottle) logError(err error) error {
-	if errors.Is(err, ErrServiceUnavailable) {
+	if errors.Is(err, ErrServiceUnavailable) && lt.openLogged.CompareAndSwap(false, true) {
 		logger.Error("breaker: circuit breaker is open, requests dropped",
 			logger.String("breaker", lt.name),
 			logger.String("last_errors", lt.errWin.String()))

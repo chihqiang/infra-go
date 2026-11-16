@@ -4,18 +4,18 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
-	"net/netip"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/chihqiang/infra-go/core/logger"
+	"github.com/chihqiang/infra-go/core/service"
 	"github.com/chihqiang/infra-go/rest/chain"
 	resthandler "github.com/chihqiang/infra-go/rest/handler"
 	"github.com/chihqiang/infra-go/rest/internal/cors"
-	"github.com/chihqiang/infra-go/rest/internal/realip"
+	restservice "github.com/chihqiang/infra-go/rest/internal/service"
 	"github.com/chihqiang/infra-go/rest/router"
 )
 
@@ -38,14 +38,30 @@ type Server struct {
 	addrMu             sync.RWMutex
 	addr               string
 	tlsConfig          *tls.Config
+	servicesMu         sync.Mutex
+	services           []service.Service
+	log                logger.ILogger
 }
 
 // NewServer creates a server using the given configuration. The zero Config is
 // replaced by DefaultConfig; a partially populated Config is used literally.
+//
+// When Config.Logger is configured, NewServer builds a logger from it, installs
+// it as the server's own logger (used by the access-log middleware and other
+// server-owned components) and also sets it as the global logger so that
+// package-level logger functions in middleware (recovery, request-ID, ...) see
+// the same instance. Use WithLogger to inject a pre-built logger instead.
 func NewServer(conf Config, opts ...Option) (*Server, error) {
 	conf = conf.withDefaults()
 	if err := conf.Validate(); err != nil {
 		return nil, err
+	}
+
+	// Build the server-owned logger early so buildMiddlewares can inject it
+	// into the access-log handler instead of falling back to the global.
+	var ownedLogger logger.ILogger
+	if conf.loggerConfigured() {
+		ownedLogger = logger.New(conf.Logger)
 	}
 
 	routes := router.New()
@@ -53,11 +69,10 @@ func NewServer(conf Config, opts ...Option) (*Server, error) {
 	if shutdownTimeout <= 0 {
 		shutdownTimeout = defaultShutdownTimeout
 	}
-	trustedProxies, err := realip.ParseTrustedProxies(conf.TrustedProxies)
+	front, tail, err := buildMiddlewares(conf, ownedLogger)
 	if err != nil {
-		return nil, fmt.Errorf("rest: %w", err)
+		return nil, err
 	}
-	front, tail := buildMiddlewares(conf, trustedProxies)
 	server := &Server{
 		router:           routes,
 		certFile:         conf.CertFile,
@@ -66,11 +81,27 @@ func NewServer(conf Config, opts ...Option) (*Server, error) {
 		frontMiddlewares: front,
 		tailMiddlewares:  tail,
 		addr:             net.JoinHostPort(conf.Host, strconv.Itoa(conf.Port)),
+		log:              ownedLogger,
+	}
+	if conf.Middlewares.Breaker.Enabled {
+		server.outerMiddlewares = append(server.outerMiddlewares,
+			resthandler.NewBreakerHandler(conf.Middlewares.Breaker).Handle)
 	}
 	for _, opt := range opts {
 		opt(server)
 	}
 	server.rebuildHandler()
+	if ownedLogger != nil {
+		logger.SetGlobal(ownedLogger)
+		server.AddService(restservice.NewLoggerSync(ownedLogger))
+	}
+	if conf.Middlewares.Trace.Enabled && conf.Middlewares.Trace.Agent.Endpoint != "" {
+		agent := conf.Middlewares.Trace.Agent
+		if agent.Name == "" {
+			agent.Name = conf.Middlewares.Trace.ServiceName
+		}
+		server.AddService(restservice.NewTraceAgent(agent))
+	}
 	server.httpServer = &http.Server{
 		Addr:           net.JoinHostPort(conf.Host, strconv.Itoa(conf.Port)),
 		Handler:        server,
@@ -88,49 +119,36 @@ func NewServer(conf Config, opts ...Option) (*Server, error) {
 // entry wraps all later ones. front holds the observability middleware;
 // tail starts with Timeout, so middlewares inserted between them (the breaker)
 // observe timeout responses without running before request IDs and logs.
-func buildMiddlewares(conf Config, trustedProxies []netip.Prefix) (front, tail []chain.Middleware) {
-	if conf.Middlewares.Recovery {
-		front = append(front, resthandler.RecoverHandler)
-	}
-	if conf.Middlewares.RequestID {
-		front = append(front, resthandler.RequestIDHandler)
-	}
-	if conf.Middlewares.Trace {
-		front = append(front, resthandler.TraceHandler(
-			resthandler.WithTraceServiceName(conf.Name),
-			resthandler.WithTraceIgnorePaths(conf.TraceIgnorePaths...),
-		))
-	}
-	if conf.Middlewares.Log {
-		options := []resthandler.LogOption{
-			resthandler.WithLogServiceName(conf.Name),
-			resthandler.WithLogSkipPaths(conf.LogSkipPaths...),
-		}
-		if len(trustedProxies) > 0 {
-			options = append(options, resthandler.WithLogClientIP(func(r *http.Request) string {
-				return realip.FromRequestTrusted(r, trustedProxies)
-			}))
-		}
-		front = append(front, resthandler.LogHandler(options...))
-	}
-	if conf.Middlewares.MaxConns > 0 {
-		front = append(front, resthandler.MaxConnsHandler(conf.Middlewares.MaxConns))
-	}
+func buildMiddlewares(conf Config, log logger.ILogger) (front, tail []chain.Middleware, err error) {
+	front = append(front,
+		resthandler.NewRecoveryHandler(conf.Middlewares.Recovery).Handle,
+		resthandler.NewRequestIDHandler(conf.Middlewares.RequestID).Handle,
+		resthandler.NewTraceHandler(conf.Middlewares.Trace).Handle,
+	)
 
-	if conf.Middlewares.Timeout > 0 {
-		tail = append(tail, resthandler.TimeoutHandler(conf.Middlewares.Timeout))
+	logHandler, err := resthandler.NewLogHandler(conf.Middlewares.Log, log)
+	if err != nil {
+		return nil, nil, err
 	}
-	// Gunzip must run before MaxBodyBytes: the limit has to apply to the
+	front = append(front,
+		logHandler.Handle,
+		resthandler.NewMaxConnsHandler(conf.Middlewares.MaxConns).Handle,
+		resthandler.NewRateLimitHandler(conf.Middlewares.RateLimit).Handle,
+		resthandler.NewAuthHandler(conf.Middlewares.Auth).Handle,
+	)
+
+	// Gunzip must run before MaxBytes: the limit has to apply to the
 	// decompressed payload, otherwise a small gzip body can expand without
-	// bound (decompression bomb).
-	if conf.Middlewares.Gunzip {
-		tail = append(tail, resthandler.GunzipHandler)
-	}
-	if conf.MaxBodyBytes > 0 {
-		tail = append(tail, resthandler.MaxBytesHandler(conf.MaxBodyBytes))
-	}
+	// bound (decompression bomb). Signature runs after MaxBytes so it sees the
+	// decompressed, already bounded body.
+	tail = append(tail,
+		resthandler.NewTimeoutHandler(conf.Middlewares.Timeout).Handle,
+		resthandler.NewGunzipHandler(conf.Middlewares.Gunzip).Handle,
+		resthandler.NewMaxBytesHandler(conf.Middlewares.MaxBytes).Handle,
+		resthandler.NewSignatureHandler(conf.Middlewares.Signature).Handle,
+	)
 
-	return front, tail
+	return front, tail, nil
 }
 
 // Handle registers a handler for the given method and path pattern.
@@ -160,6 +178,13 @@ func (s *Server) HandleFunc(method, routePath string, handler http.HandlerFunc) 
 // Router returns the server's router.
 func (s *Server) Router() *router.Router {
 	return s.router
+}
+
+// Logger returns the server-owned logger, or nil when the server was created
+// without a Logger config and no WithLogger option was supplied. When nil, the
+// access-log middleware and other components fall back to the global logger.
+func (s *Server) Logger() logger.ILogger {
+	return s.log
 }
 
 // SetNotFoundHandler sets the handler used when no route matches a request.
@@ -294,4 +319,39 @@ func (s *Server) Stop() error {
 // Close immediately closes the server and its active connections.
 func (s *Server) Close() error {
 	return s.httpServer.Close()
+}
+
+// AddService appends an auxiliary service to the server. It is added to a
+// ServiceGroup by Register. The logger sync and trace agent services are added
+// automatically; call AddService for other lifecycle-aware dependencies (for
+// example a taskq consumer). Add services before Register/Serve.
+func (s *Server) AddService(svc service.Service) {
+	if svc == nil {
+		return
+	}
+	s.servicesMu.Lock()
+	s.services = append(s.services, svc)
+	s.servicesMu.Unlock()
+}
+
+// Register adds the HTTP server and every auxiliary service to group. Use this
+// instead of service.AsService(server) when the server owns auxiliary services:
+//
+//	sg := service.NewServiceGroup()
+//	server.Register(sg)
+//	sg.Start()
+func (s *Server) Register(group *service.ServiceGroup) {
+	if group == nil {
+		return
+	}
+
+	// Add auxiliary services first, then the HTTP server: ServiceGroup stops in
+	// reverse order, so the logger is flushed after the server has stopped.
+	s.servicesMu.Lock()
+	services := append([]service.Service(nil), s.services...)
+	s.servicesMu.Unlock()
+	for _, svc := range services {
+		group.Add(svc)
+	}
+	group.Add(service.AsService(s))
 }

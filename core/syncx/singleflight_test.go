@@ -421,3 +421,63 @@ func TestSingleFlight_DoCtx_ErrorShared(t *testing.T) {
 		assert.Contains(t, err.Error(), "db down")
 	}
 }
+
+// TestSingleFlight_ForgetDuringFlightKeepsNewCall is a regression test: the
+// leader unconditionally deleted its key after finishing, which removed a call
+// registered after Forget. A later Do then ran fn concurrently with that call.
+func TestSingleFlight_ForgetDuringFlightKeepsNewCall(t *testing.T) {
+	sf := NewSingleFlight[int]()
+
+	aStarted := make(chan struct{})
+	aRelease := make(chan struct{})
+	aDone := make(chan struct{})
+	go func() {
+		defer close(aDone)
+		_, _ = sf.Do("key", func() (int, error) {
+			close(aStarted)
+			<-aRelease
+			return 1, nil
+		})
+	}()
+	<-aStarted
+
+	// Forget the running leader, then register a new call.
+	sf.Forget("key")
+
+	cStarted := make(chan struct{})
+	cRelease := make(chan struct{})
+	cDone := make(chan struct{})
+	go func() {
+		defer close(cDone)
+		_, _ = sf.Do("key", func() (int, error) {
+			close(cStarted)
+			<-cRelease
+			return 3, nil
+		})
+	}()
+	<-cStarted
+
+	// Releasing the old leader must not remove the new call's record.
+	close(aRelease)
+	<-aDone
+
+	dStarted := make(chan struct{})
+	dDone := make(chan struct{})
+	go func() {
+		defer close(dDone)
+		_, _ = sf.Do("key", func() (int, error) {
+			close(dStarted)
+			return 4, nil
+		})
+	}()
+
+	select {
+	case <-dStarted:
+		t.Fatal("a new call ran concurrently with the in-flight call after Forget")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(cRelease)
+	<-cDone
+	<-dDone
+}

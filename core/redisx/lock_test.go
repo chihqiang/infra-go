@@ -355,3 +355,87 @@ func TestValidateLockTTL(t *testing.T) {
 	assert.ErrorIs(t, validateLockTTL(-time.Second), ErrInvalidLockTTL)
 	assert.ErrorIs(t, validateLockTTL(minLockTTL-time.Nanosecond), ErrInvalidLockTTL)
 }
+
+// TestLock_AutoRenewSurvivesContextCancel is a regression test: renewal used to stop
+// when the acquisition context was cancelled, so a critical section still running lost
+// its lock at TTL expiry without any notification.
+func TestLock_AutoRenewSurvivesContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	c, mr := newMiniRedisClient(t)
+
+	lock, err := c.Locker("lock", 300*time.Millisecond, WithAutoRenew()).TryLock(ctx)
+	require.NoError(t, err)
+	defer lock.Unlock(context.Background())
+
+	// Cancelling the request context must not stop renewal.
+	cancel()
+
+	for i := 0; i < 3; i++ {
+		time.Sleep(120 * time.Millisecond) // let renewLoop run at least once
+		mr.FastForward(200 * time.Millisecond)
+		assert.True(t, c.client.Exists(context.Background(), "lock").Val() > 0,
+			"the lock must keep being renewed after ctx cancellation (iter %d)", i)
+	}
+}
+
+// TestLock_LostNotification verifies the owner can observe that the lock was taken
+// away instead of silently continuing without mutual exclusion.
+func TestLock_LostNotification(t *testing.T) {
+	c, mr := newMiniRedisClient(t)
+
+	lock, err := c.Locker("lock", 90*time.Millisecond, WithAutoRenew()).TryLock(context.Background())
+	require.NoError(t, err)
+	defer lock.Unlock(context.Background())
+
+	// Simulate another client taking over (or an operator deleting the key).
+	mr.Del("lock")
+
+	require.Eventually(t, lock.IsLost, 2*time.Second, 10*time.Millisecond,
+		"renewal must report a lost lock")
+	select {
+	case <-lock.Lost():
+	default:
+		t.Fatal("Lost() must be closed once the lock is lost")
+	}
+}
+
+// TestSetNXWithLock_RenewsDuringLongFn verifies the helper no longer loses the lock
+// when fn runs longer than ttl.
+func TestSetNXWithLock_RenewsDuringLongFn(t *testing.T) {
+	c, mr := newMiniRedisClient(t)
+	other, err := New(Config{Addr: mr.Addr()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = other.Close() })
+
+	var otherErr error
+	err = c.SetNXWithLock(context.Background(), "lock", 100*time.Millisecond, func(context.Context) error {
+		time.Sleep(300 * time.Millisecond) // three TTLs
+		lock, lockErr := other.Locker("lock", time.Second).TryLock(context.Background())
+		if lockErr == nil {
+			_ = lock.Unlock(context.Background())
+		}
+		otherErr = lockErr
+		return nil
+	})
+	require.NoError(t, err)
+	assert.ErrorIs(t, otherErr, ErrLockNotAcquired,
+		"the lock must still be held while fn is running")
+
+	// It must be released afterwards.
+	lock, err := other.Locker("lock", time.Second).TryLock(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, lock.Unlock(context.Background()))
+}
+
+// TestSetNXWithLock_ReportsLost makes a lost lock visible to the caller.
+func TestSetNXWithLock_ReportsLost(t *testing.T) {
+	c, mr := newMiniRedisClient(t)
+
+	err := c.SetNXWithLock(context.Background(), "lock", 90*time.Millisecond, func(context.Context) error {
+		// Another client takes the lock while fn is still running.
+		mr.Del("lock")
+		time.Sleep(200 * time.Millisecond) // give renewal time to notice
+		return nil
+	})
+	assert.ErrorIs(t, err, ErrLockLost)
+}

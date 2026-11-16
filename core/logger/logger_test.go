@@ -1,9 +1,12 @@
 package logger
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,14 +17,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// jsonLogEntry is a parsed JSON log entry.
 type jsonLogEntry struct {
-	Level  string `json:"level"`
-	Msg    string `json:"msg"`
-	Caller string `json:"caller"`
-	App    string `json:"app,omitempty"`
-	Name   string `json:"name,omitempty"`
-	UserID int    `json:"user_id,omitempty"`
+	Level      string `json:"level"`
+	Time       string `json:"time"`
+	Msg        string `json:"msg"`
+	Caller     string `json:"caller"`
+	App        string `json:"app,omitempty"`
+	Stacktrace string `json:"stacktrace,omitempty"`
+	Key        string `json:"key,omitempty"`
 }
 
 func parseJSONLog(t *testing.T, line string) jsonLogEntry {
@@ -39,292 +42,415 @@ func readLogFile(t *testing.T, path string) string {
 	return string(data)
 }
 
-// closeLogger type-asserts and closes the logger, flushing file output in tests.
 func closeLogger(t *testing.T, l ILogger) {
 	t.Helper()
 	_ = l.(*Logger).Close()
 }
 
-// --- New / Default ---
+func fileLogger(t *testing.T, cfg Config) (*Logger, string) {
+	t.Helper()
+	dir := t.TempDir()
+	cfg.Mode = "file"
+	cfg.Path = dir
+	l := New(cfg).(*Logger)
+	t.Cleanup(func() { _ = l.Close() })
+	return l, dir
+}
 
 func TestNew_DefaultConfig(t *testing.T) {
 	l := New(Config{})
 	require.NotNil(t, l)
 	_ = l.Sync()
+	_ = l.(*Logger).Close()
 }
 
 func TestNew_CustomConfig(t *testing.T) {
 	l := New(Config{
-		Level:    DebugLevel,
-		Encoding: ConsoleEncoding,
-		Output:   []string{"stdout"},
-		AppName:  "test-app",
+		ServiceName: "test-app",
+		Mode:        "file",
+		Encoding:    "json",
+		Path:        t.TempDir(),
+		Level:       "debug",
 	})
 	require.NotNil(t, l)
+	_ = l.(*Logger).Close()
 }
 
 func TestDefault(t *testing.T) {
 	l := Default()
 	require.NotNil(t, l)
+	_ = l.(*Logger).Close()
 }
 
 // --- Output targets ---
 
 func TestNew_FileOutput(t *testing.T) {
-	tmpDir := t.TempDir()
-	logFile := tmpDir + "/test.log"
-
-	l := New(Config{
-		Level:    InfoLevel,
-		Encoding: JSONEncoding,
-		Output:   []string{logFile},
-	})
+	l, dir := fileLogger(t, Config{Level: "info", Encoding: "json"})
 	l.Info("file output test", String("key", "value"))
-	closeLogger(t, l)
+	_ = l.Close()
 
-	content := readLogFile(t, logFile)
+	content := readLogFile(t, filepath.Join(dir, "access.log"))
 	assert.Contains(t, content, "file output test")
 	assert.Contains(t, content, `"key":"value"`)
 }
 
-func TestNew_MultipleOutputs(t *testing.T) {
-	tmpDir := t.TempDir()
-	logFile1 := tmpDir + "/log1.log"
-	logFile2 := tmpDir + "/log2.log"
+func TestNew_ErrorFileOutput(t *testing.T) {
+	l, dir := fileLogger(t, Config{Level: "info", Encoding: "json"})
+	l.Error("error file test")
+	_ = l.Close()
 
-	l := New(Config{
-		Level:  InfoLevel,
-		Output: []string{logFile1, logFile2},
-	})
-	l.Info("multi output test")
-	closeLogger(t, l)
-
-	assert.Contains(t, readLogFile(t, logFile1), "multi output test")
-	assert.Contains(t, readLogFile(t, logFile2), "multi output test")
-}
-
-func TestNew_InvalidOutputFallback(t *testing.T) {
-	l := New(Config{
-		Output: []string{"/nonexistent_dir/deep/path/log.txt"},
-	})
-	require.NotNil(t, l)
-	l.Info("fallback test")
-	_ = l.Sync()
+	content := readLogFile(t, filepath.Join(dir, "error.log"))
+	assert.Contains(t, content, "error file test")
 }
 
 func TestNew_DirectoryCreation(t *testing.T) {
-	tmpDir := t.TempDir()
-	deepPath := tmpDir + "/deep/nested/dir/app.log"
-
-	l := New(Config{Output: []string{deepPath}})
+	dir := filepath.Join(t.TempDir(), "deep", "nested", "dir")
+	l := New(Config{Mode: "file", Path: dir}).(*Logger)
 	l.Info("deep path test")
-	closeLogger(t, l)
+	_ = l.Close()
 
-	content := readLogFile(t, deepPath)
+	content := readLogFile(t, filepath.Join(dir, "access.log"))
 	assert.Contains(t, content, "deep path test")
+}
+
+func TestNew_InvalidPathFallback(t *testing.T) {
+	l := New(Config{Mode: "file", Path: "/dev/null/not-a-directory"})
+	require.NotNil(t, l)
+	l.Info("fallback test")
+	_ = l.Sync()
+	_ = l.(*Logger).Close()
 }
 
 // --- Level filtering ---
 
 func TestLogger_LevelFiltering(t *testing.T) {
-	tmpDir := t.TempDir()
-	logFile := tmpDir + "/filter.log"
+	l, dir := fileLogger(t, Config{Level: "error", Encoding: "json"})
+	l.Debug("should not appear")
+	l.Info("should not appear")
+	l.Warn("should not appear")
+	l.Error("should appear")
 
-	l := New(Config{
-		Level:    WarnLevel,
-		Encoding: JSONEncoding,
-		Output:   []string{logFile},
-	})
+	_ = l.Close()
+
+	content := readLogFile(t, filepath.Join(dir, "error.log"))
+	lines := strings.Split(strings.TrimSpace(content), "\n")
+	require.Len(t, lines, 1)
+	assert.Contains(t, lines[0], "should appear")
+}
+
+func TestLogger_SevereLevelFiltering(t *testing.T) {
+	l, dir := fileLogger(t, Config{Level: "severe", Encoding: "json"})
+	assert.False(t, l.enabled(ErrorLevel))
+	assert.True(t, l.enabled(FatalLevel))
 
 	l.Debug("should not appear")
 	l.Info("should not appear")
-	l.Warn("should appear")
-	l.Error("should appear too")
+	l.Warn("should not appear")
+	l.Error("should not appear")
 
-	closeLogger(t, l)
+	_ = l.Close()
 
-	content := readLogFile(t, logFile)
-	lines := strings.Split(strings.TrimSpace(content), "\n")
-	assert.Len(t, lines, 2)
-	assert.Contains(t, lines[0], "should appear")
-	assert.Contains(t, lines[1], "should appear too")
+	assert.Empty(t, readLogFile(t, filepath.Join(dir, "access.log")))
+	assert.Empty(t, readLogFile(t, filepath.Join(dir, "error.log")))
+}
+
+func TestParseLevel(t *testing.T) {
+	tests := map[string]Level{
+		"debug":   DebugLevel,
+		"info":    InfoLevel,
+		"warn":    WarnLevel,
+		"warning": WarnLevel,
+		"error":   ErrorLevel,
+		"severe":  FatalLevel,
+		"dpanic":  DPanicLevel,
+		"panic":   PanicLevel,
+		"fatal":   FatalLevel,
+		" INFO ":  InfoLevel,
+		"unknown": InfoLevel,
+	}
+
+	for input, want := range tests {
+		assert.Equal(t, want, parseLevel(input), "parseLevel(%q)", input)
+	}
+}
+
+func TestLevelString(t *testing.T) {
+	tests := map[Level]string{
+		DebugLevel:  "DEBUG",
+		InfoLevel:   "INFO",
+		WarnLevel:   "WARN",
+		ErrorLevel:  "ERROR",
+		DPanicLevel: "DPANIC",
+		PanicLevel:  "PANIC",
+		FatalLevel:  "FATAL",
+		Level(99):   "UNKNOWN",
+	}
+
+	for level, want := range tests {
+		assert.Equal(t, want, level.String(), "Level(%d).String()", level)
+	}
 }
 
 // --- Structured logging methods ---
 
 func TestLogger_StructuredMethods(t *testing.T) {
-	tmpDir := t.TempDir()
-	logFile := tmpDir + "/structured.log"
-
-	l := New(Config{
-		Level:    DebugLevel,
-		Encoding: JSONEncoding,
-		Output:   []string{logFile},
-	})
-
+	l, dir := fileLogger(t, Config{Level: "debug", Encoding: "json"})
 	l.Debug("debug msg", String("k", "v"))
 	l.Info("info msg", Int("n", 1))
 	l.Warn("warn msg")
 	l.Error("error msg")
+	_ = l.Close()
 
-	closeLogger(t, l)
-
-	content := readLogFile(t, logFile)
+	content := readLogFile(t, filepath.Join(dir, "access.log"))
 	lines := strings.Split(strings.TrimSpace(content), "\n")
-	require.Len(t, lines, 4)
-
+	require.Len(t, lines, 3)
 	assert.Equal(t, "DEBUG", parseJSONLog(t, lines[0]).Level)
-	assert.Equal(t, "debug msg", parseJSONLog(t, lines[0]).Msg)
 	assert.Equal(t, "INFO", parseJSONLog(t, lines[1]).Level)
-	assert.Equal(t, "info msg", parseJSONLog(t, lines[1]).Msg)
 	assert.Equal(t, "WARN", parseJSONLog(t, lines[2]).Level)
-	assert.Equal(t, "ERROR", parseJSONLog(t, lines[3]).Level)
+
+	errorContent := readLogFile(t, filepath.Join(dir, "error.log"))
+	assert.Contains(t, errorContent, "error msg")
 }
 
 // --- Formatted logging methods ---
 
 func TestLogger_FormatMethods(t *testing.T) {
-	tmpDir := t.TempDir()
-	logFile := tmpDir + "/format.log"
-
-	l := New(Config{
-		Level:    DebugLevel,
-		Encoding: JSONEncoding,
-		Output:   []string{logFile},
-	})
-
+	l, dir := fileLogger(t, Config{Level: "debug", Encoding: "json"})
 	l.Debugf("debug %d", 1)
 	l.Infof("info %s", "hello")
 	l.Warnf("warn %v", true)
 	l.Errorf("error %d", 42)
+	_ = l.Close()
 
-	closeLogger(t, l)
-
-	content := readLogFile(t, logFile)
+	content := readLogFile(t, filepath.Join(dir, "access.log"))
 	lines := strings.Split(strings.TrimSpace(content), "\n")
-	require.Len(t, lines, 4)
-
+	require.Len(t, lines, 3)
 	assert.Contains(t, lines[0], "debug 1")
 	assert.Contains(t, lines[1], "info hello")
 	assert.Contains(t, lines[2], "warn true")
-	assert.Contains(t, lines[3], "error 42")
+	assert.Contains(t, readLogFile(t, filepath.Join(dir, "error.log")), "error 42")
 }
 
 // --- Structured logging with context ---
 
 func TestLogger_ContextMethods(t *testing.T) {
-	tmpDir := t.TempDir()
-	logFile := tmpDir + "/ctx.log"
-
-	l := New(Config{
-		Level:    InfoLevel,
-		Encoding: JSONEncoding,
-		Output:   []string{logFile},
+	l, dir := fileLogger(t, Config{Level: "info", Encoding: "json"})
+	unregister := RegisterContextExtractor(func(context.Context) []Field {
+		return []Field{String("request_id", "req-1")}
 	})
-
+	t.Cleanup(unregister)
 	ctx := context.Background()
 	l.InfoCtx(ctx, "ctx info")
-	l.WarnCtx(ctx, "ctx warn")
-	l.ErrorCtx(ctx, "ctx error")
+	l.ErrorfCtx(ctx, "ctx error %d", 1)
+	_ = l.Close()
 
-	closeLogger(t, l)
-
-	content := readLogFile(t, logFile)
+	content := readLogFile(t, filepath.Join(dir, "access.log"))
+	assert.Contains(t, content, `"request_id":"req-1"`)
 	assert.Contains(t, content, "ctx info")
-	assert.Contains(t, content, "ctx warn")
-	assert.Contains(t, content, "ctx error")
+	assert.Contains(t, readLogFile(t, filepath.Join(dir, "error.log")), "ctx error 1")
 }
 
-// --- Formatted logging with context ---
-
-func TestLogger_FormatContextMethods(t *testing.T) {
-	tmpDir := t.TempDir()
-	logFile := tmpDir + "/fctx.log"
-
-	l := New(Config{
-		Level:    InfoLevel,
-		Encoding: JSONEncoding,
-		Output:   []string{logFile},
-	})
-
+func TestLogger_ContextMethodsBelowLevel(t *testing.T) {
+	l, dir := fileLogger(t, Config{Level: "fatal", Encoding: "json"})
 	ctx := context.Background()
-	l.InfofCtx(ctx, "fctx info %d", 1)
-	l.WarnfCtx(ctx, "fctx warn %s", "msg")
+	l.DebugCtx(ctx, "debug ctx")
+	l.InfoCtx(ctx, "info ctx")
+	l.WarnCtx(ctx, "warn ctx")
+	l.ErrorCtx(ctx, "error ctx")
+	l.DebugfCtx(ctx, "debug %s", "ctx")
+	l.InfofCtx(ctx, "info %s", "ctx")
+	l.WarnfCtx(ctx, "warn %s", "ctx")
+	l.ErrorfCtx(ctx, "error %s", "ctx")
+	_ = l.Close()
 
-	closeLogger(t, l)
-
-	content := readLogFile(t, logFile)
-	assert.Contains(t, content, "fctx info 1")
-	assert.Contains(t, content, "fctx warn msg")
+	assert.Empty(t, readLogFile(t, filepath.Join(dir, "access.log")))
+	assert.Empty(t, readLogFile(t, filepath.Join(dir, "error.log")))
 }
 
-// --- Console encoding ---
-
-func TestLogger_ConsoleEncoding(t *testing.T) {
-	tmpDir := t.TempDir()
-	logFile := tmpDir + "/console.log"
-
-	l := New(Config{
-		Level:    InfoLevel,
-		Encoding: ConsoleEncoding,
-		Output:   []string{logFile},
+func TestLogger_Panic(t *testing.T) {
+	l, dir := fileLogger(t, Config{Level: "info", Encoding: "json"})
+	assert.PanicsWithValue(t, "boom", func() { l.Panic("boom") })
+	assert.PanicsWithValue(t, "boom 1", func() { l.Panicf("boom %d", 1) })
+	assert.PanicsWithValue(t, "boom 2", func() {
+		l.PanicfCtx(context.Background(), "boom %d", 2)
 	})
-	l.Info("console mode test")
+	_ = l.Close()
 
-	closeLogger(t, l)
+	lines := strings.Split(strings.TrimSpace(readLogFile(t, filepath.Join(dir, "error.log"))), "\n")
+	require.Len(t, lines, 3)
+	assert.Equal(t, "PANIC", parseJSONLog(t, lines[0]).Level)
+	assert.Equal(t, "boom", parseJSONLog(t, lines[0]).Msg)
+	assert.Equal(t, "boom 1", parseJSONLog(t, lines[1]).Msg)
+	assert.Equal(t, "boom 2", parseJSONLog(t, lines[2]).Msg)
+}
 
-	content := readLogFile(t, logFile)
+func TestLogger_FatalExits(t *testing.T) {
+	if mode := os.Getenv("LOGGER_FATAL_MODE"); mode != "" {
+		l := New(Config{
+			Mode:     "file",
+			Path:     os.Getenv("LOGGER_FATAL_DIR"),
+			Level:    "info",
+			Encoding: "json",
+		})
+		SetGlobal(l)
+		ctx := context.Background()
+		switch mode {
+		case "Fatal":
+			l.Fatal("fatal message")
+		case "Fatalf":
+			l.Fatalf("fatal %d", 1)
+		case "FatalCtx":
+			l.FatalCtx(ctx, "fatal message")
+		case "FatalfCtx":
+			l.FatalfCtx(ctx, "fatal %d", 1)
+		case "global Fatal":
+			Fatal("fatal message")
+		case "global Fatalf":
+			Fatalf("fatal %d", 1)
+		case "global FatalCtx":
+			FatalCtx(ctx, "fatal message")
+		case "global FatalfCtx":
+			FatalfCtx(ctx, "fatal %d", 1)
+		}
+		// Fatal must terminate the process with exit code 1; any other code means it
+		// returned and the parent test fails.
+		os.Exit(3)
+	}
+
+	for _, mode := range []string{
+		"Fatal", "Fatalf", "FatalCtx", "FatalfCtx",
+		"global Fatal", "global Fatalf", "global FatalCtx", "global FatalfCtx",
+	} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			cmd := exec.Command(os.Args[0], "-test.run=^TestLogger_FatalExits$")
+			cmd.Env = append(os.Environ(),
+				"LOGGER_FATAL_MODE="+mode,
+				"LOGGER_FATAL_DIR="+dir,
+			)
+			err := cmd.Run()
+			var exitErr *exec.ExitError
+			require.ErrorAs(t, err, &exitErr)
+			assert.Equal(t, 1, exitErr.ExitCode())
+
+			content, readErr := os.ReadFile(filepath.Join(dir, "severe.log"))
+			require.NoError(t, readErr)
+			assert.Contains(t, string(content), "FATAL")
+		})
+	}
+}
+
+// --- Console / plain encoding ---
+
+func TestLogger_PlainEncoding(t *testing.T) {
+	l, dir := fileLogger(t, Config{Level: "info", Encoding: "plain"})
+	l.Info("plain mode test", String("key", "value"))
+	_ = l.Close()
+
+	content := readLogFile(t, filepath.Join(dir, "access.log"))
 	assert.Contains(t, content, "INFO")
-	assert.Contains(t, content, "console mode test")
+	assert.Contains(t, content, "plain mode test")
+	assert.Contains(t, content, "key=value")
+}
+
+func TestLogger_PlainEncodingFieldTypes(t *testing.T) {
+	l, dir := fileLogger(t, Config{Level: "error", Encoding: "plain", ServiceName: "svc"})
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	l.Error("plain fields",
+		String("str", "hello"),
+		Int("num", -3),
+		Float64("float", 1.5),
+		Bool("flag", false),
+		Duration("elapsed", 1500*time.Millisecond),
+		Time("at", ts),
+		Err(assert.AnError),
+		Any("list", []int{1, 2}),
+	)
+	_ = l.Close()
+
+	content := readLogFile(t, filepath.Join(dir, "error.log"))
+	assert.Contains(t, content, " app=svc ")
+	assert.Contains(t, content, "str=hello")
+	assert.Contains(t, content, "num=-3")
+	assert.Contains(t, content, "float=1.5")
+	assert.Contains(t, content, "flag=false")
+	assert.Contains(t, content, "elapsed=1.5s")
+	assert.Contains(t, content, "at="+ts.Format(defaultTimeFormat))
+	assert.Contains(t, content, assert.AnError.Error())
+	assert.Contains(t, content, "list=[1 2]")
+	assert.Contains(t, content, "stacktrace=")
 }
 
 // --- Caller ---
 
 func TestLogger_Caller(t *testing.T) {
-	tmpDir := t.TempDir()
-	logFile := tmpDir + "/caller.log"
-
-	l := New(Config{
-		Level:    InfoLevel,
-		Encoding: JSONEncoding,
-		Output:   []string{logFile},
-		Caller:   true,
-	})
+	l, dir := fileLogger(t, Config{Level: "info", Encoding: "json"})
 	l.Info("with caller")
+	_ = l.Close()
 
-	closeLogger(t, l)
-
-	entry := parseJSONLog(t, readLogFile(t, logFile))
+	entry := parseJSONLog(t, readLogFile(t, filepath.Join(dir, "access.log")))
 	assert.NotEmpty(t, entry.Caller)
 	assert.Contains(t, entry.Caller, "logger_test.go")
+}
+
+func TestGlobal_Caller(t *testing.T) {
+	prev := GetGlobal()
+	l, dir := fileLogger(t, Config{Level: "info", Encoding: "json"})
+	SetGlobal(l)
+	t.Cleanup(func() { SetGlobal(prev) })
+
+	Info("global caller")
+	ErrorCtx(context.Background(), "global ctx caller")
+	_ = l.Close()
+
+	entry := parseJSONLog(t, readLogFile(t, filepath.Join(dir, "access.log")))
+	assert.Contains(t, entry.Caller, "logger_test.go")
+	assert.NotContains(t, entry.Caller, "log.go")
+
+	errorEntry := parseJSONLog(t, readLogFile(t, filepath.Join(dir, "error.log")))
+	assert.Contains(t, errorEntry.Caller, "logger_test.go")
+	assert.NotContains(t, errorEntry.Caller, "log.go")
 }
 
 // --- Stacktrace ---
 
 func TestLogger_StackTrace(t *testing.T) {
-	tmpDir := t.TempDir()
-	logFile := tmpDir + "/stacktrace.log"
-
-	l := New(Config{
-		Level:      InfoLevel,
-		Encoding:   JSONEncoding,
-		Output:     []string{logFile},
-		Stacktrace: true,
-	})
+	l, dir := fileLogger(t, Config{Level: "info", Encoding: "json"})
 	l.Error("error with stacktrace")
+	_ = l.Close()
 
-	closeLogger(t, l)
-
-	content := readLogFile(t, logFile)
-	assert.Contains(t, content, "stacktrace")
+	entry := parseJSONLog(t, readLogFile(t, filepath.Join(dir, "error.log")))
+	assert.NotEmpty(t, entry.Stacktrace)
 }
 
-// --- Sync ---
+func TestLogger_StackCooldown(t *testing.T) {
+	l, dir := fileLogger(t, Config{
+		Level:               "info",
+		Encoding:            "json",
+		StackCooldownMillis: 10_000,
+	})
+	l.Error("first error")
+	l.Error("second error")
+	_ = l.Close()
+
+	lines := strings.Split(strings.TrimSpace(readLogFile(t, filepath.Join(dir, "error.log"))), "\n")
+	require.Len(t, lines, 2)
+	assert.NotEmpty(t, parseJSONLog(t, lines[0]).Stacktrace)
+	assert.Empty(t, parseJSONLog(t, lines[1]).Stacktrace)
+}
+
+// --- Sync / Close ---
 
 func TestLogger_Sync(t *testing.T) {
-	l := New(Config{Output: []string{"stdout"}})
+	l, _ := fileLogger(t, Config{})
 	l.Info("sync test")
-	_ = l.Sync()
+	require.NoError(t, l.Sync())
+}
+
+func TestLogger_CloseIsIdempotent(t *testing.T) {
+	l, _ := fileLogger(t, Config{})
+	require.NoError(t, l.Close())
+	require.NoError(t, l.Close())
 }
 
 // --- Global Logger ---
@@ -341,10 +467,7 @@ func TestGlobal_SetGlobal(t *testing.T) {
 	old := GetGlobal()
 	defer SetGlobal(old)
 
-	custom := New(Config{
-		Level:   DebugLevel,
-		AppName: "global-test",
-	})
+	custom := New(Config{Level: "debug", ServiceName: "global-test"})
 	SetGlobal(custom)
 
 	g := GetGlobal()
@@ -352,20 +475,20 @@ func TestGlobal_SetGlobal(t *testing.T) {
 	assert.NotPanics(t, func() {
 		g.Info("set global test")
 	})
+	_ = custom.(*Logger).Close()
 }
 
 func TestGlobal_ReplaceGlobal(t *testing.T) {
 	old := GetGlobal()
 	defer SetGlobal(old)
 
-	replaced := ReplaceGlobal(Config{
-		Level:   ErrorLevel,
-		AppName: "replaced",
-	})
+	replaced := ReplaceGlobal(Config{Level: "error", ServiceName: "replaced"})
 	require.NotNil(t, replaced)
 
 	g := GetGlobal()
 	require.NotNil(t, g)
+	_ = g.(*Logger).Close()
+	_ = replaced // the old logger is restored by the deferred SetGlobal
 }
 
 func TestGlobal_StructuredMethods(t *testing.T) {
@@ -396,14 +519,33 @@ func TestGlobal_ContextMethods(t *testing.T) {
 	})
 }
 
-func TestGlobal_FormatContextMethods(t *testing.T) {
+func TestGlobal_StructuredWrappers(t *testing.T) {
+	prev := GetGlobal()
+	l, dir := fileLogger(t, Config{Level: "debug", Encoding: "json"})
+	SetGlobal(l)
+	t.Cleanup(func() { SetGlobal(prev) })
+
 	ctx := context.Background()
-	assert.NotPanics(t, func() {
-		DebugfCtx(ctx, "fctx debug %s", "x")
-		InfofCtx(ctx, "fctx info %s", "x")
-		WarnfCtx(ctx, "fctx warn %s", "x")
-		ErrorfCtx(ctx, "fctx error %s", "x")
-	})
+	DebugCtx(ctx, "debug ctx")
+	DebugfCtx(ctx, "debug %s ctx", "formatted")
+	InfoCtx(ctx, "info ctx")
+	WarnCtx(ctx, "warn ctx")
+	ErrorCtx(ctx, "error ctx")
+	assert.PanicsWithValue(t, "global panic", func() { Panic("global panic") })
+	assert.PanicsWithValue(t, "global panic 1", func() { Panicf("global panic %d", 1) })
+	assert.PanicsWithValue(t, "ctx panic", func() { PanicCtx(ctx, "ctx panic") })
+	assert.PanicsWithValue(t, "ctx panic 1", func() { PanicfCtx(ctx, "ctx panic %d", 1) })
+
+	access := readLogFile(t, filepath.Join(dir, "access.log"))
+	assert.Contains(t, access, "debug ctx")
+	assert.Contains(t, access, "debug formatted ctx")
+	assert.Contains(t, access, "info ctx")
+	assert.Contains(t, access, "warn ctx")
+	assert.NotContains(t, access, "error ctx")
+
+	errorContent := readLogFile(t, filepath.Join(dir, "error.log"))
+	assert.Contains(t, errorContent, "error ctx")
+	assert.Contains(t, errorContent, "PANIC")
 }
 
 func TestGlobal_Sync(t *testing.T) {
@@ -413,15 +555,7 @@ func TestGlobal_Sync(t *testing.T) {
 // --- Field constructors ---
 
 func TestFieldConstructors(t *testing.T) {
-	tmpDir := t.TempDir()
-	logFile := tmpDir + "/fields.log"
-
-	l := New(Config{
-		Level:    DebugLevel,
-		Encoding: JSONEncoding,
-		Output:   []string{logFile},
-	})
-
+	l, dir := fileLogger(t, Config{Level: "debug", Encoding: "json"})
 	l.Info("field test",
 		String("str", "hello"),
 		Int("num", 42),
@@ -431,9 +565,9 @@ func TestFieldConstructors(t *testing.T) {
 		Duration("elapsed", 5*time.Second),
 		Any("data", map[string]int{"a": 1}),
 	)
-	closeLogger(t, l)
+	_ = l.Close()
 
-	content := readLogFile(t, logFile)
+	content := readLogFile(t, filepath.Join(dir, "access.log"))
 	assert.Contains(t, content, `"str":"hello"`)
 	assert.Contains(t, content, `"num":42`)
 	assert.Contains(t, content, `"big":9223372036854775807`)
@@ -444,22 +578,24 @@ func TestFieldConstructors(t *testing.T) {
 }
 
 func TestFieldErr(t *testing.T) {
-	tmpDir := t.TempDir()
-	logFile := tmpDir + "/err.log"
+	l, dir := fileLogger(t, Config{Level: "error", Encoding: "json"})
+	l.Error("operation failed", Err(assert.AnError))
+	_ = l.Close()
 
-	l := New(Config{
-		Level:    ErrorLevel,
-		Encoding: JSONEncoding,
-		Output:   []string{logFile},
-	})
-
-	err := assert.AnError
-	l.Error("operation failed", Err(err))
-	closeLogger(t, l)
-
-	content := readLogFile(t, logFile)
+	content := readLogFile(t, filepath.Join(dir, "error.log"))
 	assert.Contains(t, content, `"error"`)
 	assert.Contains(t, content, assert.AnError.Error())
+}
+
+func TestFieldTimeAndNilErr(t *testing.T) {
+	l, dir := fileLogger(t, Config{Level: "info", Encoding: "json"})
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	l.Info("edge fields", Time("at", ts), Err(nil))
+	_ = l.Close()
+
+	content := readLogFile(t, filepath.Join(dir, "access.log"))
+	assert.Contains(t, content, `"at":"`+ts.Format(defaultTimeFormat)+`"`)
+	assert.Contains(t, content, `"error":null`)
 }
 
 // --- Default value filling ---
@@ -467,74 +603,181 @@ func TestFieldErr(t *testing.T) {
 func TestFillDefault_AllDefaults(t *testing.T) {
 	c := fillDefault(Config{})
 
-	assert.Equal(t, InfoLevel, c.Level)
-	assert.Equal(t, JSONEncoding, c.Encoding)
-	assert.Equal(t, []string{"stdout"}, c.Output)
-	assert.Equal(t, "stderr", c.ErrorOutput)
-	assert.True(t, c.Caller)
-	assert.False(t, c.Stacktrace)
-	assert.Equal(t, "2006-01-02T15:04:05.000Z07:00", c.TimeLayout)
-	assert.Equal(t, "", c.AppName)
-	assert.Equal(t, 100, c.Rotation.MaxSize)
-	assert.Equal(t, 7, c.Rotation.MaxBackups)
-	assert.Equal(t, 30, c.Rotation.MaxAge)
-	assert.False(t, c.Rotation.Compress)
-	assert.True(t, c.Rotation.LocalTime)
+	assert.Equal(t, "console", c.Mode)
+	assert.Equal(t, "json", c.Encoding)
+	assert.Equal(t, "", c.ServiceName)
+	assert.Equal(t, "logs", c.Path)
+	assert.Equal(t, "info", c.Level)
+	assert.Equal(t, defaultTimeFormat, c.TimeFormat)
+	assert.True(t, c.Stat)
+	assert.Equal(t, 100, c.StackCooldownMillis)
+	assert.Equal(t, 0, c.MaxBackups)
+	assert.Equal(t, 0, c.MaxSize)
+	assert.Equal(t, 0, c.KeepDays)
+	assert.Equal(t, "daily", c.Rotation)
+	assert.False(t, c.Compress)
 }
 
 func TestFillDefault_UserOverrides(t *testing.T) {
 	c := fillDefault(Config{
-		Level:    DebugLevel,
-		Encoding: ConsoleEncoding,
-		Output:   []string{"/var/log/app.log"},
-		AppName:  "myapp",
-		Rotation: RotationConfig{
-			MaxSize:  50,
-			Compress: true,
-		},
+		ServiceName:         "svc",
+		Mode:                "file",
+		Encoding:            "plain",
+		TimeFormat:          time.RFC3339,
+		Path:                "/var/log/app",
+		Level:               "debug",
+		MaxContentLength:    128,
+		Compress:            true,
+		Stat:                false,
+		KeepDays:            3,
+		StackCooldownMillis: 5,
+		MaxBackups:          2,
+		MaxSize:             10,
+		Rotation:            "size",
 	})
 
-	assert.Equal(t, DebugLevel, c.Level)
-	assert.Equal(t, ConsoleEncoding, c.Encoding)
-	assert.Equal(t, []string{"/var/log/app.log"}, c.Output)
-	assert.Equal(t, "myapp", c.AppName)
-	assert.Equal(t, 50, c.Rotation.MaxSize)
-	assert.True(t, c.Rotation.Compress)
-	assert.Equal(t, "stderr", c.ErrorOutput)
-	assert.True(t, c.Caller)
-	assert.Equal(t, 7, c.Rotation.MaxBackups)
-	assert.Equal(t, 30, c.Rotation.MaxAge)
-	assert.True(t, c.Rotation.LocalTime)
+	assert.Equal(t, "svc", c.ServiceName)
+	assert.Equal(t, "file", c.Mode)
+	assert.Equal(t, "plain", c.Encoding)
+	assert.Equal(t, "/var/log/app", c.Path)
+	assert.Equal(t, "debug", c.Level)
+	assert.Equal(t, uint32(128), c.MaxContentLength)
+	assert.True(t, c.Compress)
+	assert.Equal(t, 3, c.KeepDays)
+	assert.Equal(t, 5, c.StackCooldownMillis)
+	assert.Equal(t, 2, c.MaxBackups)
+	assert.Equal(t, 10, c.MaxSize)
+	assert.Equal(t, "size", c.Rotation)
 }
 
 // --- Log rotation ---
 
 func TestRotation_FileSize(t *testing.T) {
-	tmpDir := t.TempDir()
-	logFile := tmpDir + "/rotate.log"
-
-	l := New(Config{
-		Level:    InfoLevel,
-		Encoding: JSONEncoding,
-		Output:   []string{logFile},
-		Rotation: RotationConfig{
-			MaxSize:    1,
-			MaxBackups: 3,
-			MaxAge:     0,
-		},
+	l, dir := fileLogger(t, Config{
+		Level:      "info",
+		Encoding:   "json",
+		Rotation:   "size",
+		MaxSize:    1,
+		MaxBackups: 3,
 	})
-
 	for i := 0; i < 20000; i++ {
 		l.Info("rotation test message", Int("seq", i))
 	}
-	closeLogger(t, l)
+	_ = l.Close()
 
-	content := readLogFile(t, logFile)
+	content := readLogFile(t, filepath.Join(dir, "access.log"))
 	assert.NotEmpty(t, content)
 
-	matches, err := filepath.Glob(tmpDir + "/rotate-*.log")
+	matches, err := filepath.Glob(filepath.Join(dir, "access-*.log*"))
 	require.NoError(t, err)
 	assert.NotEmpty(t, matches, "should have backup log files after rotation")
+}
+
+func TestRotation_Daily(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := newRotatingWriter(filepath.Join(dir, "access.log"), Config{
+		Rotation:   "daily",
+		MaxBackups: 3,
+	})
+	require.NoError(t, err)
+	writer.currentDay = "2000-01-01"
+	_, err = writer.Write([]byte("first\n"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	matches, err := filepath.Glob(filepath.Join(dir, "access-*.log"))
+	require.NoError(t, err)
+	assert.NotEmpty(t, matches)
+}
+
+func TestRotation_Compress(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := newRotatingWriter(filepath.Join(dir, "access.log"), Config{
+		Rotation:   "size",
+		MaxBackups: 5,
+		Compress:   true,
+	})
+	require.NoError(t, err)
+
+	_, err = writer.Write([]byte("first entry\n"))
+	require.NoError(t, err)
+	writer.maxSize = 1
+	_, err = writer.Write([]byte("second entry\n"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	matches, err := filepath.Glob(filepath.Join(dir, "access-*.log.gz"))
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+
+	compressed, err := os.Open(matches[0])
+	require.NoError(t, err)
+	defer func() { _ = compressed.Close() }()
+	reader, err := gzip.NewReader(compressed)
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "first entry")
+
+	active := readLogFile(t, filepath.Join(dir, "access.log"))
+	assert.Contains(t, active, "second entry")
+	assert.NotContains(t, active, "first entry")
+}
+
+func TestRotation_MaxBackups(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := newRotatingWriter(filepath.Join(dir, "access.log"), Config{
+		Rotation:   "size",
+		MaxBackups: 2,
+	})
+	require.NoError(t, err)
+
+	for i := 0; i < 5; i++ {
+		_, err = writer.Write([]byte("entry\n"))
+		require.NoError(t, err)
+		writer.maxSize = 1
+	}
+	require.NoError(t, writer.Close())
+
+	matches, err := filepath.Glob(filepath.Join(dir, "access-*.log"))
+	require.NoError(t, err)
+	assert.Len(t, matches, 2)
+}
+
+func TestRotation_KeepDays(t *testing.T) {
+	dir := t.TempDir()
+	old := filepath.Join(dir, "access-2000-01-01T00-00-00.000000000.log")
+	require.NoError(t, os.WriteFile(old, []byte("old\n"), 0o600))
+	past := time.Now().Add(-48 * time.Hour)
+	require.NoError(t, os.Chtimes(old, past, past))
+
+	writer, err := newRotatingWriter(filepath.Join(dir, "access.log"), Config{
+		Rotation: "size",
+		KeepDays: 1,
+	})
+	require.NoError(t, err)
+	_, err = writer.Write([]byte("current\n"))
+	require.NoError(t, err)
+	writer.maxSize = 1
+	_, err = writer.Write([]byte("next\n"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	_, statErr := os.Stat(old)
+	assert.True(t, os.IsNotExist(statErr), "expired backup should be removed")
+}
+
+func TestRotatingWriter_OperationsAfterClose(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := newRotatingWriter(filepath.Join(dir, "access.log"), Config{})
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	require.NoError(t, writer.Close())
+	require.NoError(t, writer.Sync())
+
+	_, err = writer.Write([]byte("too late\n"))
+	assert.Error(t, err)
 }
 
 // --- Interface compliance ---
@@ -542,12 +785,11 @@ func TestRotation_FileSize(t *testing.T) {
 func TestILogger_Compliance(t *testing.T) {
 	var l ILogger = New(Config{})
 	assert.NotNil(t, l)
+	_ = l.(*Logger).Close()
 }
 
 // --- Registering and unregistering context field extractors ---
 
-// countFields counts how many times the given key appears in the output of
-// extractContextFields.
 func countFields(t *testing.T, key string) int {
 	t.Helper()
 	n := 0
@@ -567,16 +809,13 @@ func TestRegisterContextExtractor_Unregister(t *testing.T) {
 	require.Equal(t, 1, countFields(t, key))
 
 	unregister()
-	assert.Equal(t, 0, countFields(t, key), "the field must no longer be extracted after unregistering")
+	assert.Equal(t, 0, countFields(t, key))
 
-	// Idempotent: repeated calls must not panic and must not affect other extractors
 	assert.NotPanics(t, unregister)
 	assert.NotPanics(t, unregister)
 }
 
 func TestRegisterContextExtractor_UnregisterIsolated(t *testing.T) {
-	// Unregistering one must not affect the other (verifies per-entry flags rather than
-	// index-based deletion)
 	const keyA, keyB = "zz_test_iso_a", "zz_test_iso_b"
 	unregisterA := RegisterContextExtractor(func(context.Context) []Field {
 		return []Field{String(keyA, "v")}
@@ -588,20 +827,15 @@ func TestRegisterContextExtractor_UnregisterIsolated(t *testing.T) {
 
 	unregisterA()
 	assert.Equal(t, 0, countFields(t, keyA))
-	assert.Equal(t, 1, countFields(t, keyB), "unregistering A must not remove B")
+	assert.Equal(t, 1, countFields(t, keyB))
 }
 
 func TestRegisterContextExtractor_Nil(t *testing.T) {
-	// A nil extractor is not registered and the returned unregister function is a no-op
 	unregister := RegisterContextExtractor(nil)
 	require.NotNil(t, unregister)
 	assert.NotPanics(t, unregister)
 }
 
-// TestRegisterContextExtractor_DuplicateProducesDuplicateFields pins down the fact that
-// registration cannot de-duplicate: function values are not comparable in Go, so
-// registering the same extractor twice produces two copies of its fields. That is exactly
-// why an unregister function is needed.
 func TestRegisterContextExtractor_DuplicateProducesDuplicateFields(t *testing.T) {
 	const key = "zz_test_dup"
 	extractor := func(context.Context) []Field { return []Field{String(key, "v")} }
@@ -610,17 +844,11 @@ func TestRegisterContextExtractor_DuplicateProducesDuplicateFields(t *testing.T)
 	unregister2 := RegisterContextExtractor(extractor)
 	t.Cleanup(func() { unregister1(); unregister2() })
 
-	assert.Equal(t, 2, countFields(t, key),
-		"duplicate registration produces duplicate fields; the returned unregister function must undo it")
-
+	assert.Equal(t, 2, countFields(t, key))
 	unregister1()
 	assert.Equal(t, 1, countFields(t, key))
 }
 
-// TestRegisterContextExtractor_Concurrent verifies there is no data race when
-// registering/unregistering runs concurrently with extraction (unregistering uses an
-// atomic flag plus wholesale slice header replacement, never modifying the backing array
-// that is being iterated).
 func TestRegisterContextExtractor_Concurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
@@ -635,4 +863,44 @@ func TestRegisterContextExtractor_Concurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestNew_VolumeMode(t *testing.T) {
+	dir := t.TempDir()
+	l := New(Config{
+		ServiceName: "svc",
+		Mode:        "volume",
+		Path:        dir,
+	}).(*Logger)
+	l.Info("volume test")
+	require.NoError(t, l.Close())
+
+	host, err := os.Hostname()
+	require.NoError(t, err)
+	content := readLogFile(t, filepath.Join(dir, "svc", host, "access.log"))
+	assert.Contains(t, content, "volume test")
+}
+
+func TestNew_VolumeModeRequiresServiceName(t *testing.T) {
+	dir := t.TempDir()
+	l := New(Config{Mode: "volume", Path: dir}).(*Logger)
+	l.Info("volume fallback")
+	require.NoError(t, l.Close())
+
+	content := readLogFile(t, filepath.Join(dir, "access.log"))
+	assert.Contains(t, content, "volume fallback")
+}
+
+func TestLogger_MaxContentLength(t *testing.T) {
+	l, dir := fileLogger(t, Config{
+		Level:            "info",
+		Encoding:         "json",
+		MaxContentLength: 5,
+	})
+	l.Info("123456789")
+	require.NoError(t, l.Close())
+
+	content := readLogFile(t, filepath.Join(dir, "access.log"))
+	assert.Contains(t, content, `"msg":"12345"`)
+	assert.NotContains(t, content, "123456789")
 }

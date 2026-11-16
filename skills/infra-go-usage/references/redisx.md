@@ -9,8 +9,9 @@ connection pool management, key prefixes, distributed locks, and more.
 - **Sentinel mode**: supports Redis Sentinel for high availability
 - **Key prefix**: every operation gets the prefix automatically, so several services can share
   one Redis instance easily
-- **Distributed lock**: built on SET NX EX + Lua scripts, with auto-renewal; when the supplied
-  context is cancelled the renewal goroutine stops automatically, preventing leaks
+- **Distributed lock**: built on SET NX EX + Lua scripts, with auto-renewal. Renewal is
+  independent of the context used to acquire the lock and runs until `Unlock`; `Lost()` reports
+  a lock that expired or was taken over
 - **Complete API**: covers the common String, Hash, List, and Set operations
 - **Config-driven**: Config defines defaults through `default` struct tags, following the conf standard
 - **Unified errors**: semantic errors (`ErrNil`, `ErrLockNotAcquired`, etc.)
@@ -132,9 +133,9 @@ keys, cursor, err := client.Scan(ctx, 0, "user:*", 100)
 ### Distributed lock
 
 ```go
-// Try to acquire the lock (non-blocking)
-// The ctx passed in controls the lifetime of the auto-renewal goroutine:
-// when ctx is cancelled, the renewal goroutine stops automatically, preventing leaks
+// Try to acquire the lock (non-blocking).
+// ctx controls acquisition only: with WithAutoRenew the lock keeps being renewed
+// after ctx is cancelled, until Unlock is called. Callers must Unlock.
 lock, err := client.Locker("resource:1", 10*time.Second).TryLock(ctx)
 if err != nil {
     // lock already held
@@ -150,7 +151,16 @@ defer lock.Unlock(ctx)
 // Enable it by appending options to Locker, for example
 //     client.Locker(key, 0, redisx.WithTTL(10*time.Second), redisx.WithAutoRenew())
 // There is no separate LockerWithTTL API; the TTL comes from Locker's 2nd arg or WithTTL
-// The renewal goroutine watches ctx.Done(), so nothing leaks even if the caller forgets Unlock
+// Renewal stops on Unlock. If renewal detects that the key was deleted or taken over,
+// Lost() is closed so the critical section can abort:
+lock, err = client.Locker("resource:1", 10*time.Second, redisx.WithAutoRenew()).TryLock(ctx)
+if err == nil {
+    select {
+    case <-lock.Lost():
+        // the lock is no longer ours; stop the critical section
+    default:
+    }
+}
 ```
 
 > **TTL must be greater than 0**: when the `Locker` TTL (or the value after `WithTTL` overrides
@@ -164,7 +174,9 @@ defer lock.Unlock(ctx)
 ### Convenience method
 
 ```go
-// Run a function under a distributed lock; the lock is released when it returns
+// Run a function under a distributed lock; the lock is renewed while fn runs
+// (so fn may outlive ttl) and released when it returns. If the lock is lost while
+// fn is running, the returned error contains redisx.ErrLockLost.
 err := client.SetNXWithLock(ctx, "task:1", 30*time.Second, func(ctx context.Context) error {
     // run with the lock held
     return doWork(ctx)

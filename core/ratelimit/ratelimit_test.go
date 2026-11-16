@@ -251,3 +251,18 @@ func TestChain_AllowContext_Cancelled(t *testing.T) {
 func TestErrorConstants(t *testing.T) {
 	assert.Equal(t, "ratelimit: limit exceeded", ErrLimitExceeded.Error())
 }
+
+// TestInvalidConfigDoesNotPanic keeps configuration-driven constructors from
+// panicking: NewSlidingWindow used make([]time.Time, 0, negative), which crashed
+// with "makeslice: cap out of range".
+func TestInvalidConfigDoesNotPanic(t *testing.T) {
+	assert.NotPanics(t, func() {
+		sw := NewSlidingWindow(-1, -time.Second)
+		assert.False(t, sw.Allow(), "a negative limit must deny requests instead of panicking")
+	})
+
+	assert.NotPanics(t, func() {
+		tb := NewTokenBucket(-1, -1)
+		assert.False(t, tb.Allow())
+	})
+}

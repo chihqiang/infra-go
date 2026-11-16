@@ -79,6 +79,13 @@ func normalize(c Config, opts ...Option) Config {
 
 // doRetry is the core retry logic.
 func doRetry(ctx context.Context, fn func(ctx context.Context) error, c Config) error {
+	if fn == nil {
+		return errors.New("retry: fn must not be nil")
+	}
+	if c.MaxRetries < 0 {
+		return fmt.Errorf("retry: max retries must not be negative: %d", c.MaxRetries)
+	}
+
 	var lastErr error
 	var delay time.Duration
 
@@ -156,5 +163,9 @@ func IsNoRetry(err error) bool {
 //
 //	retry.Attempts(c, retry.WithMaxRetries(0)) // 1
 func Attempts(c Config, opts ...Option) int {
-	return normalize(c, opts...).MaxRetries + 1
+	maxRetries := normalize(c, opts...).MaxRetries
+	if maxRetries < 0 {
+		return 0
+	}
+	return maxRetries + 1
 }

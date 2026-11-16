@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chihqiang/infra-go/core/ratelimit"
 	"github.com/chihqiang/infra-go/rest/handler"
@@ -105,8 +107,9 @@ func TestWithSignatureVerifiesBody(t *testing.T) {
 	})
 
 	request := httptest.NewRequest(http.MethodPost, "/orders", bytes.NewReader(body))
-	request.Header.Set(handler.HeaderTimestamp, "1700000000")
-	request.Header.Set(handler.HeaderSignature, handler.Sign(key, 1700000000, body))
+	timestamp := time.Now().Unix()
+	request.Header.Set(handler.HeaderTimestamp, strconv.FormatInt(timestamp, 10))
+	request.Header.Set(handler.HeaderSignature, handler.SignRequest(key, timestamp, request, body))
 	recorder := httptest.NewRecorder()
 	server.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusCreated {

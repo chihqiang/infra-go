@@ -11,7 +11,7 @@ import (
 
 func TestMaxBytesHandlerRejectsKnownOversizedBody(t *testing.T) {
 	called := false
-	handler := MaxBytesHandler(4)(func(http.ResponseWriter, *http.Request) {
+	handler := NewMaxBytesHandler(MaxBytesConfig{Enabled: true, Limit: 4}).Handle(func(http.ResponseWriter, *http.Request) {
 		called = true
 	})
 	recorder := httptest.NewRecorder()
@@ -33,7 +33,7 @@ func TestMaxBytesHandlerLimitsUnknownLengthBody(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString("12345"))
 	request.ContentLength = -1
 	var readErr error
-	handler := MaxBytesHandler(4)(func(_ http.ResponseWriter, r *http.Request) {
+	handler := NewMaxBytesHandler(MaxBytesConfig{Enabled: true, Limit: 4}).Handle(func(_ http.ResponseWriter, r *http.Request) {
 		_, readErr = io.ReadAll(r.Body)
 	})
 
@@ -51,7 +51,7 @@ func TestMaxBytesHandlerLimitsUnknownLengthBody(t *testing.T) {
 
 func TestMaxBytesHandlerDisablesNonpositiveLimit(t *testing.T) {
 	called := false
-	handler := MaxBytesHandler(0)(func(http.ResponseWriter, *http.Request) {
+	handler := NewMaxBytesHandler(MaxBytesConfig{Enabled: true, Limit: 0}).Handle(func(http.ResponseWriter, *http.Request) {
 		called = true
 	})
 

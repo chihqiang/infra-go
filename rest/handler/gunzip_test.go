@@ -25,7 +25,7 @@ func gzipBody(t *testing.T, text string) []byte {
 
 func TestGunzipHandlerDecompressesBody(t *testing.T) {
 	var got string
-	handlerFn := GunzipHandler(func(_ http.ResponseWriter, r *http.Request) {
+	handlerFn := NewGunzipHandler(GunzipConfig{Enabled: true}).Handle(func(_ http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Fatal(err)
@@ -44,7 +44,7 @@ func TestGunzipHandlerDecompressesBody(t *testing.T) {
 
 func TestGunzipHandlerPassesPlainBodies(t *testing.T) {
 	var got string
-	handlerFn := GunzipHandler(func(_ http.ResponseWriter, r *http.Request) {
+	handlerFn := NewGunzipHandler(GunzipConfig{Enabled: true}).Handle(func(_ http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		got = string(body)
 	})
@@ -58,7 +58,7 @@ func TestGunzipHandlerPassesPlainBodies(t *testing.T) {
 
 func TestGunzipHandlerRejectsInvalidGzip(t *testing.T) {
 	called := false
-	handlerFn := GunzipHandler(func(http.ResponseWriter, *http.Request) {
+	handlerFn := NewGunzipHandler(GunzipConfig{Enabled: true}).Handle(func(http.ResponseWriter, *http.Request) {
 		called = true
 	})
 
@@ -81,7 +81,7 @@ func TestGunzipHandlerRejectsInvalidGzip(t *testing.T) {
 func TestGunzipHandlerMatchesEncodingTokensCaseInsensitively(t *testing.T) {
 	for _, encoding := range []string{"GZIP", "x-gzip", "identity, Gzip"} {
 		var got string
-		handlerFn := GunzipHandler(func(_ http.ResponseWriter, r *http.Request) {
+		handlerFn := NewGunzipHandler(GunzipConfig{Enabled: true}).Handle(func(_ http.ResponseWriter, r *http.Request) {
 			body, _ := io.ReadAll(r.Body)
 			got = string(body)
 		})

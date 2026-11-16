@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
@@ -427,4 +428,151 @@ func TestServer_NodeID(t *testing.T) {
 	defer srv.Close()
 
 	assert.Equal(t, uint16(42), srv.NodeID())
+}
+
+// panicOpenHandler panics in OnOpen after joining a room.
+type panicOpenHandler struct{}
+
+func (h *panicOpenHandler) HandleOpen(conn *Conn)            { conn.Join("lobby"); panic("boom") }
+func (h *panicOpenHandler) HandleMessage(*Conn, int, []byte) {}
+func (h *panicOpenHandler) HandleClose(*Conn, error)         {}
+func (h *panicOpenHandler) HandleError(*Conn, error)         {}
+
+// TestServer_OnOpenPanicCleansUp is a regression test: the cleanup defer was
+// registered after HandleOpen, so an OnOpen panic leaked the connection entry, the
+// room membership and the heartbeat goroutine.
+func TestServer_OnOpenPanicCleansUp(t *testing.T) {
+	srv := newTestServer(&panicOpenHandler{})
+	defer srv.Close()
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	client := dialWs(t, wsURL(ts))
+	defer client.Close()
+
+	require.Eventually(t, func() bool { return srv.Count() == 0 }, 2*time.Second, 10*time.Millisecond,
+		"the connection must be unregistered after an OnOpen panic")
+	assert.Empty(t, srv.Room().GetClients("lobby"), "room membership must be removed")
+}
+
+// TestServer_HandlerPanicClosesConnection verifies that a panic in HandleMessage is
+// contained instead of escaping into net/http.
+func TestServer_HandlerPanicClosesConnection(t *testing.T) {
+	handler := NewEventHandler()
+	handler.Handle("explode", func(*Conn, json.RawMessage) { panic("boom") })
+	srv := newTestServer(handler)
+	defer srv.Close()
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	client := dialWs(t, wsURL(ts))
+	defer client.Close()
+	require.NoError(t, client.WriteMessage(gws.TextMessage, []byte(`{"type":"explode"}`)))
+
+	require.Eventually(t, func() bool { return srv.Count() == 0 }, 2*time.Second, 10*time.Millisecond)
+}
+
+// TestServer_CloseConnSendsCloseFrame is a regression test: Conn.Close only closed
+// the TCP socket, so clients saw 1006 abnormal closure instead of the close code.
+func TestServer_CloseConnSendsCloseFrame(t *testing.T) {
+	srv := newTestServer(&echoHandler{})
+	defer srv.Close()
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	client := dialWs(t, wsURL(ts))
+	defer client.Close()
+	require.Eventually(t, func() bool { return srv.Count() == 1 }, 2*time.Second, 10*time.Millisecond)
+
+	var id ConnID
+	srv.conns.Range(func(key, _ any) bool {
+		id = key.(ConnID)
+		return false
+	})
+	require.NoError(t, srv.CloseConn(id))
+
+	_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _, err := client.ReadMessage()
+	var closeErr *gws.CloseError
+	require.ErrorAs(t, err, &closeErr)
+	assert.Equal(t, gws.CloseNormalClosure, closeErr.Code)
+}
+
+// TestServer_NormalCloseDoesNotCallOnError verifies that a client-initiated normal
+// close reaches OnClose (with a nil reason) and not OnError.
+func TestServer_NormalCloseDoesNotCallOnError(t *testing.T) {
+	handler := NewEventHandler()
+	closed := make(chan error, 1)
+	errs := make(chan error, 1)
+	handler.OnClose(func(_ *Conn, err error) { closed <- err })
+	handler.OnError(func(_ *Conn, err error) { errs <- err })
+
+	srv := newTestServer(handler)
+	defer srv.Close()
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	client := dialWs(t, wsURL(ts))
+	defer client.Close()
+
+	require.NoError(t, client.WriteMessage(gws.CloseMessage, gws.FormatCloseMessage(gws.CloseNormalClosure, "bye")))
+	// Complete the closing handshake so the read side can finish.
+	_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _, _ = client.ReadMessage()
+
+	select {
+	case err := <-closed:
+		assert.NoError(t, err, "HandleClose must receive a nil reason for a normal close")
+	case <-time.After(2 * time.Second):
+		t.Fatal("HandleClose was not called")
+	}
+	select {
+	case err := <-errs:
+		t.Fatalf("HandleError must not be called for a normal close: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// TestServer_DefaultCheckOriginRejectsCrossOrigin is a regression test: the default
+// CheckOrigin returned true, which allowed Cross-Site WebSocket Hijacking.
+func TestServer_DefaultCheckOriginRejectsCrossOrigin(t *testing.T) {
+	srv := newTestServer(&echoHandler{})
+	defer srv.Close()
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	dialer := gws.Dialer{HandshakeTimeout: 2 * time.Second}
+	header := http.Header{}
+	header.Set("Origin", "https://evil.example")
+	conn, resp, err := dialer.Dial(wsURL(ts), header)
+	if conn != nil {
+		_ = conn.Close()
+	}
+	require.Error(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+
+	// Same-origin handshakes keep working.
+	header.Set("Origin", ts.URL)
+	conn, resp, err = dialer.Dial(wsURL(ts), header)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	_ = conn.Close()
+}
+
+// TestNewConfigClampsNonPositiveHeartbeat is a regression test: a negative
+// PingInterval survived fillDefault and time.NewTicker panicked inside the
+// heartbeat goroutine, killing the process.
+func TestNewConfigClampsNonPositiveHeartbeat(t *testing.T) {
+	srv, err := New(Config{PingInterval: -time.Second, PingTimeout: -time.Second}, &echoHandler{})
+	require.NoError(t, err)
+	defer srv.Close()
+
+	assert.Equal(t, 25*time.Second, srv.Config().PingInterval)
+	assert.Equal(t, 60*time.Second, srv.Config().PingTimeout)
 }

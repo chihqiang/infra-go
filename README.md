@@ -26,6 +26,8 @@ when you need a database or Redis:
 package main
 
 import (
+    "errors"
+    "io/fs"
     "net/http"
 
     "github.com/chihqiang/infra-go/core/conf"
@@ -37,8 +39,8 @@ import (
 // Configuration: json tags declare defaults and constraints; conf can load it from a file or
 // from environment variables
 type Config struct {
-    // Server settings (host/port/timeouts/middleware switches) live in rest.Config;
-    // its json tags supply the defaults used when config.yaml is absent
+    // Server, logger and middleware settings live in rest.Config; its json tags
+    // supply the defaults for fields missing from the config file
     HTTP rest.Config `json:"http"`
 }
 
@@ -55,20 +57,21 @@ func (r *helloRequest) Validate() error {
 }
 
 func main() {
-    // 1. Global logging (initialised first); Sync flushes the buffer before exit
-    logger.SetGlobal(logger.New(logger.Config{
-        Level:   logger.InfoLevel,
-        AppName: "demo",
-    }))
-    defer logger.Sync()
-
-    // 2. Configuration loading: defaults / JSON and YAML / environment variable expansion
+    // 1. Configuration loading: defaults / JSON and YAML / environment variable expansion.
+    // conf.Load reports a missing file as an error; treat that case as "use the
+    // struct defaults" so the quick start runs without a config file.
     var cfg Config
     if err := conf.Load("config.yaml", &cfg, conf.UseEnv()); err != nil {
-        logger.Fatal("load config failed", logger.Err(err))
+        if !errors.Is(err, fs.ErrNotExist) {
+            logger.Fatal("load config failed", logger.Err(err))
+        }
+        if err := conf.FillDefault(&cfg); err != nil {
+            logger.Fatal("fill config defaults failed", logger.Err(err))
+        }
     }
 
-    // 3. HTTP service: recovery + request ID + access log are on by default
+    // 2. HTTP service: NewServer configures the global logger from cfg.HTTP.Logger;
+    //    recovery + request ID + access log are on by default
     server, err := rest.NewServer(cfg.HTTP)
     if err != nil {
         logger.Fatal("create server failed", logger.Err(err))
@@ -87,15 +90,16 @@ func main() {
         }),
     })
 
-    // 4. Lifecycle orchestration: service.AsService adapts *rest.Server into a Service,
-    //    starting and stopping everything concurrently
+    // 3. Lifecycle orchestration: Register adds the HTTP server, logger sync and
+    //    trace agent service (when configured) to the group
     sg := service.NewServiceGroup()
-    sg.Add(service.AsService(server))
+    server.Register(sg)
     sg.Start()
 }
 ```
 
-Together with `config.yaml` (optional; the struct defaults are used when it is absent):
+Together with `config.yaml` (optional in this example, because the code above falls back to the
+struct defaults when the file does not exist):
 
 ```yaml
 http:
@@ -111,16 +115,16 @@ The documentation of each module is maintained centrally in
 | Module | Description |
 | ------ | ------ |
 | [conf](./skills/infra-go-usage/references/conf.md) | Configuration parsing with JSON/YAML support, defaults, environment variables and parameter validation |
-| [logger](./skills/infra-go-usage/references/logger.md) | Logging wrapper built on zap + lumberjack with rolling log files |
+| [logger](./skills/infra-go-usage/references/logger.md) | Structured logger with JSON/console encoding and rolling log files |
 | [orm](./skills/infra-go-usage/references/orm.md) | ORM wrapper built on gorm, supporting MySQL/PostgreSQL/SQLite |
 | [redisx](./skills/infra-go-usage/references/redisx.md) | Redis client wrapper: connection pool, health check, distributed lock |
 | [cache](./skills/infra-go-usage/references/cache.md) | Unified cache interface with two implementations: in-memory (LRU eviction, hit-rate statistics) and Redis (protection against cache breakdown and penetration) |
-| [rest](./skills/infra-go-usage/references/rest.md) | HTTP toolkit: config (`Config`), method-aware routing, route groups, middleware chain, request binding and graceful shutdown. Handlers live in `rest/handler` (recovery, request ID, tracing, access log, concurrency/timeout/body limits, gzip, breaker, rate limit, JWT auth, body signature) as `chain.Middleware`, so they can be reused outside a `rest.Server`; binding is exposed as `rest.Bind*`, and JSON/XML responses plus the `code/msg/data` envelope live in `rest` itself (`OkJSON` / `JSONBaseResponse` / `Error`); CORS comes from `rest.WithCORS` |
-| [ratelimit](./skills/infra-go-usage/references/ratelimit.md) | Rate limiters: token bucket/sliding window with in-memory and Redis backends. HTTP integration is `rest/handler.RateLimitHandler` |
+| [rest](./skills/infra-go-usage/references/rest.md) | HTTP toolkit: config (`Config`), method-aware routing, route groups, middleware chain, request binding and graceful shutdown. Handlers live in `rest/handler` (recovery, request ID, tracing, access log, concurrency/timeout/body limits, gzip, breaker, rate limit, JWT auth, body signature) as structs with a `Config` and a `Handle` method, so they can be reused outside a `rest.Server`; binding is exposed as `rest.Bind*`, and JSON/XML responses plus the `code/msg/data` envelope live in `rest` itself (`OkJSON` / `JSONBaseResponse` / `Error`); CORS comes from `rest.WithCORS` |
+| [ratelimit](./skills/infra-go-usage/references/ratelimit.md) | Rate limiters: token bucket/sliding window with in-memory and Redis backends. HTTP integration is `rest/handler.NewRateLimitHandler` |
 | [breaker](./skills/infra-go-usage/references/breaker.md) | Circuit breaker using the Google SRE algorithm: fail fast, degrade and prevent cascading failures |
 | [retry](./skills/infra-go-usage/references/retry.md) | Retry mechanism: exponential backoff, fixed delay and jitter |
 | [hash](./skills/infra-go-usage/references/hash.md) | Hashing and encryption: MD5/SHA/Bcrypt/HMAC, AES-GCM encryption, HMAC signing/verification |
-| [trace](./skills/infra-go-usage/references/trace.md) | Tracing built on OpenTelemetry: agent / span management / gRPC and HTTP header propagation / attribute helpers. HTTP server instrumentation is `rest/handler.TraceHandler` |
+| [trace](./skills/infra-go-usage/references/trace.md) | Tracing built on OpenTelemetry: agent / span management / gRPC and HTTP header propagation / attribute helpers. HTTP server instrumentation is `rest/handler.NewTraceHandler` |
 | [mapping](./skills/infra-go-usage/references/mapping.md) | map → struct deserialisation with a struct tag parsing engine |
 | [cast](./skills/infra-go-usage/references/cast.md) | Type-safe conversion covering basic types, time, slices and generics |
 | [syncx](./skills/infra-go-usage/references/syncx.md) | Concurrency helpers: SingleFlight/ConcurrentMap/Semaphore |
@@ -134,10 +138,11 @@ The documentation of each module is maintained centrally in
 
 - **Consistent style**: all modules use English comments, English error messages and
   functional option configuration
-- **Controlled dependencies**: modules are imported independently, and modules you do not use
-  **never** enter your `go.mod` / `go.sum` (Go 1.17+ module graph pruning). The lightweight
-  toolkits (`cast` / `stringx` / `syncx` / `retry` / `mapping`) have zero third-party
-  dependencies
+- **Controlled dependencies**: packages are imported independently, so unused packages are not
+  compiled into the binary. The lightweight toolkits (`cast` / `stringx` / `syncx` / `retry` /
+  `mapping`) have zero third-party dependencies; the HTTP stack (`rest`) does depend on the
+  tracing, JWT, validation and rate-limiting packages it integrates with (OpenTelemetry, gRPC,
+  go-redis), so a `rest` service pulls those into its build graph
 - **Type safety**: generics are used extensively (`BaseResponse[T]`, `cast.To[T]`)
 - **Testable**: every module has complete unit tests and supports `-race` detection
 - **Dependency governance**: the dependency baseline is maintained centrally and upgraded
@@ -196,7 +201,7 @@ Both are MIT licensed; infra-go carries an independent implementation, but the a
 clearly theirs:
 
 - **go-zero** — `rest`, `rest/chain`, `rest/handler`, `rest/router`, `rest/token` and the
-  middleware naming (`RecoverHandler`, `MaxBytesHandler`, `TimeoutHandler`, ...)
+  middleware naming (`RecoveryHandler`, `MaxBytesHandler`, `TimeoutHandler`, ...)
 - **gin** — `rest/internal/binding`: `Binding`/`Default`, form/query/header mapping and
   validator integration
 

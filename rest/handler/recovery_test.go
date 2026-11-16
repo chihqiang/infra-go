@@ -7,7 +7,7 @@ import (
 )
 
 func TestRecoverHandlerReturnsInternalServerError(t *testing.T) {
-	handler := RecoverHandler(func(http.ResponseWriter, *http.Request) {
+	handler := NewRecoveryHandler(RecoveryConfig{Enabled: true}).Handle(func(http.ResponseWriter, *http.Request) {
 		panic("handler failure")
 	})
 	recorder := httptest.NewRecorder()
@@ -23,7 +23,7 @@ func TestRecoverHandlerReturnsInternalServerError(t *testing.T) {
 }
 
 func TestRecoverHandlerPreservesAbortHandler(t *testing.T) {
-	handler := RecoverHandler(func(http.ResponseWriter, *http.Request) {
+	handler := NewRecoveryHandler(RecoveryConfig{Enabled: true}).Handle(func(http.ResponseWriter, *http.Request) {
 		panic(http.ErrAbortHandler)
 	})
 

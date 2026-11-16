@@ -12,10 +12,27 @@ const (
 	encodingGzip          = "gzip"
 )
 
-// GunzipHandler transparently decompresses gzip-encoded request bodies. Place it
-// before MaxBytesHandler so the body limit is applied to the decompressed data
-// instead of the (possibly tiny) compressed payload.
-func GunzipHandler(next http.HandlerFunc) http.HandlerFunc {
+// GunzipConfig configures GunzipHandler.
+type GunzipConfig struct {
+	Enabled bool `json:",optional"`
+}
+
+// GunzipHandler transparently decompresses gzip-encoded request bodies.
+type GunzipHandler struct {
+	config GunzipConfig
+}
+
+// NewGunzipHandler creates a GunzipHandler.
+func NewGunzipHandler(config GunzipConfig) *GunzipHandler {
+	return &GunzipHandler{config: config}
+}
+
+// Handle wraps next with gzip request decompression.
+func (h *GunzipHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
+	if !h.config.Enabled {
+		return next
+	}
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !isGzipEncoding(r.Header.Get(headerContentEncoding)) {
 			next(w, r)
@@ -39,8 +56,6 @@ func GunzipHandler(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // isGzipEncoding reports whether the Content-Encoding header contains gzip.
-// Values are matched case-insensitively and as comma-separated tokens so
-// "GZIP" and "gzip, identity" are recognised.
 func isGzipEncoding(value string) bool {
 	for _, part := range strings.Split(value, ",") {
 		switch strings.ToLower(strings.TrimSpace(part)) {

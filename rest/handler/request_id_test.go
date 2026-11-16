@@ -11,7 +11,7 @@ import (
 
 func TestRequestIDHandlerPreservesSafeID(t *testing.T) {
 	const requestID = "client-request_42.v1"
-	handler := RequestIDHandler(func(w http.ResponseWriter, r *http.Request) {
+	handler := NewRequestIDHandler(RequestIDConfig{Enabled: true}).Handle(func(w http.ResponseWriter, r *http.Request) {
 		id, ok := RequestIDFromContext(r.Context())
 		if !ok || id != requestID {
 			t.Errorf("context request ID = %q, %t; want %q, true", id, ok, requestID)
@@ -34,7 +34,7 @@ func TestRequestIDHandlerGeneratesIDForMissingOrInvalidValue(t *testing.T) {
 		request.Header.Set(RequestIDHeader, incoming)
 		recorder := httptest.NewRecorder()
 
-		RequestIDHandler(func(w http.ResponseWriter, r *http.Request) {
+		NewRequestIDHandler(RequestIDConfig{Enabled: true}).Handle(func(w http.ResponseWriter, r *http.Request) {
 			id, ok := RequestIDFromContext(r.Context())
 			if !ok || id != w.Header().Get(RequestIDHeader) {
 				t.Errorf("context ID = %q, %t; response ID = %q", id, ok, w.Header().Get(RequestIDHeader))

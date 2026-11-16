@@ -37,7 +37,7 @@ type User struct {
 func main() {
     // SQLite in-memory database (good for development and testing)
     db := orm.MustNewSQLite(orm.Config{
-        Database: ":memory:",
+        Database: "", // isolated in-memory database; prefer this over ":memory:"
     })
 
     // automatic migration
@@ -187,7 +187,7 @@ db, err := orm.NewPostgres(orm.Config{
 ```go
 // in-memory database (good for testing)
 db, err := orm.NewSQLite(orm.Config{
-    Database: ":memory:",
+    Database: "", // isolated in-memory database
 })
 
 // file database
@@ -227,8 +227,8 @@ import (
 func main() {
     // initialize the global logger
     l := logger.New(logger.Config{
-        Level:   logger.InfoLevel,
-        AppName: "myapp",
+        Level:   "info",
+        ServiceName: "myapp",
     })
     logger.SetGlobal(l)
     // The ILogger interface has no Close (Close is only on the concrete *Logger type);
@@ -302,8 +302,8 @@ type User struct {
 func main() {
     // initialize logging
     logInstance := logger.New(logger.Config{
-        Level:   logger.InfoLevel,
-        AppName: "demo",
+        Level:   "info",
+        ServiceName: "demo",
     })
     logger.SetGlobal(logInstance)
     // The ILogger interface has no Close (Close is only on the concrete *Logger type);

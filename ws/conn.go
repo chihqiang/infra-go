@@ -196,6 +196,14 @@ func (c *Conn) Close() error {
 		return nil
 	}
 	close(c.done)
+
+	// Best-effort close handshake: without a Close frame the client only sees
+	// 1006 abnormal closure. WriteControl may be called concurrently with the
+	// other write methods (gorilla documents this), so no c.mu is needed.
+	deadline := time.Now().Add(time.Second)
+	_ = c.ws.WriteControl(gws.CloseMessage,
+		gws.FormatCloseMessage(gws.CloseNormalClosure, ""), deadline)
+
 	c.mu.Lock()
 	err := c.ws.Close()
 	c.mu.Unlock()

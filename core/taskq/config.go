@@ -33,6 +33,11 @@ type Config struct {
 	// DefaultMaxRetry is the default maximum number of retries, 25 by default.
 	// This field cannot express "no retry": 0 is treated as unset and filled with 25.
 	// Use WithDefaultMaxRetry(0) when no retry is wanted.
+	//
+	// With asynq's default exponential backoff, 25 retries keep a permanently
+	// failing task alive for roughly 25 days. Return (a wrapped) SkipRetry from a
+	// handler for permanent failures, tune RetryDelayFunc to cap the delay, or set
+	// this field to a smaller value.
 	DefaultMaxRetry int `json:",default=25"`
 	// DefaultTimeout is the default task timeout, 30 minutes by default.
 	//
@@ -44,6 +49,18 @@ type Config struct {
 	DefaultTimeout time.Duration `json:",default=30m"`
 	// DefaultQueue is the default queue name, "default" by default.
 	DefaultQueue string `json:",default=default"`
+
+	// IsFailure decides whether a handler error counts as a failure; nil keeps
+	// asynq's default (every non-nil error is a failure). Returning false keeps the
+	// retry counter and queue error statistics unchanged.
+	IsFailure func(error) bool `json:"-"`
+	// RetryDelayFunc customizes the retry backoff. Nil uses asynq's default
+	// exponential backoff (DefaultRetryDelayFunc); wrap it to cap the delay.
+	RetryDelayFunc RetryDelayFunc `json:"-"`
+	// StrictPriority processes queues strictly by priority instead of weighted
+	// round-robin: a lower-priority queue is only served once higher-priority
+	// queues are empty. Defaults to false (weighted).
+	StrictPriority bool `json:",optional"`
 }
 
 // Option overrides a configuration entry; it is used to express explicit zero
@@ -101,6 +118,15 @@ func fillDefault(cfg Config, opts ...Option) Config {
 	}
 	if cfg.DefaultQueue != "" {
 		c.DefaultQueue = cfg.DefaultQueue
+	}
+	if cfg.IsFailure != nil {
+		c.IsFailure = cfg.IsFailure
+	}
+	if cfg.RetryDelayFunc != nil {
+		c.RetryDelayFunc = cfg.RetryDelayFunc
+	}
+	if cfg.StrictPriority {
+		c.StrictPriority = true
 	}
 
 	// Options are applied last: they may override the "zero means unset" results

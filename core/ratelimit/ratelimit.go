@@ -42,7 +42,17 @@ type TokenBucket struct {
 // rate is the number of tokens generated per second and burst is the bucket capacity.
 // For example, NewTokenBucket(100, 200) generates 100 tokens per second and stores at most
 // 200 of them.
+//
+// Negative values are clamped to 0: a negative rate never refills and a negative
+// capacity cannot hold tokens, so such a bucket denies every request. The
+// constructor does not panic on configuration input.
 func NewTokenBucket(rate float64, burst float64) *TokenBucket {
+	if rate < 0 {
+		rate = 0
+	}
+	if burst < 0 {
+		burst = 0
+	}
 	return &TokenBucket{
 		rate:       rate,
 		burst:      burst,
@@ -130,7 +140,17 @@ type SlidingWindow struct {
 // NewSlidingWindow creates a sliding window rate limiter.
 // limit is the maximum number of requests within the window and window is the window size.
 // For example, NewSlidingWindow(100, time.Second) allows at most 100 requests per second.
+//
+// A negative limit is clamped to 0 (deny every request) instead of panicking in
+// make([]time.Time, 0, limit); a negative window is clamped to 0, which lets
+// records leave the window immediately.
 func NewSlidingWindow(limit int, window time.Duration) *SlidingWindow {
+	if limit < 0 {
+		limit = 0
+	}
+	if window < 0 {
+		window = 0
+	}
 	return &SlidingWindow{
 		limit:    limit,
 		window:   window,
