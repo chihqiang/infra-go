@@ -110,6 +110,12 @@ type Config struct {
     MaxHeaderBytes  int           `json:",default=1048576"`
     Logger          logger.Config
     Middlewares     MiddlewaresConf
+    Health          HealthConfig
+}
+
+type HealthConfig struct {
+    Enabled bool   `json:",optional"`          // register the endpoint, default false
+    Path    string `json:",optional"`          // static path; "/health" when Enabled and empty
 }
 
 type MiddlewaresConf struct {
@@ -127,6 +133,23 @@ type MiddlewaresConf struct {
     Signature resthandler.SignatureConfig
 }
 ```
+
+### Health endpoint
+
+The built-in health route is disabled by default, so an application that already exposes
+`/health` is unaffected. Enable it for liveness/readiness probes:
+
+```go
+server, err := rest.NewServer(rest.Config{
+    Health: rest.HealthConfig{Enabled: true, Path: "/healthz"}, // empty Path becomes /health
+})
+```
+
+It registers `GET <Path>` (HEAD is served by the same pattern) and responds with
+`200 {"status":"ok"}`. The path must be static: `/`, a trailing slash, whitespace, query strings
+and wildcards are rejected with `rest.ErrInvalidHealthPath`, because `/` and a trailing slash turn
+the ServeMux pattern into a subtree that shadows other handlers. Do not register the same path
+again yourself; `http.ServeMux` panics on duplicate patterns.
 
 In a business service, embed this struct in the application config instead of giving it its own
 field; `core/conf` / `core/mapping` flatten embedded structs, so the server keys stay at the top
