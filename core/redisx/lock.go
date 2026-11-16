@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chihqiang/infra-go/core/logger"
@@ -30,18 +31,23 @@ const (
 
 // Lock is a distributed lock.
 // It is built on Redis SET NX EX and supports automatic renewal and safe release.
-// The ctx field stores the context used to acquire the lock; it controls the lifetime
-// of the renewal goroutine and prevents a goroutine leak when the caller forgets to
-// call Unlock.
+//
+// Renewal is independent of the context used to acquire the lock: cancelling a
+// request context after a successful TryLock must not stop renewing a lock that is
+// still protecting a critical section. The renewal goroutine runs until Unlock is
+// called, so callers must release the lock.
 type Lock struct {
 	client    *Client
 	key       string
 	token     string
 	ttl       time.Duration
 	done      chan struct{}
-	doneOnce  sync.Once // ensures done is closed only once
+	doneOnce  sync.Once // ensures the renewal goroutine is stopped only once
 	autoRenew bool
-	ctx       context.Context // lifetime control of the renewal goroutine
+	cancel    context.CancelFunc // stops the renewal goroutine
+	lost      chan struct{}      // closed when the lock is no longer owned
+	lostOnce  sync.Once
+	lostFlag  atomic.Bool
 }
 
 // LockOption is a lock option.
@@ -91,8 +97,10 @@ func (c *Client) Locker(key string, ttl time.Duration, opts ...LockOption) *Lock
 
 // TryLock tries to acquire the lock and returns an error immediately if it is already
 // held.
-// The ctx passed in controls the lifetime of the automatic renewal goroutine: when ctx
-// is cancelled the renewal goroutine stops automatically, preventing leaks.
+//
+// ctx controls only the acquisition. With WithAutoRenew the lock keeps being renewed
+// until Unlock is called (or the lock is lost), even if ctx is cancelled meanwhile;
+// callers must Unlock to stop the renewal goroutine.
 //
 // An invalid TTL (<= 0, or below 1ms after being overridden by WithTTL) returns
 // ErrInvalidLockTTL without writing to Redis, avoiding a lock that never expires or a
@@ -131,12 +139,16 @@ func (la *LockAcquirer) TryLock(ctx context.Context) (*Lock, error) {
 		ttl:       lc.ttl,
 		done:      make(chan struct{}),
 		autoRenew: lc.autoRenew,
-		ctx:       ctx,
+		lost:      make(chan struct{}),
 	}
 
-	// Start automatic renewal
+	// Automatic renewal uses its own lifetime, not the caller's ctx: a cancelled
+	// request context must not turn a still-running critical section into an
+	// unprotected one.
 	if lock.autoRenew {
-		go lock.renewLoop()
+		renewCtx, cancel := context.WithCancel(context.Background())
+		lock.cancel = cancel
+		go lock.renewLoop(renewCtx)
 	}
 
 	return lock, nil
@@ -172,15 +184,10 @@ func (la *LockAcquirer) Lock(ctx context.Context, retryInterval time.Duration) (
 	}
 }
 
-// Unlock releases the lock.
+// Unlock releases the lock and stops automatic renewal.
 // A Lua script ensures that only the owner of the lock can release it.
 func (l *Lock) Unlock(ctx context.Context) error {
-	// Stop automatic renewal (guarded by sync.Once to avoid a double close panic)
-	l.doneOnce.Do(func() {
-		if l.autoRenew {
-			close(l.done)
-		}
-	})
+	l.stopRenew()
 
 	// Lua script: delete only when the token matches
 	const unlockScript = `
@@ -205,6 +212,47 @@ func (l *Lock) Unlock(ctx context.Context) error {
 	return nil
 }
 
+// stopRenew stops the renewal goroutine. It is idempotent.
+func (l *Lock) stopRenew() {
+	l.doneOnce.Do(func() {
+		if l.cancel != nil {
+			l.cancel()
+		}
+		if l.autoRenew {
+			close(l.done)
+		}
+	})
+}
+
+// Lost is closed when renewal discovers that this process no longer owns the lock
+// (it expired and was taken, or the key was deleted). It is only meaningful with
+// WithAutoRenew; without renewal it never closes.
+func (l *Lock) Lost() <-chan struct{} {
+	if l == nil {
+		return nil
+	}
+	return l.lost
+}
+
+// IsLost reports whether Lost has been closed.
+func (l *Lock) IsLost() bool {
+	return l != nil && l.lostFlag.Load()
+}
+
+// markLost publishes that the lock is no longer owned. A normal Unlock closes done
+// first, and a renewal racing with it must not report a lost lock.
+func (l *Lock) markLost() {
+	select {
+	case <-l.done:
+		return
+	default:
+	}
+	l.lostOnce.Do(func() {
+		l.lostFlag.Store(true)
+		close(l.lost)
+	})
+}
+
 // validateLockTTL checks whether the lock TTL is usable.
 // A TTL <= 0 is treated by Redis as "never expires" and time.NewTicker(ttl/3) would
 // panic; a TTL < 1ms is truncated to 0 by the millisecond rounding of the renew
@@ -219,9 +267,9 @@ func validateLockTTL(ttl time.Duration) error {
 // renewLoop is the background automatic renewal loop.
 // On a renewal failure it logs and keeps trying: a transient failure should not
 // abandon renewal, otherwise the lock would be released early when the TTL expires and
-// the critical section would lose its mutual exclusion. When ctx is cancelled (e.g. the
-// caller forgot to call Unlock) the renewal goroutine exits as well, preventing a leak.
-func (l *Lock) renewLoop() {
+// the critical section would lose its mutual exclusion. ctx is the internal lifetime of
+// the lock (cancelled by Unlock), not the context used to acquire it.
+func (l *Lock) renewLoop(ctx context.Context) {
 	// TryLock has already validated the TTL; this is a safety net so that NewTicker
 	// never receives a non-positive value and panics.
 	interval := l.ttl / 3
@@ -244,9 +292,7 @@ func (l *Lock) renewLoop() {
 		select {
 		case <-l.done:
 			return
-		case <-l.ctx.Done():
-			// context cancelled (the caller forgot Unlock or the request timed out), stop
-			// renewing
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			ctx, cancel := context.WithTimeout(context.Background(), defaultRenewTimeout)
@@ -263,7 +309,9 @@ func (l *Lock) renewLoop() {
 					logger.Err(err))
 			case result == int64(0):
 				// The Lua script returning 0 means the token does not match: another client
-				// holds the lock, so stop renewing.
+				// holds the lock (or the key was deleted). Stop renewing and notify the
+				// owner through Lost.
+				l.markLost()
 				return
 			}
 		}
@@ -281,11 +329,13 @@ func generateToken() (string, error) {
 
 // --- Convenience helpers ---
 
-// SetNXWithLock runs a function under a distributed lock.
-// fn runs after the lock is acquired and the lock is released automatically once it
-// returns. A failed acquisition returns ErrLockNotAcquired.
+// SetNXWithLock runs a function under a distributed lock with automatic renewal, so
+// fn may run longer than ttl without losing mutual exclusion. The lock is released
+// automatically once fn returns. A failed acquisition returns ErrLockNotAcquired; if
+// the lock is lost while fn runs (the key was deleted or taken over), the returned
+// error contains ErrLockLost.
 func (c *Client) SetNXWithLock(ctx context.Context, key string, ttl time.Duration, fn func(ctx context.Context) error) error {
-	lock, err := c.Locker(key, ttl).TryLock(ctx)
+	lock, err := c.Locker(key, ttl, WithAutoRenew()).TryLock(ctx)
 	if err != nil {
 		return err
 	}
@@ -295,7 +345,14 @@ func (c *Client) SetNXWithLock(ctx context.Context, key string, ttl time.Duratio
 		_ = lock.Unlock(context.Background())
 	}()
 
-	return fn(ctx)
+	fnErr := fn(ctx)
+	if lock.IsLost() {
+		if fnErr != nil {
+			return errors.Join(fnErr, ErrLockLost)
+		}
+		return ErrLockLost
+	}
+	return fnErr
 }
 
 // IsLockNotAcquired reports whether the error means the lock was not acquired.

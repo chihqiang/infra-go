@@ -84,8 +84,45 @@ type Config struct {
     DefaultMaxRetry int           // default max retries, default 25
     DefaultTimeout  time.Duration // default task timeout, default 30m
     DefaultQueue    string        // default queue name, default "default"
+
+    StrictPriority bool                        // strict queue priority (default false: weighted)
+    IsFailure      func(error) bool            // nil: every non-nil error is a failure
+    RetryDelayFunc taskq.RetryDelayFunc        // nil: asynq's exponential backoff
 }
 ```
+
+### Retry policy
+
+`Config.DefaultMaxRetry` (25 by default) is applied through `asynq.MaxRetry`. With asynq's
+default exponential backoff a permanently failing task stays in the queue for roughly **25
+days** (`sum(n^4+15)` over 25 attempts). Tune the policy instead of relying on the default:
+
+```go
+cfg := taskq.Config{
+    DefaultMaxRetry: 5, // fail fast for transient workloads
+    IsFailure: func(err error) bool {
+        // context cancellation during shutdown is expected, not a failure
+        return !errors.Is(err, context.Canceled)
+    },
+    RetryDelayFunc: func(n int, err error, t *asynq.Task) time.Duration {
+        // cap the default backoff at one minute
+        return min(taskq.DefaultRetryDelayFunc(n, err, t), time.Minute)
+    },
+    StrictPriority: true, // highest-priority queue is always served first
+}
+```
+
+Handlers should return a wrapped `taskq.SkipRetry` for permanent failures (invalid payload,
+business validation) so asynq archives the task instead of retrying it:
+
+```go
+if err := validate(task); err != nil {
+    return fmt.Errorf("invalid payload: %w", taskq.SkipRetry)
+}
+```
+
+`taskq.SkipRetry`, `taskq.RetryDelayFunc` and `taskq.DefaultRetryDelayFunc` are re-exports, so
+the asynq package is not required in application code.
 
 ### Zero values Config cannot express: `DefaultMaxRetry = 0`
 

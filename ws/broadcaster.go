@@ -54,6 +54,9 @@ func (b *Broadcaster) write(messageType int, data []byte) error {
 		}
 		if err := conn.WriteMessage(messageType, data); err != nil {
 			errs = append(errs, fmt.Sprintf("conn %d: %v", fd, err))
+			// Evict the broken connection so it does not stay in the room and make
+			// every later broadcast fail again.
+			_ = conn.Close()
 			continue
 		}
 		sent++

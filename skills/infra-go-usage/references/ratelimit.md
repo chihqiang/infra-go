@@ -4,7 +4,7 @@ Rate limiter implementations with two storage backends, in-memory and Redis: tok
 bucket, sliding window, concurrency limit, and chained limiting — freely interchangeable.
 
 > The **HTTP rate limiting middleware** lives in `rest/handler` as
-> `resthandler.RateLimitHandler`, and is registered conveniently via `rest.WithRateLimit`.
+> `resthandler.NewRateLimitHandler`, and is registered conveniently via `rest.WithRateLimit`.
 > This package only provides the `Limiter` types.
 
 ## Features
@@ -83,15 +83,25 @@ if chain.Allow() { /* both limiters passed */ }
 
 ## HTTP rate limiting middleware
 
-`rest/handler.RateLimitHandler(limiter)` wraps any `Limiter` from this package into a
-`chain.Middleware`, and `rest.WithRateLimit(limiter)` mounts it at server level:
+`rest/handler.NewRateLimitHandler(RateLimitConfig{Enabled: true, Limiter: limiter})` wraps any
+`Limiter` from this package. The server can mount it from its middleware config, which keeps the
+dependency in one place:
 
 ```go
 import resthandler "github.com/chihqiang/infra-go/rest/handler"
 
-server, _ := rest.NewServer(conf, rest.WithRateLimit(ratelimit.NewTokenBucket(100, 200)))
+conf := rest.DefaultConfig()
+conf.Middlewares.RateLimit = resthandler.RateLimitConfig{
+    Enabled: true,
+    Limiter: ratelimit.NewTokenBucket(100, 200),
+}
+server, _ := rest.NewServer(conf)
+
 // or mount it manually to control ordering
-server.Use(resthandler.RateLimitHandler(ratelimit.NewSlidingWindow(10, time.Minute)))
+server.Use(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
+	Enabled: true,
+	Limiter: ratelimit.NewSlidingWindow(10, time.Minute),
+}).Handle)
 ```
 
 Behaviour:
@@ -102,7 +112,7 @@ Behaviour:
   Limiters without a hint omit the header instead of inventing a value
 - The limiter is called through `AllowContext`, so Redis limiters get request-context control
 - A limiter **error** produces **503 Service Unavailable** and skips the handler; use
-  `MaxConnsHandler` alongside it if you prefer capacity-based rejection
+  `NewMaxConnsHandler` alongside it if you prefer capacity-based rejection
 - A nil limiter disables the middleware entirely (no panic)
 
 | Limiter | Meaning of `RetryAfter()` |
@@ -122,13 +132,16 @@ Retry-After: 2
 
 ```go
 limiter := ratelimit.NewTokenBucket(100, 200)
-handler := resthandler.RateLimitHandler(limiter)(apiHandler)
+handler := resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
+	Enabled: true,
+	Limiter: limiter,
+}).Handle(apiHandler)
 http.ListenAndServe(":8080", handler)
 ```
 
 ### Per-user / per-IP fine-grained limiting
 
-`resthandler.RateLimitHandler` is a global limiter (the whole service shares one instance). When you
+`resthandler.NewRateLimitHandler` is a global limiter (the whole service shares one instance). When you
 need independent counters per user, IP, route, and so on, build a limiter from a dimension key
 and wrap it yourself (get the client IP with `rest.ClientIP`, which already handles reverse
 proxies/XFF — do not hand-roll `net.SplitHostPort`):
@@ -235,3 +248,10 @@ if !ok { /* rate limited */ }
 | Error | Description |
 |------|------|
 | `ErrLimitExceeded` | Defined but **currently returned by no limiter**; when throttled, `Allow`/`AllowContext` return `false` (with a nil error), and a non-nil error only appears when Redis or the ctx fails |
+
+## Invalid configuration
+
+`NewTokenBucket` / `NewSlidingWindow` (and their Redis variants) clamp negative
+`rate`, `burst` and `limit` values instead of panicking: a negative limit becomes
+`0` (deny every request) and a negative rate/capacity behaves like `0`. A zero
+window lets records leave the window immediately.

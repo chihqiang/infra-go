@@ -105,9 +105,21 @@ func overrideNonZeroFields(target any, overrides any) error {
 	return overrideStructFields(targetVal, overrideVal, targetType)
 }
 
+// maxOverrideDepth bounds the recursive merge. A self-referential pointer graph
+// (node.Node = node) would otherwise recurse until the goroutine stack overflows.
+const maxOverrideDepth = 64
+
 // overrideStructFields recursively walks struct fields, overriding target with
 // overrides' non-zero values.
 func overrideStructFields(target, overrides reflect.Value, structType reflect.Type) error {
+	return overrideStructFieldsDepth(target, overrides, structType, 0)
+}
+
+// overrideStructFieldsDepth is overrideStructFields with an explicit depth counter.
+func overrideStructFieldsDepth(target, overrides reflect.Value, structType reflect.Type, depth int) error {
+	if depth > maxOverrideDepth {
+		return fmt.Errorf("override: maximum nesting depth of %d exceeded", maxOverrideDepth)
+	}
 	// Defensive check: target/overrides must be struct values. Without it, a
 	// pointer value passed by mistake makes Field(i) panic
 	// (reflect: call of reflect.Value.Field on ptr Value).
@@ -128,7 +140,12 @@ func overrideStructFields(target, overrides reflect.Value, structType reflect.Ty
 		// Handle anonymous embedded fields
 		if field.Anonymous {
 			derefedType := Deref(field.Type)
-			if derefedType.Kind() != reflect.Struct {
+			// A struct without exported fields (time.Time is the common case) cannot
+			// be merged field by field, so it is handled as an opaque value below.
+			if derefedType.Kind() != reflect.Struct || !hasExportedFields(derefedType) {
+				if shouldOverride(targetField, overrideField, nil) {
+					targetField.Set(overrideField)
+				}
 				continue
 			}
 			// An anonymous embedded pointer (struct{ *Base }) must be dereferenced
@@ -142,12 +159,12 @@ func overrideStructFields(target, overrides reflect.Value, structType reflect.Ty
 				if err := ensureNonNilPtr(targetField); err != nil {
 					return err
 				}
-				if err := overrideStructFields(targetField.Elem(), overrideField.Elem(), derefedType); err != nil {
+				if err := overrideStructFieldsDepth(targetField.Elem(), overrideField.Elem(), derefedType, depth+1); err != nil {
 					return err
 				}
 				continue
 			}
-			if err := overrideStructFields(targetField, overrideField, derefedType); err != nil {
+			if err := overrideStructFieldsDepth(targetField, overrideField, derefedType, depth+1); err != nil {
 				return err
 			}
 			continue
@@ -160,11 +177,12 @@ func overrideStructFields(target, overrides reflect.Value, structType reflect.Ty
 		}
 
 		// For a non-pointer nested struct, override the sub-fields recursively and
-		// keep the defaults
+		// keep the defaults. Structs without exported fields (time.Time, ...) are
+		// opaque values: recursing into them would silently drop the override.
 		derefedType := Deref(field.Type)
-		if field.Type.Kind() != reflect.Ptr && derefedType.Kind() == reflect.Struct {
+		if field.Type.Kind() != reflect.Ptr && derefedType.Kind() == reflect.Struct && hasExportedFields(derefedType) {
 			if !overrideField.IsZero() {
-				if err := overrideStructFields(targetField, overrideField, derefedType); err != nil {
+				if err := overrideStructFieldsDepth(targetField, overrideField, derefedType, depth+1); err != nil {
 					return err
 				}
 			}
@@ -240,4 +258,15 @@ func shouldOverride(target, override reflect.Value, opts *fieldOptions) bool {
 		// Other types: override when non-zero
 		return !override.IsZero()
 	}
+}
+
+// hasExportedFields reports whether t has at least one exported field. A struct
+// with only unexported fields cannot be merged field by field.
+func hasExportedFields(t reflect.Type) bool {
+	for i := 0; i < t.NumField(); i++ {
+		if t.Field(i).IsExported() {
+			return true
+		}
+	}
+	return false
 }

@@ -595,3 +595,134 @@ func TestAsService_InServiceGroup(t *testing.T) {
 	assert.Equal(t, int32(1), atomic.LoadInt32(&s.startCalled))
 	assert.Equal(t, int32(1), atomic.LoadInt32(&s.stopCalled))
 }
+
+// TestServiceGroup_StartTwiceIsSafe is a regression test: the second Start used to
+// close the already-closed start barrier and panic with "close of closed channel"
+// inside a goroutine, which no caller can recover.
+func TestServiceGroup_StartTwiceIsSafe(t *testing.T) {
+	var startCount int32
+	svc := &mockServiceWithCount{stopCount: new(int32)}
+	svc.startCount = startCount
+	sg := NewServiceGroup()
+	sg.Add(svc)
+
+	sg.Start()
+	sg.Start() // must return instead of panicking
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&svc.startCount))
+}
+
+// TestServiceGroup_StopBeforeStartStopsServices covers a Stop that arrives before
+// Start: a service whose Stop is a no-op before initialization must still be
+// stopped once it has started, otherwise Start blocks forever.
+func TestServiceGroup_StopBeforeStartStopsServices(t *testing.T) {
+	svc := newLazyStopService()
+	sg := NewServiceGroup()
+	sg.Add(svc)
+
+	sg.Stop()
+	assert.False(t, svc.isStopped(), "Stop before Start must not stop an uninitialized service")
+
+	done := make(chan struct{})
+	go func() {
+		sg.Start()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start did not return: the stop signal was lost when it arrived before Start")
+	}
+	assert.True(t, svc.isStopped())
+}
+
+// TestServiceGroup_StopsInReverseOrder locks in the documented stop ordering: the
+// most recently added service stops first (rest.Server.Register relies on it so the
+// HTTP server stops before the logger is flushed).
+func TestServiceGroup_StopsInReverseOrder(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		order []string
+	)
+	recorder := func(name string) {
+		mu.Lock()
+		order = append(order, name)
+		mu.Unlock()
+	}
+
+	first := newOrderedService("first", recorder)
+	second := newOrderedService("second", recorder)
+	sg := NewServiceGroup()
+	sg.Add(first)
+	sg.Add(second)
+
+	done := make(chan struct{})
+	go func() {
+		sg.Start()
+		close(done)
+	}()
+	<-first.started
+	<-second.started
+
+	sg.Stop()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"second", "first"}, order)
+}
+
+// lazyStopService's Stop is a no-op until Start has run, like taskq.Consumer.
+type lazyStopService struct {
+	started  chan struct{}
+	stopCh   chan struct{}
+	startOne sync.Once
+	stopOnce sync.Once
+	stopped  atomic.Bool
+}
+
+func newLazyStopService() *lazyStopService {
+	return &lazyStopService{started: make(chan struct{}), stopCh: make(chan struct{})}
+}
+
+func (s *lazyStopService) Start() {
+	s.startOne.Do(func() { close(s.started) })
+	<-s.stopCh
+}
+
+func (s *lazyStopService) Stop() {
+	select {
+	case <-s.started:
+		s.stopped.Store(true)
+		s.stopOnce.Do(func() { close(s.stopCh) })
+	default:
+		// Not started yet: ignore, like a no-op Stop before initialization.
+	}
+}
+
+func (s *lazyStopService) isStopped() bool { return s.stopped.Load() }
+
+// orderedService records its name when Stop is called.
+type orderedService struct {
+	name     string
+	record   func(string)
+	started  chan struct{}
+	startOne sync.Once
+	stopCh   chan struct{}
+	stopOnce sync.Once
+}
+
+func newOrderedService(name string, record func(string)) *orderedService {
+	return &orderedService{name: name, record: record, started: make(chan struct{}), stopCh: make(chan struct{})}
+}
+
+func (s *orderedService) Start() {
+	s.startOne.Do(func() { close(s.started) })
+	<-s.stopCh
+}
+
+func (s *orderedService) Stop() {
+	s.record(s.name)
+	s.stopOnce.Do(func() { close(s.stopCh) })
+}

@@ -25,7 +25,7 @@ func TestClientIPUsesDirectPeerByDefault(t *testing.T) {
 
 func TestRequestIDReadsMiddlewareValue(t *testing.T) {
 	var got string
-	handler.RequestIDHandler(func(_ http.ResponseWriter, r *http.Request) {
+	handler.NewRequestIDHandler(handler.RequestIDConfig{Enabled: true}).Handle(func(_ http.ResponseWriter, r *http.Request) {
 		got = RequestID(r)
 	}).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
 

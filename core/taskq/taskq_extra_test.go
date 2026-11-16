@@ -43,7 +43,7 @@ func TestNewConsumer_WithLogger(t *testing.T) {
 	defer cleanup()
 
 	cfg := testConfig(addr)
-	con := NewConsumer(cfg, logger.New(logger.Config{Output: []string{"stderr"}}))
+	con := NewConsumer(cfg, logger.New(logger.Config{Level: "error"}))
 	require.NotNil(t, con.server)
 
 	require.NoError(t, con.Start())

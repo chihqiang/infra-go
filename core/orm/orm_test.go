@@ -1,13 +1,20 @@
 package orm
 
 import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/chihqiang/infra-go/core/logger"
+	mysqldriver "github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 // User is the model used by the tests.
@@ -89,7 +96,15 @@ func TestBuildMySQLDSN(t *testing.T) {
 		Password: "pass",
 		Database: "testdb",
 	})
-	assert.Equal(t, "root:pass@tcp(localhost:3306)/testdb?charset=utf8mb4&parseTime=true&loc=Local", dsn)
+
+	parsed, err := mysqldriver.ParseDSN(dsn)
+	require.NoError(t, err)
+	assert.Equal(t, "root", parsed.User)
+	assert.Equal(t, "pass", parsed.Passwd)
+	assert.Equal(t, "localhost:3306", parsed.Addr)
+	assert.Equal(t, "testdb", parsed.DBName)
+	assert.True(t, parsed.ParseTime)
+	assert.Equal(t, "utf8mb4", parsed.Params["charset"])
 }
 
 func TestBuildPostgresDSN(t *testing.T) {
@@ -467,15 +482,194 @@ func TestBuildDialector_WithDSN(t *testing.T) {
 	assert.NotNil(t, d)
 }
 
-func TestGormWriter_Printf(t *testing.T) {
-	// Verify that gormWriter does not panic
-	l := logger.New(logger.Config{Output: []string{"stdout"}})
+// capturingLogger records the levels used by the gorm bridge; embedding the
+// interface keeps the fake small (only the used methods are overridden).
+type capturingLogger struct {
+	logger.ILogger
+	mu      sync.Mutex
+	entries []string
+}
 
-	w := newGormWriter(l)
-	assert.NotPanics(t, func() {
-		w.Printf("[info] test message")
-		w.Printf("[error] test error")
-		w.Printf("[warn] test warning")
-		w.Printf("[slow SQL] SELECT * FROM users")
+func (c *capturingLogger) add(level, msg string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries = append(c.entries, level+" "+msg)
+}
+
+func (c *capturingLogger) entriesOf(level string) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []string
+	for _, entry := range c.entries {
+		if strings.HasPrefix(entry, level+" ") {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func (c *capturingLogger) Info(msg string, _ ...logger.Field)  { c.add("INFO", msg) }
+func (c *capturingLogger) Warn(msg string, _ ...logger.Field)  { c.add("WARN", msg) }
+func (c *capturingLogger) Error(msg string, _ ...logger.Field) { c.add("ERROR", msg) }
+func (c *capturingLogger) InfoCtx(_ context.Context, msg string, _ ...logger.Field) {
+	c.add("INFO", msg)
+}
+func (c *capturingLogger) WarnCtx(_ context.Context, msg string, _ ...logger.Field) {
+	c.add("WARN", msg)
+}
+func (c *capturingLogger) ErrorCtx(_ context.Context, msg string, _ ...logger.Field) {
+	c.add("ERROR", msg)
+}
+
+// TestGormLogger_TraceLevels is a regression test: the old writer guessed the
+// level from the message text, so "no such table: users" was logged at Info (and
+// lost at warn level) while a normal query on "error_logs" became an ERROR.
+func TestGormLogger_TraceLevels(t *testing.T) {
+	capture := &capturingLogger{}
+	l := &gormLogger{log: capture, level: gormlogger.Warn, slowThreshold: time.Hour}
+	trace := func(err error, sql string, elapsed time.Duration) {
+		l.Trace(context.Background(), time.Now().Add(-elapsed), func() (string, int64) {
+			return sql, 0
+		}, err)
+	}
+
+	trace(errors.New("no such table: users"), "SELECT * FROM users", time.Millisecond)
+	errs := capture.entriesOf("ERROR")
+	require.Len(t, errs, 1, "a SQL error must be logged at ERROR regardless of its text")
+	assert.Contains(t, errs[0], "query failed")
+
+	trace(nil, "CREATE TABLE error_logs (id int)", time.Millisecond)
+	assert.Len(t, capture.entriesOf("ERROR"), 1, "a normal query must not become an error because of its text")
+
+	trace(nil, "SELECT 1", 2*time.Hour)
+	warns := capture.entriesOf("WARN")
+	require.Len(t, warns, 1)
+	assert.Contains(t, warns[0], "slow query")
+
+	// gorm.ErrRecordNotFound is not an error worth alerting on.
+	trace(gorm.ErrRecordNotFound, "SELECT 1", time.Millisecond)
+	assert.Len(t, capture.entriesOf("ERROR"), 1)
+
+	// The silent level suppresses SQL logging entirely.
+	silent := &gormLogger{log: capture, level: gormlogger.Silent}
+	silent.Trace(context.Background(), time.Now(), func() (string, int64) { return "SELECT 1", 0 }, nil)
+}
+
+// TestSQLite_PerConnectionMemoryForcesSingleConnection is a regression test: with
+// the default 100-connection pool, Database=":memory:" opened a second database on
+// a new connection, so concurrent queries silently saw no tables.
+func TestSQLite_PerConnectionMemoryForcesSingleConnection(t *testing.T) {
+	db, err := New(Config{Driver: DriverSQLite, Database: ":memory:"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = Close(db) })
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	assert.Equal(t, 1, sqlDB.Stats().MaxOpenConnections)
+
+	require.NoError(t, db.Exec("CREATE TABLE t (id INTEGER)").Error)
+
+	// Hold the only connection; a concurrent query must wait for it instead of
+	// being served by a second, empty in-memory database.
+	ctx := context.Background()
+	conn, err := sqlDB.Conn(ctx)
+	require.NoError(t, err)
+
+	queryCtx, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		var n int64
+		errCh <- db.WithContext(queryCtx).Raw("SELECT COUNT(*) FROM t").Scan(&n).Error
+	}()
+
+	select {
+	case err := <-errCh:
+		require.Error(t, err, "the query must block on the single connection, not open a new empty database")
+	case <-time.After(5 * time.Second):
+		t.Fatal("query did not return after its context deadline")
+	}
+	require.NoError(t, conn.Close())
+
+	var n int64
+	require.NoError(t, db.Raw("SELECT COUNT(*) FROM t").Scan(&n).Error)
+	assert.Equal(t, int64(0), n)
+}
+
+// TestSQLite_SharedMemoryKeepsPool verifies that the generated cache=shared DSN
+// keeps a normal pool (several connections are valid because the database is
+// shared) while never recycling them.
+func TestSQLite_SharedMemoryKeepsPool(t *testing.T) {
+	db, err := New(Config{Driver: DriverSQLite})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = Close(db) })
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	assert.Equal(t, 100, sqlDB.Stats().MaxOpenConnections)
+}
+
+// TestSQLiteMemoryMode covers the DSN classification used by the pool fix.
+func TestSQLiteMemoryMode(t *testing.T) {
+	cases := []struct {
+		name   string
+		cfg    Config
+		memory bool
+		shared bool
+	}{
+		{"empty database", Config{Driver: DriverSQLite}, true, true},
+		{"literal memory", Config{Driver: DriverSQLite, Database: ":memory:"}, true, false},
+		{"shared dsn", Config{Driver: DriverSQLite, DSN: "file::memory:?cache=shared"}, true, true},
+		{"mode memory", Config{Driver: DriverSQLite, DSN: "file:foo?mode=memory"}, true, false},
+		{"file", Config{Driver: DriverSQLite, Database: "/tmp/x.db"}, false, false},
+		{"mysql", Config{Driver: DriverMySQL, Database: "db"}, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			memory, shared := sqliteMemoryMode(tc.cfg)
+			assert.Equal(t, tc.memory, memory)
+			assert.Equal(t, tc.shared, shared)
+		})
+	}
+}
+
+// TestBuildMySQLDSN_EscapesCredentials is a regression test: building the DSN with
+// fmt.Sprintf broke as soon as the password contained '@' or '/'.
+func TestBuildMySQLDSN_EscapesCredentials(t *testing.T) {
+	dsn := buildMySQLDSN(Config{
+		Driver:   DriverMySQL,
+		Host:     "127.0.0.1",
+		Port:     3306,
+		Username: "user@corp",
+		Password: "p@ss/w:rd with space",
+		Database: "app",
 	})
+
+	parsed, err := mysqldriver.ParseDSN(dsn)
+	require.NoError(t, err, "the generated DSN must be parsable")
+	assert.Equal(t, "user@corp", parsed.User)
+	assert.Equal(t, "p@ss/w:rd with space", parsed.Passwd)
+	assert.Equal(t, "127.0.0.1:3306", parsed.Addr)
+	assert.Equal(t, "app", parsed.DBName)
+	assert.True(t, parsed.ParseTime)
+	assert.Equal(t, "utf8mb4", parsed.Params["charset"])
+}
+
+// TestBuildPostgresDSN_EscapesValues covers spaces and quotes in libpq values.
+func TestBuildPostgresDSN_EscapesValues(t *testing.T) {
+	dsn := buildPostgresDSN(Config{
+		Driver:   DriverPostgres,
+		Host:     "db.internal",
+		Port:     5432,
+		Username: "postgres",
+		Password: `p a'ss\word`,
+		Database: "app db",
+	})
+
+	parsed, err := pgx.ParseConfig(dsn)
+	require.NoError(t, err, "the generated DSN must be parsable: %s", dsn)
+	assert.Equal(t, "postgres", parsed.User)
+	assert.Equal(t, `p a'ss\word`, parsed.Password)
+	assert.Equal(t, "app db", parsed.Database)
+	assert.Equal(t, "db.internal", parsed.Host)
 }

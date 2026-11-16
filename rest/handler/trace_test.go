@@ -29,7 +29,7 @@ func captureSpans(t *testing.T, run func()) tracetest.SpanStubs {
 }
 
 func TestTraceHandlerRecordsStatus(t *testing.T) {
-	handlerFn := TraceHandler(WithTraceServiceName("demo"))(func(w http.ResponseWriter, _ *http.Request) {
+	handlerFn := NewTraceHandler(TraceConfig{Enabled: true, ServiceName: "demo"}).Handle(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 
@@ -58,7 +58,7 @@ func TestTraceHandlerRecordsStatus(t *testing.T) {
 }
 
 func TestTraceHandlerSkipsIgnoredPaths(t *testing.T) {
-	handlerFn := TraceHandler(WithTraceIgnorePaths("/health"))(func(http.ResponseWriter, *http.Request) {})
+	handlerFn := NewTraceHandler(TraceConfig{Enabled: true, IgnorePaths: []string{"/health"}}).Handle(func(http.ResponseWriter, *http.Request) {})
 
 	spans := captureSpans(t, func() {
 		handlerFn.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/health", nil))
@@ -71,7 +71,7 @@ func TestTraceHandlerSkipsIgnoredPaths(t *testing.T) {
 
 func TestTraceHandlerInjectsSpanIntoContext(t *testing.T) {
 	var valid bool
-	handlerFn := TraceHandler()(func(_ http.ResponseWriter, r *http.Request) {
+	handlerFn := NewTraceHandler(TraceConfig{Enabled: true}).Handle(func(_ http.ResponseWriter, r *http.Request) {
 		valid = oteltrace.SpanFromContext(r.Context()).SpanContext().IsValid()
 	})
 
@@ -85,7 +85,7 @@ func TestTraceHandlerInjectsSpanIntoContext(t *testing.T) {
 }
 
 func TestTraceHandlerUsesRoutePattern(t *testing.T) {
-	handlerFn := TraceHandler()(func(http.ResponseWriter, *http.Request) {})
+	handlerFn := NewTraceHandler(TraceConfig{Enabled: true}).Handle(func(http.ResponseWriter, *http.Request) {})
 
 	spans := captureSpans(t, func() {
 		request := httptest.NewRequest(http.MethodGet, "/users/42", nil)
@@ -102,7 +102,7 @@ func TestTraceHandlerUsesRoutePattern(t *testing.T) {
 }
 
 func TestTraceHandlerSkipsWildcardPaths(t *testing.T) {
-	handlerFn := TraceHandler(WithTraceIgnorePaths("/health*"))(func(http.ResponseWriter, *http.Request) {})
+	handlerFn := NewTraceHandler(TraceConfig{Enabled: true, IgnorePaths: []string{"/health*"}}).Handle(func(http.ResponseWriter, *http.Request) {})
 
 	spans := captureSpans(t, func() {
 		handlerFn.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/health/live", nil))
@@ -114,7 +114,7 @@ func TestTraceHandlerSkipsWildcardPaths(t *testing.T) {
 }
 
 func TestTraceHandlerEndsSpanOnPanic(t *testing.T) {
-	handlerFn := TraceHandler()(func(http.ResponseWriter, *http.Request) {
+	handlerFn := NewTraceHandler(TraceConfig{Enabled: true}).Handle(func(http.ResponseWriter, *http.Request) {
 		panic("boom")
 	})
 

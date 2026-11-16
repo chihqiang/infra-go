@@ -1,39 +1,40 @@
 package logger
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
+	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/chihqiang/infra-go/core/mapping"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-	"gopkg.in/natefinch/lumberjack.v2"
 )
-
-// Encoding is the log encoding format type.
-type Encoding string
 
 const (
 	// JSONEncoding outputs JSON.
-	JSONEncoding Encoding = "json"
-	// ConsoleEncoding outputs the console format, which is human readable.
-	ConsoleEncoding Encoding = "console"
+	JSONEncoding = "json"
+	// ConsoleEncoding outputs a plain, human-readable line. It is the value used by
+	// Encoding="plain" in Config.
+	ConsoleEncoding = "plain"
+
+	defaultTimeFormat = "2006-01-02T15:04:05.000Z07:00"
 )
 
 // ContextExtractor is a function that extracts log fields from a context.
 type ContextExtractor func(ctx context.Context) []Field
 
 // registeredExtractor is a registered context field extractor.
-//
-// removed is an atomic flag rather than a slice deletion: the read path
-// (extractContextFields) walks the backing array outside the lock, so deleting or moving
-// elements in place would race with a goroutine that is iterating it.
 type registeredExtractor struct {
 	fn      ContextExtractor
 	removed atomic.Bool
@@ -45,19 +46,7 @@ var (
 )
 
 // RegisterContextExtractor registers a context field extractor and returns an unregister
-// function.
-//
-// Historical problem: registration only **appended** and had no unregister entry point,
-// while function values are not comparable in Go, so registration could not be
-// de-duplicated. Whenever the initialisation flow ran more than once (retries, multi-stage
-// configuration, test reuse) the same extractor was registered several times, printing the
-// same fields over and over on every log entry. The returned unregister function solves
-// this: it is idempotent, so repeated calls take effect only once.
-//
-//	unregister := logger.RegisterContextExtractor(myExtractor)
-//	defer unregister() // undo it when no longer needed
-//
-// A nil extractor is not registered and the returned unregister function is a no-op.
+// function. The unregister function is idempotent; a nil extractor is ignored.
 func RegisterContextExtractor(extractor ContextExtractor) (unregister func()) {
 	if extractor == nil {
 		return func() {}
@@ -73,11 +62,6 @@ func RegisterContextExtractor(extractor ContextExtractor) (unregister func()) {
 		once.Do(func() {
 			entry.removed.Store(true)
 
-			// Also compact the slice, so that repeated register/unregister cycles over a
-			// long period cannot grow it without bound.
-			// Replacing the slice header wholesale is safe: the read path has already
-			// copied the old header, so the old backing array is not modified and the
-			// element is still skipped through its removed flag.
 			extractorsMu.Lock()
 			defer extractorsMu.Unlock()
 			live := make([]*registeredExtractor, 0, len(contextExtractors))
@@ -96,7 +80,6 @@ func extractContextFields(ctx context.Context) []Field {
 	extractors := contextExtractors
 	extractorsMu.RUnlock()
 
-	// Pre-allocate the capacity to avoid repeated growth
 	fields := make([]Field, 0, len(extractors)*2)
 	for _, e := range extractors {
 		if e.removed.Load() {
@@ -107,99 +90,67 @@ func extractContextFields(ctx context.Context) []Field {
 	return fields
 }
 
-// RotationConfig configures log file rotation.
-// It is implemented on top of lumberjack and supports splitting by file size and keeping
-// files for a number of days.
-type RotationConfig struct {
-	// MaxSize is the maximum size of a single log file in MB; defaults to 100MB.
-	MaxSize int `json:",default=100"`
-	// MaxBackups is the maximum number of old log files to keep; defaults to 7.
-	MaxBackups int `json:",default=7"`
-	// MaxAge is the maximum number of days old log files are kept; defaults to 30.
-	MaxAge int `json:",default=30"`
-	// Compress reports whether old log files are compressed (gzip); defaults to false.
-	Compress bool `json:",optional"`
-	// LocalTime reports whether backup files are named using local time; defaults to true.
-	LocalTime bool `json:",default=true"`
-}
-
-// Config is the log configuration.
+// Config is the log configuration, following go-zero's LogConf layout.
 type Config struct {
-	// Level is the log level; defaults to InfoLevel (zapcore.InfoLevel = 0).
-	Level Level `json:",default=0"`
-	// Encoding is the encoding format; defaults to JSONEncoding.
-	Encoding Encoding `json:",default=json"`
-	// Output lists the output targets, which may be "stdout", "stderr" or a file path;
-	// defaults to ["stdout"].
-	Output []string `json:",default=[stdout]"`
-	// ErrorOutput is the error output target; defaults to "stderr".
-	ErrorOutput string `json:",default=stderr"`
-	// Caller reports whether caller information (file name and line number) is recorded;
-	// defaults to true.
-	Caller bool `json:",default=true"`
-	// Stacktrace reports whether a stack trace is recorded at Error level and above;
-	// defaults to false.
-	Stacktrace bool `json:",optional"`
-	// TimeLayout is the time format layout; defaults to ISO8601.
-	TimeLayout string `json:",default=2006-01-02T15:04:05.000Z07:00"`
-	// AppName is the application name, emitted as a fixed field; defaults to empty.
-	AppName string `json:",optional"`
-	// Rotation is the log file rotation configuration.
-	Rotation RotationConfig
+	// ServiceName is the service name; volume mode uses it to build the log directory.
+	ServiceName string `json:",optional"`
+	// Mode selects console, file or volume output; default is console.
+	Mode string `json:",default=console,options=[console,file,volume]"`
+	// Encoding selects json or plain output; default is json.
+	Encoding string `json:",default=json,options=[json,plain]"`
+	// TimeFormat is the timestamp layout; an empty value uses ISO8601.
+	TimeFormat string `json:",optional"`
+	// Path is the log directory for file and volume modes; default is "logs".
+	Path string `json:",default=logs"`
+	// Level is one of debug, info, error or severe; default is info. "severe" keeps only
+	// fatal entries, which are the ones written to severe.log.
+	Level string `json:",default=info,options=[debug,info,error,severe]"`
+	// MaxContentLength truncates the message to this many bytes; zero means no limit.
+	MaxContentLength uint32 `json:",optional"`
+	// Compress reports whether rotated log files are gzip-compressed.
+	Compress bool `json:",optional"`
+	// Stat enables statistics in go-zero's logx; kept for configuration compatibility.
+	Stat bool `json:",default=true"`
+	// KeepDays is how many days backups are kept; zero keeps them forever.
+	KeepDays int `json:",optional"`
+	// StackCooldownMillis limits how often stack traces are attached; default 100ms.
+	StackCooldownMillis int `json:",default=100"`
+	// MaxBackups is the maximum number of backups kept; zero keeps all.
+	MaxBackups int `json:",default=0"`
+	// MaxSize is the maximum file size in MB for size rotation; zero means no limit.
+	MaxSize int `json:",default=0"`
+	// Rotation selects daily or size rotation; default is daily.
+	Rotation string `json:",default=daily,options=[daily,size]"`
 }
 
-// Logger is the default implementation of the ILogger interface and wraps a zap.Logger.
-// Create it with New / Default; it is normally used through the ILogger interface, and
-// Close flushes the buffers and closes the outputs.
+// Logger is the default implementation of the ILogger interface.
 type Logger struct {
-	zap     *zap.Logger
-	sugar   *zap.SugaredLogger
-	config  Config
-	closers []io.Closer
+	mu          sync.Mutex
+	config      Config
+	level       Level
+	timeFormat  string
+	access      io.Writer
+	errorWriter io.Writer
+	severe      io.Writer
+	closers     []io.Closer
+	lastStack   time.Time
+	closed      bool
 }
 
 // New creates and returns an ILogger from the configuration.
 func New(cfg Config) ILogger {
 	c := fillDefault(cfg)
 
-	encoder := newEncoder(c)
-	levelEnabler := zap.LevelEnablerFunc(func(lvl Level) bool {
-		return lvl >= c.Level
-	})
-
-	// Build the output writers
-	cores := make([]zapcore.Core, 0, len(c.Output))
-	var closers []io.Closer
-	for _, output := range c.Output {
-		w, closer, err := openOutput(output, c.Rotation)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "logger: failed to open output %q: %v\n", output, err)
-			w = os.Stderr
-		} else if closer != nil {
-			closers = append(closers, closer)
-		}
-		cores = append(cores, zapcore.NewCore(encoder, zapcore.AddSync(w), levelEnabler))
+	l := &Logger{
+		config:     c,
+		level:      parseLevel(c.Level),
+		timeFormat: c.TimeFormat,
 	}
-
-	// Build the error output writer
-	errW, _, err := openOutput(c.ErrorOutput, c.Rotation)
-	if err != nil {
-		errW = os.Stderr
+	if l.timeFormat == "" {
+		l.timeFormat = defaultTimeFormat
 	}
-
-	opts := buildOptions(c, errW)
-	zapLogger := zap.New(zapcore.NewTee(cores...), opts...)
-
-	if c.AppName != "" {
-		zapLogger = zapLogger.With(zap.String("app", c.AppName))
-	}
-
-	return &Logger{
-		zap:     zapLogger,
-		sugar:   zapLogger.Sugar(),
-		config:  c,
-		closers: closers,
-	}
+	l.setupWriters(c)
+	return l
 }
 
 // Default returns a Logger that uses the default configuration.
@@ -207,257 +158,493 @@ func Default() ILogger {
 	return New(Config{})
 }
 
-// --- Structured logging methods ---
+func (l *Logger) setupWriters(c Config) {
+	switch c.Mode {
+	case "file":
+		l.setupFileWriters(c, c.Path)
+	case "volume":
+		if c.ServiceName == "" {
+			fmt.Fprintln(os.Stderr, "logger: volume mode requires ServiceName; using file mode")
+			l.setupFileWriters(c, c.Path)
+			return
+		}
+		host, _ := os.Hostname()
+		l.setupFileWriters(c, filepath.Join(c.Path, c.ServiceName, host))
+	default:
+		l.access = os.Stdout
+		l.errorWriter = os.Stderr
+		l.severe = os.Stderr
+	}
+}
+
+func (l *Logger) setupFileWriters(c Config, dir string) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "logger: failed to create log directory %q: %v\n", dir, err)
+		l.access = os.Stderr
+		l.errorWriter = os.Stderr
+		l.severe = os.Stderr
+		return
+	}
+
+	open := func(name string) io.Writer {
+		writer, err := newRotatingWriter(filepath.Join(dir, name), c)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "logger: failed to open %q: %v\n", name, err)
+			return os.Stderr
+		}
+		l.closers = append(l.closers, writer)
+		return writer
+	}
+	l.access = open("access.log")
+	l.errorWriter = open("error.log")
+	l.severe = open("severe.log")
+}
 
 // Debug logs one structured entry at Debug level.
-func (l *Logger) Debug(msg string, fields ...Field) { l.zap.Debug(msg, fields...) }
+func (l *Logger) Debug(msg string, fields ...Field) { l.log(DebugLevel, msg, fields) }
 
 // Info logs one structured entry at Info level.
-func (l *Logger) Info(msg string, fields ...Field) { l.zap.Info(msg, fields...) }
+func (l *Logger) Info(msg string, fields ...Field) { l.log(InfoLevel, msg, fields) }
 
 // Warn logs one structured entry at Warn level.
-func (l *Logger) Warn(msg string, fields ...Field) { l.zap.Warn(msg, fields...) }
+func (l *Logger) Warn(msg string, fields ...Field) { l.log(WarnLevel, msg, fields) }
 
 // Error logs one structured entry at Error level.
-func (l *Logger) Error(msg string, fields ...Field) { l.zap.Error(msg, fields...) }
+func (l *Logger) Error(msg string, fields ...Field) { l.log(ErrorLevel, msg, fields) }
 
 // Panic logs at Panic level and then panics.
-func (l *Logger) Panic(msg string, fields ...Field) { l.zap.Panic(msg, fields...) }
+func (l *Logger) Panic(msg string, fields ...Field) {
+	l.log(PanicLevel, msg, fields)
+	panic(msg)
+}
 
 // Fatal logs at Fatal level and then calls os.Exit(1).
-func (l *Logger) Fatal(msg string, fields ...Field) { l.zap.Fatal(msg, fields...) }
-
-// --- Formatted logging methods ---
-//
-// The formatted logging methods skip fmt.Sprintf when the level is not enabled, avoiding
-// pointless formatting work. The Panic/Fatal variants are kept as they are: zap's
-// Panic/Fatal trigger panic/os.Exit even when the level is disabled, and that behaviour is
-// not changed here.
+func (l *Logger) Fatal(msg string, fields ...Field) {
+	l.log(FatalLevel, msg, fields)
+	_ = l.Sync()
+	os.Exit(1)
+}
 
 // Debugf logs a formatted entry at Debug level.
 func (l *Logger) Debugf(format string, args ...any) {
-	if l.zap.Core().Enabled(zapcore.DebugLevel) {
-		l.zap.Debug(fmt.Sprintf(format, args...))
+	if l.enabled(DebugLevel) {
+		l.log(DebugLevel, fmt.Sprintf(format, args...), nil)
 	}
 }
 
 // Infof logs a formatted entry at Info level.
 func (l *Logger) Infof(format string, args ...any) {
-	if l.zap.Core().Enabled(zapcore.InfoLevel) {
-		l.zap.Info(fmt.Sprintf(format, args...))
+	if l.enabled(InfoLevel) {
+		l.log(InfoLevel, fmt.Sprintf(format, args...), nil)
 	}
 }
 
 // Warnf logs a formatted entry at Warn level.
 func (l *Logger) Warnf(format string, args ...any) {
-	if l.zap.Core().Enabled(zapcore.WarnLevel) {
-		l.zap.Warn(fmt.Sprintf(format, args...))
+	if l.enabled(WarnLevel) {
+		l.log(WarnLevel, fmt.Sprintf(format, args...), nil)
 	}
 }
 
 // Errorf logs a formatted entry at Error level.
 func (l *Logger) Errorf(format string, args ...any) {
-	if l.zap.Core().Enabled(zapcore.ErrorLevel) {
-		l.zap.Error(fmt.Sprintf(format, args...))
+	if l.enabled(ErrorLevel) {
+		l.log(ErrorLevel, fmt.Sprintf(format, args...), nil)
 	}
 }
 
 // Panicf logs a formatted entry at Panic level and then panics.
-func (l *Logger) Panicf(format string, args ...any) { l.zap.Panic(fmt.Sprintf(format, args...)) }
+func (l *Logger) Panicf(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	l.log(PanicLevel, msg, nil)
+	panic(msg)
+}
 
 // Fatalf logs a formatted entry at Fatal level and then calls os.Exit(1).
-func (l *Logger) Fatalf(format string, args ...any) { l.zap.Fatal(fmt.Sprintf(format, args...)) }
-
-// --- Structured logging methods with context ---
-//
-// The context-aware methods merge the context extractor fields registered in the context
-// (such as request_id) into the log entry, which helps with tracing. They check the level
-// first and return immediately when it is disabled, avoiding the cost of extracting fields.
+func (l *Logger) Fatalf(format string, args ...any) {
+	l.log(FatalLevel, fmt.Sprintf(format, args...), nil)
+	_ = l.Sync()
+	os.Exit(1)
+}
 
 // DebugCtx logs at Debug level, merging in the extractor fields of ctx.
 func (l *Logger) DebugCtx(ctx context.Context, msg string, fields ...Field) {
-	if !l.zap.Core().Enabled(zapcore.DebugLevel) {
+	if !l.enabled(DebugLevel) {
 		return
 	}
-	l.zap.Debug(msg, append(extractContextFields(ctx), fields...)...)
+	l.log(DebugLevel, msg, append(extractContextFields(ctx), fields...))
 }
 
 // InfoCtx logs at Info level, merging in the extractor fields of ctx.
 func (l *Logger) InfoCtx(ctx context.Context, msg string, fields ...Field) {
-	if !l.zap.Core().Enabled(zapcore.InfoLevel) {
+	if !l.enabled(InfoLevel) {
 		return
 	}
-	l.zap.Info(msg, append(extractContextFields(ctx), fields...)...)
+	l.log(InfoLevel, msg, append(extractContextFields(ctx), fields...))
 }
 
 // WarnCtx logs at Warn level, merging in the extractor fields of ctx.
 func (l *Logger) WarnCtx(ctx context.Context, msg string, fields ...Field) {
-	if !l.zap.Core().Enabled(zapcore.WarnLevel) {
+	if !l.enabled(WarnLevel) {
 		return
 	}
-	l.zap.Warn(msg, append(extractContextFields(ctx), fields...)...)
+	l.log(WarnLevel, msg, append(extractContextFields(ctx), fields...))
 }
 
 // ErrorCtx logs at Error level, merging in the extractor fields of ctx.
 func (l *Logger) ErrorCtx(ctx context.Context, msg string, fields ...Field) {
-	if !l.zap.Core().Enabled(zapcore.ErrorLevel) {
+	if !l.enabled(ErrorLevel) {
 		return
 	}
-	l.zap.Error(msg, append(extractContextFields(ctx), fields...)...)
+	l.log(ErrorLevel, msg, append(extractContextFields(ctx), fields...))
 }
 
 // PanicCtx logs at Panic level, then panics, merging in the extractor fields of ctx.
 func (l *Logger) PanicCtx(ctx context.Context, msg string, fields ...Field) {
-	l.zap.With(extractContextFields(ctx)...).Panic(msg, fields...)
+	l.log(PanicLevel, msg, append(extractContextFields(ctx), fields...))
+	panic(msg)
 }
 
-// FatalCtx logs at Fatal level, then calls os.Exit(1), merging in the extractor fields of
-// ctx.
+// FatalCtx logs at Fatal level, then calls os.Exit(1), merging in the extractor fields.
 func (l *Logger) FatalCtx(ctx context.Context, msg string, fields ...Field) {
-	l.zap.With(extractContextFields(ctx)...).Fatal(msg, fields...)
+	l.log(FatalLevel, msg, append(extractContextFields(ctx), fields...))
+	_ = l.Sync()
+	os.Exit(1)
 }
-
-// --- Formatted logging methods with context ---
 
 // DebugfCtx logs a formatted entry at Debug level, merging in the extractor fields of ctx.
 func (l *Logger) DebugfCtx(ctx context.Context, format string, args ...any) {
-	if !l.zap.Core().Enabled(zapcore.DebugLevel) {
+	if !l.enabled(DebugLevel) {
 		return
 	}
-	l.zap.Debug(fmt.Sprintf(format, args...), extractContextFields(ctx)...)
+	l.log(DebugLevel, fmt.Sprintf(format, args...), extractContextFields(ctx))
 }
 
 // InfofCtx logs a formatted entry at Info level, merging in the extractor fields of ctx.
 func (l *Logger) InfofCtx(ctx context.Context, format string, args ...any) {
-	if !l.zap.Core().Enabled(zapcore.InfoLevel) {
+	if !l.enabled(InfoLevel) {
 		return
 	}
-	l.zap.Info(fmt.Sprintf(format, args...), extractContextFields(ctx)...)
+	l.log(InfoLevel, fmt.Sprintf(format, args...), extractContextFields(ctx))
 }
 
 // WarnfCtx logs a formatted entry at Warn level, merging in the extractor fields of ctx.
 func (l *Logger) WarnfCtx(ctx context.Context, format string, args ...any) {
-	if !l.zap.Core().Enabled(zapcore.WarnLevel) {
+	if !l.enabled(WarnLevel) {
 		return
 	}
-	l.zap.Warn(fmt.Sprintf(format, args...), extractContextFields(ctx)...)
+	l.log(WarnLevel, fmt.Sprintf(format, args...), extractContextFields(ctx))
 }
 
 // ErrorfCtx logs a formatted entry at Error level, merging in the extractor fields of ctx.
 func (l *Logger) ErrorfCtx(ctx context.Context, format string, args ...any) {
-	if !l.zap.Core().Enabled(zapcore.ErrorLevel) {
+	if !l.enabled(ErrorLevel) {
 		return
 	}
-	l.zap.Error(fmt.Sprintf(format, args...), extractContextFields(ctx)...)
+	l.log(ErrorLevel, fmt.Sprintf(format, args...), extractContextFields(ctx))
 }
 
-// PanicfCtx logs a formatted entry at Panic level, then panics, merging in the extractor
-// fields of ctx.
+// PanicfCtx logs a formatted entry at Panic level, then panics.
 func (l *Logger) PanicfCtx(ctx context.Context, format string, args ...any) {
-	l.zap.With(extractContextFields(ctx)...).Panic(fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	l.log(PanicLevel, msg, extractContextFields(ctx))
+	panic(msg)
 }
 
-// FatalfCtx logs a formatted entry at Fatal level, then calls os.Exit(1), merging in the
-// extractor fields of ctx.
+// FatalfCtx logs a formatted entry at Fatal level, then calls os.Exit(1).
 func (l *Logger) FatalfCtx(ctx context.Context, format string, args ...any) {
-	l.zap.With(extractContextFields(ctx)...).Fatal(fmt.Sprintf(format, args...))
+	l.log(FatalLevel, fmt.Sprintf(format, args...), extractContextFields(ctx))
+	_ = l.Sync()
+	os.Exit(1)
 }
 
-// --- Sync ---
-
-// Sync flushes buffered log entries.
-func (l *Logger) Sync() error {
-	return l.zap.Sync()
+func (l *Logger) enabled(level Level) bool {
+	return level >= l.level
 }
 
-// --- Extra methods (not part of the interface) ---
-
-// Close shuts the logger down, flushing buffers and closing file outputs.
-func (l *Logger) Close() error {
-	var errs []string
-	if err := l.zap.Sync(); err != nil {
-		errs = append(errs, err.Error())
+func (l *Logger) log(level Level, msg string, fields []Field) {
+	if !l.enabled(level) {
+		return
 	}
-	for _, c := range l.closers {
-		if err := c.Close(); err != nil {
-			errs = append(errs, err.Error())
+	if l.config.MaxContentLength > 0 && uint32(len(msg)) > l.config.MaxContentLength {
+		msg = msg[:l.config.MaxContentLength]
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return
+	}
+
+	now := time.Now()
+	entry := l.encode(level, now, msg, fields)
+
+	writer := l.access
+	switch {
+	case level >= FatalLevel:
+		writer = l.severe
+	case level >= ErrorLevel:
+		writer = l.errorWriter
+	}
+	if writer == nil {
+		writer = os.Stderr
+	}
+	if _, err := writer.Write(entry); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "logger: write log: %v\n", err)
+	}
+}
+
+// loggerPackagePath is the function-name prefix shared by this package's code.
+var loggerPackagePath = reflect.TypeOf(Level(0)).PkgPath() + "."
+
+// callerInfo reports the file and line of the first stack frame outside this package, so
+// the caller is consistent whether logging goes through a Logger method or a
+// package-level helper in log.go. Frames from this package's tests are reported so that
+// tests can assert their own call site.
+func callerInfo() string {
+	var pcs [16]uintptr
+	n := runtime.Callers(2, pcs[:])
+	frames := runtime.CallersFrames(pcs[:n])
+	for {
+		frame, more := frames.Next()
+		if !strings.HasPrefix(frame.Function, loggerPackagePath) ||
+			strings.HasSuffix(frame.File, "_test.go") {
+			return filepath.Base(frame.File) + ":" + strconv.Itoa(frame.Line)
+		}
+		if !more {
+			return ""
 		}
 	}
-	if len(errs) > 0 {
-		return fmt.Errorf("logger close errors: %s", strings.Join(errs, "; "))
+}
+
+func (l *Logger) encode(level Level, now time.Time, msg string, fields []Field) []byte {
+	caller := callerInfo()
+
+	stack := ""
+	if level >= ErrorLevel {
+		cooldown := time.Duration(l.config.StackCooldownMillis) * time.Millisecond
+		if cooldown <= 0 || l.lastStack.IsZero() || now.Sub(l.lastStack) >= cooldown {
+			stack = string(debug.Stack())
+			l.lastStack = now
+		}
 	}
-	return nil
+
+	if l.config.Encoding == ConsoleEncoding {
+		return l.encodePlain(level, now, caller, msg, fields, stack)
+	}
+	return l.encodeJSON(level, now, caller, msg, fields, stack)
+}
+
+func (l *Logger) encodeJSON(level Level, now time.Time, caller, msg string, fields []Field, stack string) []byte {
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	first := true
+	writePair := func(key string, value []byte) {
+		if !first {
+			buf.WriteByte(',')
+		}
+		first = false
+		buf.WriteString(jsonString(key))
+		buf.WriteByte(':')
+		buf.Write(value)
+	}
+	writeStringPair := func(key, value string) {
+		writePair(key, []byte(jsonString(value)))
+	}
+
+	writeStringPair("level", level.String())
+	writeStringPair("time", now.Format(l.timeFormat))
+	if caller != "" {
+		writeStringPair("caller", caller)
+	}
+	if l.config.ServiceName != "" {
+		writeStringPair("app", l.config.ServiceName)
+	}
+	writeStringPair("msg", msg)
+	for _, field := range fields {
+		writePair(field.Key, l.fieldJSON(field))
+	}
+	if stack != "" {
+		writeStringPair("stacktrace", stack)
+	}
+	buf.WriteString("}\n")
+	return buf.Bytes()
+}
+
+func (l *Logger) encodePlain(level Level, now time.Time, caller, msg string, fields []Field, stack string) []byte {
+	var buf bytes.Buffer
+	buf.WriteString(now.Format(l.timeFormat))
+	buf.WriteByte(' ')
+	buf.WriteString(level.String())
+	if caller != "" {
+		buf.WriteByte(' ')
+		buf.WriteString(caller)
+	}
+	if l.config.ServiceName != "" {
+		buf.WriteString(" app=")
+		buf.WriteString(l.config.ServiceName)
+	}
+	buf.WriteByte(' ')
+	buf.WriteString(msg)
+	for _, field := range fields {
+		buf.WriteByte(' ')
+		buf.WriteString(field.Key)
+		buf.WriteByte('=')
+		buf.WriteString(fieldText(field, l.timeFormat))
+	}
+	if stack != "" {
+		buf.WriteString(" stacktrace=")
+		buf.WriteString(stack)
+	}
+	buf.WriteByte('\n')
+	return buf.Bytes()
+}
+
+func (l *Logger) fieldJSON(field Field) []byte {
+	switch field.Type {
+	case StringType:
+		return []byte(jsonString(field.String))
+	case Int64Type:
+		return []byte(strconv.FormatInt(field.Integer, 10))
+	case Float64Type:
+		return marshalJSON(field.Interface)
+	case BoolType:
+		if field.Integer != 0 {
+			return []byte("true")
+		}
+		return []byte("false")
+	case DurationType:
+		millis := int64(time.Duration(field.Integer) / time.Millisecond)
+		return []byte(strconv.FormatInt(millis, 10))
+	case TimeType:
+		if t, ok := field.Interface.(time.Time); ok {
+			return []byte(jsonString(t.Format(l.timeFormat)))
+		}
+		return marshalJSON(field.Interface)
+	case ErrorType:
+		if field.Interface == nil {
+			return []byte("null")
+		}
+		if err, ok := field.Interface.(error); ok {
+			return []byte(jsonString(err.Error()))
+		}
+		return marshalJSON(field.Interface)
+	default:
+		return marshalJSON(field.Interface)
+	}
+}
+
+func fieldText(field Field, timeFormat string) string {
+	switch field.Type {
+	case StringType:
+		return field.String
+	case Int64Type:
+		return strconv.FormatInt(field.Integer, 10)
+	case Float64Type:
+		return fmt.Sprint(field.Interface)
+	case BoolType:
+		return strconv.FormatBool(field.Integer != 0)
+	case DurationType:
+		return time.Duration(field.Integer).String()
+	case TimeType:
+		if t, ok := field.Interface.(time.Time); ok {
+			return t.Format(timeFormat)
+		}
+		return fmt.Sprint(field.Interface)
+	case ErrorType:
+		if field.Interface == nil {
+			return "<nil>"
+		}
+		if err, ok := field.Interface.(error); ok {
+			return err.Error()
+		}
+		return fmt.Sprint(field.Interface)
+	default:
+		return fmt.Sprint(field.Interface)
+	}
+}
+
+// Sync flushes the active outputs.
+func (l *Logger) Sync() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	var errs []error
+	for _, w := range []io.Writer{l.access, l.errorWriter, l.severe} {
+		if syncer, ok := w.(interface{ Sync() error }); ok {
+			if err := syncer.Sync(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Close shuts the logger down, flushing and closing file outputs.
+func (l *Logger) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return nil
+	}
+	l.closed = true
+
+	var errs []error
+	for _, w := range []io.Writer{l.access, l.errorWriter, l.severe} {
+		if syncer, ok := w.(interface{ Sync() error }); ok {
+			errs = append(errs, syncer.Sync())
+		}
+	}
+	for _, c := range l.closers {
+		errs = append(errs, c.Close())
+	}
+	return errors.Join(errs...)
 }
 
 // --- Internal functions ---
 
-// fillDefault fills in the default values and then overrides them with the non-zero fields
-// of the user configuration, using mapping.FillAndOverride for both steps.
-// An empty AppName is also treated as a valid value (it always overrides); this is achieved
-// by the optional tag with no default.
 func fillDefault(cfg Config) Config {
 	var c Config
 	mapping.MustFillAndOverride(&c, cfg)
+	if c.TimeFormat == "" {
+		c.TimeFormat = defaultTimeFormat
+	}
 	return c
 }
 
-func newEncoder(c Config) zapcore.Encoder {
-	encoderCfg := zapcore.EncoderConfig{
-		TimeKey:        "time",
-		LevelKey:       "level",
-		NameKey:        "logger",
-		CallerKey:      "caller",
-		FunctionKey:    zapcore.OmitKey,
-		MessageKey:     "msg",
-		StacktraceKey:  "stacktrace",
-		LineEnding:     zapcore.DefaultLineEnding,
-		EncodeLevel:    zapcore.CapitalLevelEncoder,
-		EncodeTime:     zapcore.TimeEncoderOfLayout(c.TimeLayout),
-		EncodeDuration: zapcore.MillisDurationEncoder,
-		EncodeCaller:   zapcore.ShortCallerEncoder,
-	}
-
-	switch c.Encoding {
-	case ConsoleEncoding:
-		encoderCfg.EncodeLevel = zapcore.CapitalColorLevelEncoder
-		return zapcore.NewConsoleEncoder(encoderCfg)
+func parseLevel(level string) Level {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug":
+		return DebugLevel
+	case "warn", "warning":
+		return WarnLevel
+	case "error":
+		return ErrorLevel
+	case "severe":
+		return FatalLevel
+	case "dpanic":
+		return DPanicLevel
+	case "panic":
+		return PanicLevel
+	case "fatal":
+		return FatalLevel
 	default:
-		return zapcore.NewJSONEncoder(encoderCfg)
+		return InfoLevel
 	}
 }
 
-func buildOptions(c Config, errW zapcore.WriteSyncer) []zap.Option {
-	var opts []zap.Option
-	if c.Caller {
-		opts = append(opts, zap.AddCaller(), zap.AddCallerSkip(1))
+func jsonString(s string) string {
+	data, err := json.Marshal(s)
+	if err != nil {
+		return `""`
 	}
-	if c.Stacktrace {
-		opts = append(opts, zap.AddStacktrace(ErrorLevel))
-	}
-	opts = append(opts, zap.ErrorOutput(errW))
-	return opts
+	return string(data)
 }
 
-func openOutput(output string, rotation RotationConfig) (zapcore.WriteSyncer, io.Closer, error) {
-	switch output {
-	case "stdout":
-		return os.Stdout, nil, nil
-	case "stderr":
-		return os.Stderr, nil, nil
-	default:
-		if dir := filepath.Dir(output); dir != "" && dir != "." {
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				return nil, nil, fmt.Errorf("failed to create log directory %q: %w", dir, err)
-			}
-		}
-		lj := &lumberjack.Logger{
-			Filename:   output,
-			MaxSize:    rotation.MaxSize,
-			MaxBackups: rotation.MaxBackups,
-			MaxAge:     rotation.MaxAge,
-			Compress:   rotation.Compress,
-			LocalTime:  rotation.LocalTime,
-		}
-		return zapcore.AddSync(lj), lj, nil
+func marshalJSON(v any) []byte {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return []byte(jsonString(fmt.Sprint(v)))
 	}
+	return data
 }

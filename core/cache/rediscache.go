@@ -147,7 +147,9 @@ func (c *RedisCache) Delete(ctx context.Context, keys ...string) error {
 }
 
 // Take returns the value of key; on a miss it calls fetch and writes the result to
-// the cache.
+// the cache. A nil result from fetch is returned as-is and is not cached (it
+// usually means "no such row", and caching JSON null would hide later writes for
+// the whole TTL).
 // Stampede protection: concurrent calls for the same key run fetch only once.
 // Penetration protection: when fetch returns ErrNotFound a short-lived placeholder is
 // written. Fail fast: a Redis failure does not penetrate to the DB.
@@ -182,6 +184,16 @@ func (c *RedisCache) Take(ctx context.Context, key string, fetch func() (any, er
 			return nil, e
 		}
 
+		// A nil result means "the lookup found nothing" (the usual (nil, nil)
+		// convention). It must not be cached with the normal TTL: writing JSON null
+		// makes every later Get treat the key as a hit, so data inserted afterwards
+		// stays invisible for the whole expiry (7 days by default). Return it
+		// uncached instead; callers that want penetration protection should return
+		// ErrNotFound or cache a placeholder with SetEx themselves.
+		if v == nil {
+			return nil, nil
+		}
+
 		// A failed cache write does not affect the main flow (consistent with the
 		// stampede semantics), it is only logged
 		if err := c.SetEx(ctx, key, v, c.expiry); err != nil {
@@ -196,17 +208,27 @@ func (c *RedisCache) Take(ctx context.Context, key string, fetch func() (any, er
 }
 
 // Increment adds delta to the numeric value of key; a missing key is initialized to
-// delta. It uses the atomic Redis INCRBY command underneath.
+// delta and gets the default expiry (matching MemCache). It uses an atomic Redis
+// script underneath.
 func (c *RedisCache) Increment(ctx context.Context, key string, delta int64) error {
-	_, err := c.rds.IncrBy(ctx, key, delta)
-	return err
+	return c.addDelta(ctx, key, delta)
 }
 
 // Decrement subtracts delta from the numeric value of key; a missing key is
-// initialized to -delta. It uses the atomic Redis INCRBY command with a negative
-// value underneath.
+// initialized to -delta and gets the default expiry. It uses an atomic Redis
+// script underneath.
 func (c *RedisCache) Decrement(ctx context.Context, key string, delta int64) error {
-	_, err := c.rds.IncrBy(ctx, key, -delta)
+	return c.addDelta(ctx, key, -delta)
+}
+
+// addDelta applies delta atomically and keeps the cache's TTL semantics.
+func (c *RedisCache) addDelta(ctx context.Context, key string, delta int64) error {
+	if c.expiry <= 0 {
+		// No default expiry: a plain INCRBY is enough and must not invent a TTL.
+		_, err := c.rds.IncrBy(ctx, key, delta)
+		return err
+	}
+	_, err := c.rds.IncrByWithTTL(ctx, key, delta, c.expiry)
 	return err
 }
 

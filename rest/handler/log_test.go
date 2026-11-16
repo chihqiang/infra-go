@@ -6,8 +6,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"go.uber.org/zap/zapcore"
-
 	"github.com/chihqiang/infra-go/core/logger"
 )
 
@@ -25,7 +23,7 @@ func (r *recordingLogger) record(level string, fields []logger.Field) {
 	values := make(map[string]any, len(fields))
 	for _, field := range fields {
 		switch field.Type {
-		case zapcore.Int64Type, zapcore.DurationType:
+		case logger.Int64Type, logger.DurationType:
 			values[field.Key] = field.Integer
 		default:
 			values[field.Key] = field.String
@@ -46,6 +44,16 @@ func (r *recordingLogger) ErrorCtx(_ context.Context, _ string, fields ...logger
 	r.record("error", fields)
 }
 
+func newLogHandlerForTest(t *testing.T, config LogConfig, log logger.ILogger) func(http.HandlerFunc) http.HandlerFunc {
+	t.Helper()
+	config.Enabled = true
+	handler, err := NewLogHandler(config, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handler.Handle
+}
+
 func TestLogRecordsLevelFromStatus(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -59,7 +67,7 @@ func TestLogRecordsLevelFromStatus(t *testing.T) {
 
 	for _, test := range tests {
 		log := &recordingLogger{}
-		handlerFn := LogHandlerWith(log)(func(w http.ResponseWriter, _ *http.Request) {
+		handlerFn := newLogHandlerForTest(t, LogConfig{}, log)(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(test.status)
 		})
 		handlerFn.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/users", nil))
@@ -85,10 +93,10 @@ func TestLogRecordsLevelFromStatus(t *testing.T) {
 
 func TestLogRecordsRequestIDFromContext(t *testing.T) {
 	log := &recordingLogger{}
-	logFn := LogHandlerWith(log)(func(http.ResponseWriter, *http.Request) {})
+	logFn := newLogHandlerForTest(t, LogConfig{}, log)(func(http.ResponseWriter, *http.Request) {})
 
 	request := httptest.NewRequest(http.MethodGet, "/users", nil)
-	RequestIDHandler(func(w http.ResponseWriter, r *http.Request) {
+	NewRequestIDHandler(RequestIDConfig{Enabled: true}).Handle(func(w http.ResponseWriter, r *http.Request) {
 		logFn.ServeHTTP(w, r)
 	}).ServeHTTP(httptest.NewRecorder(), request)
 
@@ -102,7 +110,7 @@ func TestLogRecordsRequestIDFromContext(t *testing.T) {
 
 func TestLogHandlerSkipsPathsAndAddsService(t *testing.T) {
 	log := &recordingLogger{}
-	logFn := LogHandlerWith(log, WithLogSkipPaths("/healthz"), WithLogServiceName("demo"))(
+	logFn := newLogHandlerForTest(t, LogConfig{SkipPaths: []string{"/healthz"}, ServiceName: "demo"}, log)(
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) },
 	)
 
@@ -122,7 +130,7 @@ func TestLogHandlerSkipsPathsAndAddsService(t *testing.T) {
 
 func TestLogHandlerSkipsWildcardPaths(t *testing.T) {
 	log := &recordingLogger{}
-	logFn := LogHandlerWith(log, WithLogSkipPaths("/health*"))(
+	logFn := newLogHandlerForTest(t, LogConfig{SkipPaths: []string{"/health*"}}, log)(
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 	)
 
@@ -134,7 +142,7 @@ func TestLogHandlerSkipsWildcardPaths(t *testing.T) {
 
 func TestLogHandlerRecordsRoutePattern(t *testing.T) {
 	log := &recordingLogger{}
-	logFn := LogHandlerWith(log)(func(http.ResponseWriter, *http.Request) {})
+	logFn := newLogHandlerForTest(t, LogConfig{}, log)(func(http.ResponseWriter, *http.Request) {})
 
 	request := httptest.NewRequest(http.MethodGet, "/users/42", nil)
 	request = request.WithContext(ContextWithPattern(request.Context(), "GET /users/{id}"))
@@ -188,7 +196,7 @@ func TestLogHandlerUsesGlobalLogger(t *testing.T) {
 	logger.SetGlobal(counter)
 	t.Cleanup(func() { logger.SetGlobal(previous) })
 
-	logFn := LogHandler()(func(w http.ResponseWriter, _ *http.Request) {
+	logFn := newLogHandlerForTest(t, LogConfig{}, nil)(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	})
 	logFn.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/users", nil))
@@ -204,7 +212,7 @@ func TestLogHandlerGlobalLoggerLevels(t *testing.T) {
 	logger.SetGlobal(counter)
 	t.Cleanup(func() { logger.SetGlobal(previous) })
 
-	logFn := LogHandler()(func(w http.ResponseWriter, _ *http.Request) {
+	logFn := newLogHandlerForTest(t, LogConfig{}, nil)(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	})
 	logFn.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/missing", nil))
@@ -212,7 +220,7 @@ func TestLogHandlerGlobalLoggerLevels(t *testing.T) {
 		t.Fatalf("warns = %d, want 1", counter.warns)
 	}
 
-	okFn := LogHandler()(func(w http.ResponseWriter, _ *http.Request) {
+	okFn := newLogHandlerForTest(t, LogConfig{}, nil)(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	okFn.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/ok", nil))
@@ -223,7 +231,7 @@ func TestLogHandlerGlobalLoggerLevels(t *testing.T) {
 
 func TestLogRecordsPanickingRequestAndRepanics(t *testing.T) {
 	log := &recordingLogger{}
-	handlerFn := LogHandlerWith(log)(func(http.ResponseWriter, *http.Request) {
+	handlerFn := newLogHandlerForTest(t, LogConfig{}, log)(func(http.ResponseWriter, *http.Request) {
 		panic("boom")
 	})
 
@@ -247,9 +255,9 @@ func TestLogRecordsPanickingRequestAndRepanics(t *testing.T) {
 
 func TestLogHandlerClientIPOverride(t *testing.T) {
 	log := &recordingLogger{}
-	handlerFn := LogHandlerWith(log, WithLogClientIP(func(*http.Request) string {
+	handlerFn := newLogHandlerForTest(t, LogConfig{ClientIP: func(*http.Request) string {
 		return "203.0.113.42"
-	}))(func(http.ResponseWriter, *http.Request) {})
+	}}, log)(func(http.ResponseWriter, *http.Request) {})
 
 	handlerFn.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/users", nil))
 
@@ -263,7 +271,7 @@ func TestLogHandlerClientIPOverride(t *testing.T) {
 
 func TestLogHandlerIgnoresForwardingHeadersByDefault(t *testing.T) {
 	log := &recordingLogger{}
-	handlerFn := LogHandlerWith(log)(func(http.ResponseWriter, *http.Request) {})
+	handlerFn := newLogHandlerForTest(t, LogConfig{}, log)(func(http.ResponseWriter, *http.Request) {})
 
 	request := httptest.NewRequest(http.MethodGet, "/users", nil)
 	request.RemoteAddr = "10.0.0.1:1234"

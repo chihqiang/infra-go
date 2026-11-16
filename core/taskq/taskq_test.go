@@ -100,7 +100,7 @@ func TestLogAdapter_Nil(t *testing.T) {
 }
 
 func TestLogAdapter_Delegates(t *testing.T) {
-	la := newLogAdapter(logger.New(logger.Config{Output: []string{"stderr"}}))
+	la := newLogAdapter(logger.New(logger.Config{Level: "error"}))
 	require.NotNil(t, la)
 	assert.NotPanics(t, func() {
 		la.Debug("d")

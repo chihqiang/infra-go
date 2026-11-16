@@ -73,13 +73,21 @@ type ServiceGroup struct {
 	// allEntered is closed before every service goroutine enters Start, acting as the stop
 	// barrier.
 	allEntered chan struct{}
-	stopOnce   func()
+	// startDone is closed when the first Start returns; later Start calls wait on it so
+	// they observe the same lifetime instead of closing allEntered twice.
+	startDone chan struct{}
+	// stopRequested records that Stop arrived before Start. Some services implement Stop
+	// as a no-op until initialization has run, so the group issues Stop again once every
+	// service has entered Start.
+	stopRequested bool
+	stopOnce      func()
 }
 
 // NewServiceGroup creates a ServiceGroup.
 func NewServiceGroup() *ServiceGroup {
 	sg := &ServiceGroup{
 		allEntered: make(chan struct{}),
+		startDone:  make(chan struct{}),
 	}
 	sg.stopOnce = sync.OnceFunc(sg.doStop)
 	return sg
@@ -115,16 +123,39 @@ func (sg *ServiceGroup) snapshot() []Service {
 // services and the error is recorded through logger (including the service index and type
 // name); the panic is not re-raised.
 //
+// Start is safe to call more than once: the first call runs the group and later calls
+// wait for it to return instead of starting the services again (which used to close the
+// start barrier twice and panic with "close of closed channel").
+//
 // Stop barrier: doStop waits until every service goroutine has entered Start before
 // dispatching Stop, which avoids a "service stopped before it ever started and then never
-// receiving the stop signal once it does start".
-// No further logic should follow a call to this method.
+// receiving the stop signal once it does start". When Stop arrived before Start, the
+// group issues Stop a second time after the barrier, because a Stop before initialization
+// may have been a no-op.
 func (sg *ServiceGroup) Start() {
+	sg.mu.Lock()
+	if sg.started {
+		done := sg.startDone
+		sg.mu.Unlock()
+		<-done
+		return
+	}
+	sg.started = true
+	sg.mu.Unlock()
+
+	defer close(sg.startDone)
 	sg.doStart()
 }
 
-// Stop stops every Service concurrently and runs only once.
+// Stop stops every Service and runs only once. When it is called before Start, the
+// request is recorded and Stop is issued again after the services have started, so a
+// service whose Stop is a no-op before initialization still receives the signal.
 func (sg *ServiceGroup) Stop() {
+	sg.mu.Lock()
+	if !sg.started {
+		sg.stopRequested = true
+	}
+	sg.mu.Unlock()
 	sg.stopOnce()
 }
 
@@ -134,14 +165,6 @@ func (sg *ServiceGroup) Stop() {
 func (sg *ServiceGroup) doStart() {
 	services := sg.snapshot()
 
-	// Mark that starting has begun: doStop uses this to decide whether it has to wait for the
-	// start barrier.
-	// It must be set before the goroutines are started, otherwise Stop could arrive before the
-	// mark and skip the wait.
-	sg.mu.Lock()
-	sg.started = true
-	sg.mu.Unlock()
-
 	// Start barrier counter: every service calls Done once before entering Start. Once all of
 	// them have entered Start, closing allEntered lets doStop dispatch the stop.
 	var entered sync.WaitGroup
@@ -149,6 +172,16 @@ func (sg *ServiceGroup) doStart() {
 	go func() {
 		entered.Wait()
 		close(sg.allEntered)
+
+		// Stop before Start: the first Stop call ran before this barrier was released,
+		// so services whose Stop is a no-op until initialized never got the signal.
+		// Issue it again now that every Start has been entered.
+		sg.mu.Lock()
+		requested := sg.stopRequested
+		sg.mu.Unlock()
+		if requested {
+			sg.stopAll()
+		}
 	}()
 
 	var wg sync.WaitGroup
@@ -181,7 +214,7 @@ func (sg *ServiceGroup) doStart() {
 	wg.Wait()
 }
 
-// doStop stops every Service concurrently and waits for all of them to finish.
+// doStop waits for the start barrier and then stops every Service.
 // A panic in Stop is only logged and does not interrupt the stopping of the other services.
 func (sg *ServiceGroup) doStop() {
 	// Wait until every service has entered Start before dispatching the stop.
@@ -199,15 +232,18 @@ func (sg *ServiceGroup) doStop() {
 	if started {
 		<-sg.allEntered
 	}
+	sg.stopAll()
+}
 
-	var wg sync.WaitGroup
-	// Iterate in reverse: the most recently added service stops first
+// stopAll stops every Service one at a time in reverse registration order, so the
+// most recently added service (usually the traffic entry point) stops first and
+// dependencies it uses are still alive. A slow Stop delays the services before it;
+// that is the price of the ordering guarantee.
+func (sg *ServiceGroup) stopAll() {
 	services := sg.snapshot()
 	for i := len(services) - 1; i >= 0; i-- {
 		svc := services[i]
-		wg.Add(1)
-		go func(idx int, s Service) {
-			defer wg.Done()
+		func(idx int, s Service) {
 			defer func() {
 				if r := recover(); r != nil {
 					logger.Errorf("service: panic during stop, index: %d, type: %T, reason: %v",
@@ -217,7 +253,6 @@ func (sg *ServiceGroup) doStop() {
 			s.Stop()
 		}(i, svc)
 	}
-	wg.Wait()
 }
 
 // --- Adapter functions ---

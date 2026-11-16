@@ -476,3 +476,48 @@ func TestExpireImmediate(t *testing.T) {
 	_, err := c.Get(bgCtx, "k")
 	assert.ErrorIs(t, err, ErrNotFound)
 }
+
+// TestTakeNilNotCached keeps MemCache.Take consistent with RedisCache.Take: a nil
+// result is returned as-is but not cached.
+func TestTakeNilNotCached(t *testing.T) {
+	c := newTestCache(t, time.Minute)
+
+	var calls int32
+	fetch := func() (any, error) {
+		atomic.AddInt32(&calls, 1)
+		return nil, nil
+	}
+
+	v, err := c.Take(bgCtx, "nil-key", fetch)
+	require.NoError(t, err)
+	assert.Nil(t, v)
+	_, err = c.Take(bgCtx, "nil-key", fetch)
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), atomic.LoadInt32(&calls), "a nil result must not be cached")
+}
+
+// TestSetEx_PerKeyTTLScanWithoutDefaultExpiry is a regression test: when the cache
+// was created without a default expiry, the global scan never started, so entries
+// written with SetEx only disappeared when they were read again (cold keys stayed in
+// the map forever).
+func TestSetEx_PerKeyTTLScanWithoutDefaultExpiry(t *testing.T) {
+	c := newTestCache(t, 0)
+	require.NoError(t, c.SetEx(bgCtx, "short", "v", 10*time.Millisecond))
+
+	require.Eventually(t, func() bool {
+		return c.Size() == 0
+	}, time.Second, 5*time.Millisecond, "an expired per-key TTL entry must be removed by the scan")
+}
+
+// TestSetWithoutExpiryStartsNoScan keeps the TTL scan lazy: Set on a cache with no
+// default expiry must not start a scan (a 1ms ticker walking the whole map), since
+// nothing in the cache can expire.
+func TestSetWithoutExpiryStartsNoScan(t *testing.T) {
+	c := newTestCache(t, 0)
+	require.NoError(t, c.Set(bgCtx, "k", "v"))
+
+	c.lock.Lock()
+	interval := c.scanInterval
+	c.lock.Unlock()
+	assert.Zero(t, interval, "no scan should be started without any TTL")
+}

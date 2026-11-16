@@ -3,7 +3,7 @@
 A distributed tracing package built on [OpenTelemetry](https://opentelemetry.io), with a concise
 API for propagating and recording trace context between services.
 
-> The **HTTP server tracing middleware** lives in `rest/handler` (`TraceHandler`) and can be
+> The **HTTP server tracing middleware** lives in `rest/handler` (`NewTraceHandler`) and can be
 > enabled through `rest.MiddlewaresConf.Trace` (see [rest](./rest.md)). The `trace` package focuses
 > on: TracerProvider assembly, span management, gRPC/HTTP header propagation, and attribute
 > wrappers.
@@ -56,7 +56,7 @@ func main() {
 }
 ```
 
-> Automatic instrumentation on the HTTP server: `resthandler.TraceHandler()`; enable it through
+> Automatic instrumentation on the HTTP server: `resthandler.NewTraceHandler`; enable it through
 > `rest.MiddlewaresConf.Trace` or mount it before the access log so logs carry `trace_id`.
 
 ## Configuration
@@ -86,6 +86,33 @@ trace.StartAgent(trace.Config{
 | `OtlpHttpSecure` | `bool` | `false` | Whether OTLP HTTP uses HTTPS |
 | `OtlpGrpcSecure` | `bool` | `false` | Whether OTLP gRPC uses TLS (connecting to a TLS collector) |
 | `Disabled` | `bool` | `false` | Whether to disable tracing (no TracerProvider is created) |
+
+The default samples everything, matching the OpenTelemetry SDK convention: sampling is a
+deployment decision. High-traffic services should set `Sampler: 0.1` (or another ratio)
+explicitly, or sample in the collector (tail-based sampling) instead of relying on a
+library-level default.
+
+When `Endpoint` is empty the agent still installs a recording `TracerProvider` (useful for tests
+and local context propagation) but creates no exporter; `StartAgent` logs a warning because the
+spans are recorded and then dropped. Set `Endpoint` (or `Batcher: "file"` with a file path) to
+export them.
+
+### Propagator
+
+This package never changes global OpenTelemetry state, so the application stays in
+control of its propagator. `Inject/Extract/InjectHeader/ExtractHeader` use, in order:
+
+1. the propagator passed through `WithPropagator`,
+2. the application's global propagator (B3, W3C, custom, ...),
+3. the built-in W3C `TraceContext` + `Baggage` default.
+
+```go
+trace.StartAgent(cfg, trace.WithPropagator(propagation.TraceContext{}))
+```
+
+`StopAgent` shuts the provider down and resets the global provider to the no-op
+implementation, so spans created after shutdown are not silently sent to a closed
+exporter.
 
 ### Sample rate 0: `WithSampler(0)` vs `Disabled`
 
@@ -155,7 +182,7 @@ ctx, spanContext := trace.ExtractHeader(r.Context(), r.Header)
 
 ### HTTP server middleware
 
-The HTTP server tracing middleware lives in `rest/handler` as `TraceHandler`. It extracts the
+The HTTP server tracing middleware lives in `rest/handler` as `NewTraceHandler`. It extracts the
 upstream span context (W3C traceparent), creates a server span named after the matched route
 template (for example `GET /users/{id}`) with method/path/status attributes, and injects the
 context so downstream code can correlate `trace_id`:
@@ -163,17 +190,33 @@ context so downstream code can correlate `trace_id`:
 ```go
 import resthandler "github.com/chihqiang/infra-go/rest/handler"
 
-server.Use(resthandler.TraceHandler()) // trace everything
-server.Use(resthandler.TraceHandler(  // skip probes, tag the service
-    resthandler.WithTraceIgnorePaths("/health*", "/metrics/*"),
-    resthandler.WithTraceServiceName("my-service"),
-))
+server.Use(resthandler.NewTraceHandler(resthandler.TraceConfig{Enabled: true}).Handle)
+server.Use(resthandler.NewTraceHandler(resthandler.TraceConfig{ // skip probes, tag the service
+    Enabled:     true,
+    IgnorePaths: []string{"/health*", "/metrics/*"},
+    ServiceName: "my-service",
+}).Handle)
 
-// or let rest assemble it from config
-conf.Middlewares.Trace = true
-conf.Name = "my-service"
-conf.TraceIgnorePaths = []string{"/health*"}
+// or let rest configure and start the agent
+conf.Middlewares.Trace = resthandler.TraceConfig{
+    Enabled:     true,
+    ServiceName: "my-service",
+    IgnorePaths: []string{"/health*"},
+    Agent: trace.Config{
+        Name:     "my-service",
+        Batcher:  trace.BatcherOTLPGRPC,
+        Endpoint: "localhost:4317", // Jaeger OTLP gRPC; HTTP uses localhost:4318
+    },
+}
+// The agent becomes a service managed by core/service:
+sg := service.NewServiceGroup()
+server.Register(sg) // HTTP server + internal trace agent service
+sg.Start()
 ```
+
+When using the handler without `rest.Server`, start the agent yourself with
+`trace.StartAgent(...)` and call `trace.StopAgent()` during application shutdown. `rest.Server`
+registers its own private agent service through `Server.Register`.
 
 ### Attributes
 
@@ -229,7 +272,7 @@ import (
 )
 
 func main() {
-    logInstance := logger.New(logger.Config{Level: logger.InfoLevel, AppName: "demo"})
+    logInstance := logger.New(logger.Config{Level: "info", ServiceName: "demo"})
     logger.SetGlobal(logInstance)
     // the ILogger interface has no Close (Close exists only on the *Logger concrete type);
     // flush buffers with the package-level Sync before exiting

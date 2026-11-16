@@ -8,12 +8,32 @@ import (
 	"github.com/google/uuid"
 )
 
+// RequestIDHeader is the request and response header carrying the request ID.
 const RequestIDHeader = "X-Request-ID"
 
 type requestIDContextKey struct{}
 
+// RequestIDConfig configures RequestIDHandler.
+type RequestIDConfig struct {
+	Enabled bool `json:",default=true"`
+}
+
 // RequestIDHandler preserves a safe incoming request ID or generates a UUID.
-func RequestIDHandler(next http.HandlerFunc) http.HandlerFunc {
+type RequestIDHandler struct {
+	config RequestIDConfig
+}
+
+// NewRequestIDHandler creates a RequestIDHandler.
+func NewRequestIDHandler(config RequestIDConfig) *RequestIDHandler {
+	return &RequestIDHandler{config: config}
+}
+
+// Handle assigns the request ID to the context and response.
+func (h *RequestIDHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
+	if !h.config.Enabled {
+		return next
+	}
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get(RequestIDHeader)
 		if !validRequestID(id) {
@@ -27,7 +47,7 @@ func RequestIDHandler(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		w.Header().Set(RequestIDHeader, id)
-		r = r.WithContext(context.WithValue(r.Context(), requestIDContextKey{}, id))
+		r = r.WithContext(ContextWithRequestID(r.Context(), id))
 		next(w, r)
 	}
 }

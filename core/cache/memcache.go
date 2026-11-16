@@ -61,6 +61,7 @@ type MemCache struct {
 	stats    *cacheStat
 	stop     chan struct{}
 	once     sync.Once
+	scanOnce sync.Once
 	// scanInterval is the global expiry scan interval, derived from the default
 	// expiry given at construction time; it is zero - and no scan is started -
 	// when no expiry is configured (expire <= 0).
@@ -122,11 +123,12 @@ func NewMemCache(ctx context.Context, expire time.Duration, opts ...MemCacheOpti
 	} else {
 		c.lru = emptyLru{}
 	}
-	// Global expiry scan: started only when an expiry is configured. It shares the
-	// stop channel with cacheStat and exits together with it on Close.
+	// Global expiry scan: started when a default expiry is configured, or lazily on
+	// the first SetEx with a per-key TTL (see ensureScan). It shares the stop channel
+	// with cacheStat and exits together with it on Close.
 	if expire > 0 {
 		c.scanInterval = scanIntervalFor(expire)
-		go c.scanLoop()
+		c.scanOnce.Do(func() { go c.scanLoop() })
 	}
 	c.stats = newCacheStat(c.ctx, c.name, c.size, c.stop)
 	return c
@@ -147,8 +149,7 @@ func (c *MemCache) Get(ctx context.Context, key string) (any, error) {
 // Set stores value in the cache using the default expiry.
 // ctx is ignored by this implementation.
 func (c *MemCache) Set(ctx context.Context, key string, value any) error {
-	c.SetEx(ctx, key, value, c.expire)
-	return nil
+	return c.SetEx(ctx, key, value, c.expire)
 }
 
 // SetEx stores value in the cache with the given time to live ttl.
@@ -158,7 +159,10 @@ func (c *MemCache) SetEx(ctx context.Context, key string, value any, ttl time.Du
 		ttl = c.expire
 	}
 
-	// No expiry: write directly, constrained only by the LRU capacity.
+	// No expiry: write directly, constrained only by the LRU capacity. The scan must
+	// not be started here: Set on a cache created without a default expiry passes
+	// ttl=0, and starting a 1ms ticker that walks the whole map forever would burn
+	// CPU for entries that never expire.
 	if ttl <= 0 {
 		c.lock.Lock()
 		c.data[key] = cachedEntry{value: value}
@@ -166,6 +170,11 @@ func (c *MemCache) SetEx(ctx context.Context, key string, value any, ttl time.Du
 		c.lock.Unlock()
 		return nil
 	}
+
+	// A per-key TTL needs the global scan even when the cache was created without a
+	// default expiry; otherwise a key that is never read again stays in the map
+	// forever.
+	c.ensureScan(ttl)
 
 	// Jitter the effective expiry so that a large number of keys does not expire at
 	// the same instant (avalanche protection).
@@ -191,7 +200,8 @@ func (c *MemCache) Delete(ctx context.Context, keys ...string) error {
 }
 
 // Take returns the value of key; on a miss it calls fetch, writes the result to the
-// cache and returns it, protecting against cache stampedes.
+// cache and returns it, protecting against cache stampedes. A nil result from fetch
+// is returned as-is and is not cached.
 // ctx is ignored by this implementation.
 func (c *MemCache) Take(ctx context.Context, key string, fetch func() (any, error)) (any, error) {
 	if val, ok := c.doGet(key); ok {
@@ -209,6 +219,11 @@ func (c *MemCache) Take(ctx context.Context, key string, fetch func() (any, erro
 		v, e := fetch()
 		if e != nil {
 			return nil, e
+		}
+		// Do not cache a nil result: it usually means "not found" and keeping it
+		// until the default TTL would hide later writes. It matches RedisCache.Take.
+		if v == nil {
+			return nil, nil
 		}
 
 		fresh = true
@@ -386,6 +401,15 @@ func (c *MemCache) scanExpired() {
 			c.lru.remove(k)
 		}
 	}
+}
+
+// ensureScan starts the global expiry scan once, using interval derived from ttl.
+// It makes per-key TTLs (SetEx) effective on a cache created with expire <= 0.
+func (c *MemCache) ensureScan(ttl time.Duration) {
+	c.scanOnce.Do(func() {
+		c.scanInterval = scanIntervalFor(ttl)
+		go c.scanLoop()
+	})
 }
 
 // scanLoop runs the global expiry scan periodically; it shares the stop channel with

@@ -132,8 +132,8 @@ err := retry.DoWithConfig(ctx, func(ctx context.Context) error {
     retry.WithMaxRetries(5),
     retry.WithOnRetry(func(attempt int, err error) {
         logger.Warn("retrying",
-            zap.Int("attempt", attempt),
-            zap.Error(err),
+            logger.Int("attempt", attempt),
+            logger.Err(err),
         )
     }),
 )

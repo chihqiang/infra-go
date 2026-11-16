@@ -1,8 +1,8 @@
-// Package logger provides a structured logging wrapper built on zap + lumberjack.
+// Package logger provides a structured logger implemented with the Go standard library.
 //
 // It supports three logging styles (structured / formatted / context-aware), two encodings
-// (JSON and console) and size-based rotation with a retention policy for log files. A
-// package-level global Logger is provided and can be swapped with SetGlobal / ReplaceGlobal.
+// (JSON and plain) and size- or daily-based rotation with a retention policy for log files.
+// A package-level global Logger is provided and can be swapped with SetGlobal / ReplaceGlobal.
 package logger
 
 import (
@@ -11,22 +11,16 @@ import (
 )
 
 // Global Logger: all package-level log functions (Info/Error, ...) forward to the instance
-// returned by GetGlobal(). It writes to stderr by default (JSON encoding, Info level) and can
-// be replaced via SetGlobal / ReplaceGlobal.
+// returned by GetGlobal(). It uses console mode with JSON encoding and Info level by default,
+// and can be replaced via SetGlobal / ReplaceGlobal.
 var (
 	// global is the global Logger instance.
 	global atomic.Pointer[ILogger]
 )
 
 func init() {
-	// Initialise the global Logger, which writes to stderr by default.
-	l := ILogger(New(Config{
-		Level:       InfoLevel,
-		Encoding:    JSONEncoding,
-		Output:      []string{"stderr"},
-		ErrorOutput: "stderr",
-		Caller:      true,
-	}))
+	// Initialise the global Logger with the default configuration (console mode).
+	l := ILogger(New(Config{}))
 	global.Store(&l)
 }
 

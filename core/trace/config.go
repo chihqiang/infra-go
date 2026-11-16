@@ -1,5 +1,7 @@
 package trace
 
+import "go.opentelemetry.io/otel/propagation"
+
 // TraceName is the tracing name.
 const TraceName = "infra-go"
 
@@ -26,7 +28,10 @@ type Config struct {
 	// When Batcher is file it is a file path.
 	// For the other types it is the exporter service address, e.g. "localhost:4317".
 	Endpoint string `json:",optional"`
-	// Sampler is the sampling ratio in the range 0.0~1.0, default 1.0 (sample everything).
+	// Sampler is the sampling ratio in the range 0.0~1.0, default 1.0 (sample
+	// everything), matching the OpenTelemetry convention. High-traffic services
+	// should set a lower ratio explicitly (or sample in the collector) instead of
+	// relying on a library-level default.
 	//
 	// "Do not sample itself, only follow upstream" cannot be expressed with this field:
 	// 0 is treated as unset and filled in with 1.0.
@@ -51,6 +56,11 @@ type Config struct {
 	// Disabled reports whether tracing is disabled, default false.
 	// When true, StartAgent starts no exporter at all.
 	Disabled bool `json:",optional"`
+
+	// propagator overrides the global OpenTelemetry propagator installed by
+	// StartAgent. It is set through WithPropagator and kept out of config files
+	// because it is not serialisable.
+	propagator propagation.TextMapPropagator
 }
 
 // Option overrides configuration entries; it expresses explicit zero values that the
@@ -75,4 +85,13 @@ type Option func(*Config)
 // < 0 counts as 0.
 func WithSampler(ratio float64) Option {
 	return func(c *Config) { c.Sampler = ratio }
+}
+
+// WithPropagator selects the propagator used by Inject/Extract/InjectHeader/
+// ExtractHeader when the agent starts (for example B3 instead of the default W3C
+// TraceContext + Baggage). It never changes the global OpenTelemetry propagator:
+// without this option the library uses the application's global propagator when
+// one is configured, and W3C otherwise.
+func WithPropagator(p propagation.TextMapPropagator) Option {
+	return func(c *Config) { c.propagator = p }
 }

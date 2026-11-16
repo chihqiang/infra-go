@@ -1,13 +1,18 @@
 # service
 
-A service group manager that starts and stops several services concurrently, with panic
-recovery and graceful shutdown.
+A service group manager that starts several services concurrently and stops them in reverse
+registration order, with panic recovery and graceful shutdown.
 
 ## Features
 
 - **Concurrent start**: all Services call `Start` concurrently; blocks until all of them exit
-- **Concurrent stop**: all Services call `Stop` concurrently, with `sync.Once` guaranteeing it
-  runs only once
+- **Ordered stop**: `Stop` walks the services in reverse registration order (the most recently
+  added service stops first) and waits for each `Stop` before moving on, so an entry-point
+  service stops before the dependencies it used; `sync.Once` guarantees the group dispatches
+  the stop only once
+- **Restart safety**: a second `Start` waits for the first one to return instead of starting the
+  services again; a `Stop` that arrives before `Start` is recorded and re-issued once every
+  service has entered `Start`
 - **Panic recovery**: panics in both `Start` and `Stop` are recovered and logged through
   `logger` without interrupting other services; a panic in `Start` automatically triggers `Stop`
   to unblock the other services
@@ -70,10 +75,9 @@ func main() {
         }),
     })
 
-    // Adapt *rest.Server into a Service with service.AsService for direct management
-    // (AsService adapts objects with Start() error + Stop() error; Start blocks until the signal
-    // arrives and triggers a graceful shutdown)
-    sg.Add(service.AsService(server))
+    // Register adds *rest.Server and the configured trace agent service; plain
+    // service.AsService(server) is enough only when no trace agent is configured
+    server.Register(sg)
 
     // start all services (blocking)
     sg.Start()
@@ -90,7 +94,7 @@ sg := service.NewServiceGroup()
 //   service.AsService
 // - plain functions with no stop capability, or that handle the exit signal themselves, use
 //   service.WithStart
-sg.Add(service.AsService(server))                  // HTTP service (rest.Server)
+server.Register(sg)                               // HTTP service + trace agent
 sg.Add(service.WithStart(func() { _ = consumer.Run() })) // Redis consumer (asynq)
 sg.Add(service.WithStart(func() { cronTick() }))  // cron job
 
@@ -158,7 +162,7 @@ conf.Host, conf.Port = "0.0.0.0", 8080
 server, _ := rest.NewServer(conf)
 // ...register routes...
 
-sg.Add(service.AsService(server)) // managed together by the ServiceGroup
+server.Register(sg) // HTTP service + trace agent, managed by the group
 ```
 
 The errors returned by `Start` / `Stop` are both logged (the `Service` interface has no return
@@ -212,8 +216,8 @@ sg.Stop() // returns normally; the panic was logged
 | ------ | ------ |
 | `NewServiceGroup()` | Create a service group |
 | `Add(service)` | Add a service (appended to the end; start follows the addition order, stop runs in reverse) |
-| `Start()` | Start all services concurrently; blocks until all of them exit |
-| `Stop()` | Stop all services concurrently, guaranteed to run only once |
+| `Start()` | Start all services concurrently; blocks until all of them exit; later calls wait for the first one |
+| `Stop()` | Stop all services in reverse order, one at a time; guaranteed to dispatch only once (a Stop before Start is re-issued after startup) |
 
 ### Adapter function API
 
@@ -233,5 +237,5 @@ Add(A)  → services: [A]
 Add(B)  → services: [A, B]
 Add(C)  → services: [A, B, C]
 
-Stop order: C → B → A (reverse, but executed concurrently, so the exact order is not guaranteed)
+Stop order: C → B → A (reverse, sequential: each Stop waits for the previous one)
 ```

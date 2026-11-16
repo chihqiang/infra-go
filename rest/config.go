@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/chihqiang/infra-go/core/logger"
+	resthandler "github.com/chihqiang/infra-go/rest/handler"
 	"github.com/chihqiang/infra-go/rest/internal/realip"
 )
 
@@ -20,8 +22,6 @@ const defaultShutdownTimeout = 10 * time.Second
 
 // Config configures an HTTP server.
 type Config struct {
-	// Name identifies the service in trace spans and access logs.
-	Name            string        `json:",optional"`
 	Host            string        `json:",default=0.0.0.0"`
 	Port            int           `json:",default=8080,range=[0:65535]"`
 	CertFile        string        `json:",optional"`
@@ -31,27 +31,29 @@ type Config struct {
 	IdleTimeout     time.Duration `json:",default=120s"`
 	ShutdownTimeout time.Duration `json:",default=10s"`
 	MaxHeaderBytes  int           `json:",default=1048576"`
-	MaxBodyBytes    int64         `json:",default=1048576"`
-	Middlewares     MiddlewaresConf
-	// TrustedProxies lists IPs or CIDR ranges whose X-Forwarded-For / X-Real-IP
-	// headers are trusted by the access log. Empty ignores those headers and
-	// logs the direct peer address.
-	TrustedProxies []string `json:",optional"`
-	// TraceIgnorePaths skips spans for these request paths.
-	TraceIgnorePaths []string `json:",optional"`
-	// LogSkipPaths omits these request paths from the access log.
-	LogSkipPaths []string `json:",optional"`
+	// Logger configures the server-owned logger when any field is set. NewServer
+	// builds it, installs it on the server (used by the access-log middleware)
+	// and also sets it as the global logger so package-level logger calls in
+	// other middleware see the same instance. Use WithLogger to inject a
+	// pre-built logger instead.
+	Logger      logger.Config
+	Middlewares MiddlewaresConf
 }
 
-// MiddlewaresConf controls server-wide middleware defaults.
+// MiddlewaresConf groups the configuration of the built-in middleware handlers.
 type MiddlewaresConf struct {
-	Recovery  bool          `json:",default=true"`
-	RequestID bool          `json:",default=true"`
-	Trace     bool          `json:",default=false"`
-	Log       bool          `json:",default=true"`
-	MaxConns  int           `json:",default=0"`
-	Timeout   time.Duration `json:",default=0"`
-	Gunzip    bool          `json:",default=false"`
+	Recovery  resthandler.RecoveryConfig
+	RequestID resthandler.RequestIDConfig
+	Trace     resthandler.TraceConfig
+	Log       resthandler.LogConfig
+	MaxConns  resthandler.MaxConnsConfig
+	Auth      resthandler.AuthConfig
+	RateLimit resthandler.RateLimitConfig
+	Breaker   resthandler.BreakerConfig
+	Timeout   resthandler.TimeoutConfig
+	Gunzip    resthandler.GunzipConfig
+	MaxBytes  resthandler.MaxBytesConfig
+	Signature resthandler.SignatureConfig
 }
 
 // DefaultConfig returns the standard HTTP server configuration.
@@ -64,11 +66,11 @@ func DefaultConfig() Config {
 		IdleTimeout:     120 * time.Second,
 		ShutdownTimeout: defaultShutdownTimeout,
 		MaxHeaderBytes:  1 << 20,
-		MaxBodyBytes:    1 << 20,
 		Middlewares: MiddlewaresConf{
-			Recovery:  true,
-			RequestID: true,
-			Log:       true,
+			Recovery:  resthandler.RecoveryConfig{Enabled: true},
+			RequestID: resthandler.RequestIDConfig{Enabled: true},
+			Log:       resthandler.LogConfig{Enabled: true},
+			MaxBytes:  resthandler.MaxBytesConfig{Enabled: true, Limit: 1 << 20},
 		},
 	}
 }
@@ -83,6 +85,12 @@ func (c Config) withDefaults() Config {
 	return c
 }
 
+// loggerConfigured reports whether the caller configured a logger. The zero
+// logger.Config is valid, so only a non-zero value replaces the global logger.
+func (c Config) loggerConfigured() bool {
+	return !reflect.ValueOf(c.Logger).IsZero()
+}
+
 // Validate checks configuration values that cannot be inferred from defaults.
 func (c Config) Validate() error {
 	if c.Port < 0 || c.Port > 65535 {
@@ -94,14 +102,32 @@ func (c Config) Validate() error {
 	if c.MaxHeaderBytes < 0 {
 		return fmt.Errorf("rest: max header bytes must not be negative: %d", c.MaxHeaderBytes)
 	}
-	if c.MaxBodyBytes < 0 {
-		return fmt.Errorf("rest: max body bytes must not be negative: %d", c.MaxBodyBytes)
-	}
 	if c.ReadTimeout < 0 || c.WriteTimeout < 0 || c.IdleTimeout < 0 || c.ShutdownTimeout < 0 {
 		return errors.New("rest: server timeouts must not be negative")
 	}
-	if _, err := realip.ParseTrustedProxies(c.TrustedProxies); err != nil {
+	if c.Middlewares.MaxConns.Limit < 0 {
+		return fmt.Errorf("rest: max connections must not be negative: %d", c.Middlewares.MaxConns.Limit)
+	}
+	if c.Middlewares.Timeout.Timeout < 0 {
+		return errors.New("rest: middleware timeout must not be negative")
+	}
+	if c.Middlewares.MaxBytes.Limit < 0 {
+		return fmt.Errorf("rest: max body bytes must not be negative: %d", c.Middlewares.MaxBytes.Limit)
+	}
+	if _, err := realip.ParseTrustedProxies(c.Middlewares.Log.TrustedProxies); err != nil {
 		return fmt.Errorf("rest: %w", err)
+	}
+	if c.Middlewares.Auth.Enabled && c.Middlewares.Auth.Parser == nil {
+		return errors.New("rest: auth middleware requires a token parser")
+	}
+	if c.Middlewares.RateLimit.Enabled && c.Middlewares.RateLimit.Limiter == nil {
+		return errors.New("rest: rate limit middleware requires a limiter")
+	}
+	if c.Middlewares.Breaker.Enabled && c.Middlewares.Breaker.Breaker == nil {
+		return errors.New("rest: breaker middleware requires a breaker")
+	}
+	if c.Middlewares.Signature.Enabled && len(c.Middlewares.Signature.Keys) == 0 {
+		return errors.New("rest: signature middleware requires at least one key")
 	}
 	return nil
 }

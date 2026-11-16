@@ -190,10 +190,23 @@ func TestDo_MaxDelayCap(t *testing.T) {
 }
 
 func TestDo_NilFunction(t *testing.T) {
-	err := Do(context.Background(), func(ctx context.Context) error {
+	err := Do(context.Background(), nil)
+	require.Error(t, err)
+}
+
+// TestDo_NegativeMaxRetries is a regression test: a negative MaxRetries skipped the
+// loop entirely, so fn never ran and the returned error contained "%!w(<nil>)".
+func TestDo_NegativeMaxRetries(t *testing.T) {
+	calls := 0
+	err := DoWithRetryConfig(context.Background(), func(context.Context) error {
+		calls++
 		return nil
-	})
-	require.NoError(t, err)
+	}, Config{MaxRetries: -1})
+
+	require.Error(t, err)
+	assert.Equal(t, 0, calls)
+	assert.Contains(t, err.Error(), "negative")
+	assert.Equal(t, 0, Attempts(Config{MaxRetries: -1}))
 }
 
 // --- Helper function tests ---

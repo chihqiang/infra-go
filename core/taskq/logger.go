@@ -35,6 +35,9 @@ func (c Config) toAsynqConfig(la *logAdapter) asynq.Config {
 		Queues:          queues,
 		ShutdownTimeout: c.ShutdownTimeout,
 		LogLevel:        asynq.InfoLevel,
+		StrictPriority:  c.StrictPriority,
+		IsFailure:       c.IsFailure,
+		RetryDelayFunc:  c.RetryDelayFunc,
 	}
 	if la != nil {
 		cfg.Logger = la

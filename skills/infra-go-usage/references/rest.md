@@ -15,9 +15,9 @@ rest/
 ├── errors.go        — error sentinels, StatusCoder, StatusOf, CodeMsg
 ├── chain/           — Middleware type and immutable middleware chain
 ├── router/          — http.ServeMux wrapper, 404/405 detection, path helpers
-├── handler/         — middleware implementations (all return chain.Middleware)
+├── handler/         — struct handlers: Config + NewXxxHandler + Handle
 ├── token/           — JWT issuing and verification (Parser)
-└── internal/        — cors, realip, pathmatch, response writers, binding
+└── internal/        — cors, realip, pathmatch, response writers, binding, service adapters
 ```
 
 - `chain` has no dependency on the rest of `rest`, so middleware can be reused anywhere.
@@ -33,7 +33,7 @@ rest/
   body limit, gzip, circuit breaker, rate limit, body signature, JWT auth, CORS
 - **Binding**: JSON / XML / form / multipart / query / header / path with self-validation
 - **Responses**: `BaseResponse` envelope with `request_id`, JSON/XML/HTML writers, error-to-status mapping
-- **Lifecycle**: `Start` / `Serve` / `Shutdown` / `Stop`, compatible with `service.AsService`
+- **Lifecycle**: `Start` / `Serve` / `Shutdown` / `Stop`, with `Register` for `service.ServiceGroup`
 
 ## Installation
 
@@ -88,8 +88,8 @@ func main() {
 }
 ```
 
-`rest.DefaultConfig()` fills host/port, timeouts, `MaxBodyBytes` and the default middleware
-switches. Passing the zero `Config` to `NewServer` uses `DefaultConfig()`; a partially populated
+`rest.DefaultConfig()` fills host/port, timeouts, the body limit and the default middleware
+configs. Passing the zero `Config` to `NewServer` uses `DefaultConfig()`; a partially populated
 `Config` is used literally, so start from `DefaultConfig()` when customising and want the other
 defaults.
 
@@ -99,7 +99,6 @@ The package name `rest` does not collide with `net/http`, so handlers can import
 
 ```go
 type Config struct {
-    Name             string        `json:",optional"` // service name for spans and access logs
     Host            string        `json:",default=0.0.0.0"`
     Port            int           `json:",default=8080,range=[0:65535]"`
     CertFile        string        `json:",optional"`
@@ -109,42 +108,112 @@ type Config struct {
     IdleTimeout     time.Duration `json:",default=120s"`
     ShutdownTimeout time.Duration `json:",default=10s"`
     MaxHeaderBytes  int           `json:",default=1048576"`
-    MaxBodyBytes    int64         `json:",default=1048576"`
-    Middlewares      MiddlewaresConf
-    TrustedProxies   []string `json:",optional"`
-    TraceIgnorePaths []string `json:",optional"`
-    LogSkipPaths     []string `json:",optional"`
+    Logger          logger.Config
+    Middlewares     MiddlewaresConf
 }
 
 type MiddlewaresConf struct {
-    Recovery  bool          `json:",default=true"`
-    RequestID bool          `json:",default=true"`
-    Trace     bool          `json:",default=false"`
-    Log       bool          `json:",default=true"`
-    MaxConns  int           `json:",default=0"`
-    Timeout   time.Duration `json:",default=0"`
-    Gunzip    bool          `json:",default=false"`
+    Recovery  resthandler.RecoveryConfig
+    RequestID resthandler.RequestIDConfig
+    Trace     resthandler.TraceConfig
+    Log       resthandler.LogConfig
+    MaxConns  resthandler.MaxConnsConfig
+    Auth      resthandler.AuthConfig
+    RateLimit resthandler.RateLimitConfig
+    Breaker   resthandler.BreakerConfig
+    Timeout   resthandler.TimeoutConfig
+    Gunzip    resthandler.GunzipConfig
+    MaxBytes  resthandler.MaxBytesConfig
+    Signature resthandler.SignatureConfig
 }
 ```
+
+`Logger` configures the global logger at server startup. When any field is set, `NewServer`
+builds it and calls `logger.SetGlobal`; the logger sync service added by `NewServer` flushes it
+when the `Server.Register` group stops. The zero `logger.Config` leaves the application's global logger untouched.
+
+```go
+server, _ := rest.NewServer(rest.Config{
+    Logger: logger.Config{
+        ServiceName: "api",
+        Mode:        "file",
+        Path:        "/var/log/api",
+        Level:       "info",
+        Rotation:    "size",
+        MaxSize:     100,
+        MaxBackups:  7,
+        KeepDays:    30,
+    },
+})
+```
+
+Each middleware has its own config struct with an `Enabled` switch and only the fields that
+handler uses, for example:
+
+```go
+Middlewares: rest.MiddlewaresConf{
+    Recovery:  resthandler.RecoveryConfig{Enabled: true},
+    RequestID: resthandler.RequestIDConfig{Enabled: true},
+    Log: resthandler.LogConfig{
+        Enabled:        true,
+        ServiceName:    "api",
+        SkipPaths:      []string{"/healthz"},
+        TrustedProxies: []string{"10.0.0.0/8"},
+    },
+    Trace: resthandler.TraceConfig{
+        Enabled:     true,
+        ServiceName: "api",
+        IgnorePaths: []string{"/health*"},
+    },
+    MaxBytes: resthandler.MaxBytesConfig{Enabled: true, Limit: 1 << 20},
+    Signature: resthandler.SignatureConfig{
+        Enabled: true,
+        Keys:    [][]byte{signingKey},
+    },
+},
+```
+
+`Auth`, `RateLimit` and `Breaker` also have `Enabled` switches, but their parser/limiter/breaker
+are runtime dependencies (`json:"-"`): set them programmatically after loading config.
+`Config.Validate` rejects enabling one of them without its dependency.
 
 Tags are consumed by `core/conf` and `core/mapping`, so the same struct works for YAML/JSON files
 and environment expansion. `Config.Validate()` rejects an out-of-range port, half-configured TLS,
 invalid trusted proxies and negative limits.
 
-`TrustedProxies` accepts IPs and CIDR ranges. When it is set, the access log only honours
-`X-Forwarded-For` / `X-Real-IP` if the direct peer is in the list, and walks the forwarded chain
-right-to-left; when it is empty the forwarding headers are ignored and the direct peer address is
-used. `ClientIP` returns the direct peer as well; `ClientIPFromHeaders` keeps the legacy
+`Middlewares.Log.TrustedProxies` accepts IPs and CIDR ranges. When it is set, the access log only
+honours `X-Forwarded-For` / `X-Real-IP` if the direct peer is in the list, and walks the forwarded
+chain right-to-left; when it is empty the forwarding headers are ignored and the direct peer
+address is used. `ClientIP` returns the direct peer as well; `ClientIPFromHeaders` keeps the legacy
 trust-any-peer behaviour, and `ClientIPTrusted` / `ParseTrustedProxies` expose the proxy-aware
 logic for application code.
 
 Middleware execution order is fixed by the server:
 
 ```text
-Recover → RequestID → Trace → Log → MaxConns → [Breaker] → Timeout → Gunzip → MaxBodyBytes → Use(...) → route
+Recover → RequestID → Trace → Log → MaxConns → RateLimit → Auth → [Breaker] → Timeout → Gunzip → MaxBytes → Signature → Use(...) → route
 ```
 
-`Gunzip` runs before `MaxBodyBytes` so the body limit applies to the decompressed payload.
+`Gunzip` runs before `MaxBytes` so the body limit applies to the decompressed payload; `Signature` runs after `MaxBytes` so it sees the bounded, decompressed body.
+
+### Request signing
+
+The signed payload binds a signature to one endpoint:
+
+```text
+METHOD \n escaped-path \n raw-query \n timestamp \n body
+```
+
+Clients sign with the same request object they send:
+
+```go
+timestamp := time.Now().Unix()
+req.Header.Set(resthandler.HeaderTimestamp, strconv.FormatInt(timestamp, 10))
+req.Header.Set(resthandler.HeaderSignature, resthandler.SignRequest(key, timestamp, req, body))
+```
+
+`TTL` defaults to 5 minutes when omitted; a negative value disables freshness checking
+explicitly (replay protection is lost). Servers verify with `X-Signature` / `X-Signature-Timestamp`.
 CORS wraps the whole chain, so 404/405 responses carry CORS headers too.
 
 ## Server
@@ -160,18 +229,26 @@ CORS wraps the whole chain, so 404/405 responses carry CORS headers too.
 | `Start()` | Listen on the configured address (TLS when cert+key are set) |
 | `Serve(net.Listener)` | Serve a caller-provided listener (supports port `:0` tests) |
 | `Shutdown(ctx)` / `Stop()` / `Close()` | Graceful / graceful-with-timeout / immediate shutdown |
+| `AddService(service.Service)` | Add an auxiliary lifecycle service (the configured trace agent is added automatically) |
+| `Register(*service.ServiceGroup)` | Add the HTTP server and all auxiliary services to a group |
 | `Addr()`, `Router()`, `ServeHTTP` | Introspection and `httptest` usage |
 
 ```go
 server, _ := rest.NewServer(rest.Config{
     Host: "127.0.0.1",
     Port: 0,
-    Middlewares: rest.MiddlewaresConf{Recovery: true, RequestID: true},
+    Middlewares: rest.MiddlewaresConf{
+        Recovery:  resthandler.RecoveryConfig{Enabled: true},
+        RequestID: resthandler.RequestIDConfig{Enabled: true},
+    },
 })
 
 api := server.Group("/api")          // "/api"
 v1 := api.Group("/v1")               // "/api/v1"
-v1.Use(resthandler.TimeoutHandler(time.Second))
+v1.Use(resthandler.NewTimeoutHandler(resthandler.TimeoutConfig{
+    Enabled: true,
+    Timeout: time.Second,
+}).Handle)
 v1.HandleFunc(http.MethodGet, "/users/{id}", handler)
 ```
 
@@ -212,7 +289,7 @@ server.AddRoute(rest.Route{
 | Option | Effect |
 |--------|--------|
 | `WithRouteMiddleware(mw ...chain.Middleware)` | Wrap only this route handler |
-| `WithRouteAuth(parser *token.Parser, opts ...handler.AuthorizeOption)` | Require a valid bearer token |
+| `WithRouteAuth(parser *token.Parser)` | Require a valid bearer token; custom config via `WithRouteMiddleware(handler.NewAuthHandler(...).Handle)` |
 
 ## Responses
 
@@ -238,8 +315,8 @@ Status resolution order in `StatusOf`:
    ignored
 2. `CodeMsg`: a code in the HTTP 4xx/5xx range is used as-is, any other business code becomes 400
    so the message is preserved
-3. Sentinels: `ErrBadRequest`, `ErrUnauthorized`, `ErrForbidden`, `ErrNotFound`, `ErrConflict`,
-   `ErrTooManyRequests`, `ErrServiceUnavailable`
+3. Sentinels: `ErrBadRequest`, `ErrUnauthorized`, `ErrForbidden`, `ErrResourceNotFound`, `ErrConflict`,
+   `ErrTooManyRequests`, `ErrServerUnavailable`
 4. Anything else → 500
 
 Decode failures are wrapped in an internal error that implements `StatusCoder`, so `rest.Error` maps
@@ -330,26 +407,64 @@ Binding and validation failures carry a status, so `rest.Error(w, err)` answers
 
 ## handler package
 
-Every handler is a `chain.Middleware`, i.e. `func(http.HandlerFunc) http.HandlerFunc`, and can be
-used without a `rest.Server`:
+Every handler is a struct with its own `Config` and a `Handle` method. Construct it with
+`NewXxxHandler(config)` and pass the method value where a `chain.Middleware` is expected:
+
+```go
+type TraceConfig struct {
+    Enabled     bool
+    ServiceName string
+    IgnorePaths []string
+    Agent       trace.Config
+}
+
+type TraceHandler struct{ /* ... */ }
+
+func NewTraceHandler(config TraceConfig) *TraceHandler
+func (h *TraceHandler) Handle(next http.HandlerFunc) http.HandlerFunc
+```
+
+The `Enabled` field makes a handler a no-op when false. `TraceConfig.Agent` configures the
+tracing exporter; `Server.Register` adds the internal trace agent service to the
+`core/service.ServiceGroup`, so the group owns starting and stopping it. An agent already
+started by the application is reused and left running. The endpoint includes the port, for
+example `localhost:4317`. All handlers can be used without a `rest.Server`:
+
+```go
+conf.Middlewares.Trace = resthandler.TraceConfig{
+    Enabled:     true,
+    ServiceName: "api",
+    IgnorePaths: []string{"/health*"},
+    Agent: trace.Config{
+        Batcher:  trace.BatcherOTLPGRPC,
+        Endpoint: "localhost:4317", // Jaeger OTLP gRPC; HTTP uses localhost:4318
+    },
+}
+// Server.Register(group) adds the HTTP server and its auxiliary services.
+
+server.Use(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
+    Enabled: true,
+    Limiter: ratelimit.NewTokenBucket(100, 200),
+}).Handle)
+```
 
 | Handler | Behaviour |
 |---------|-----------|
-| `RecoverHandler` | Recovers panics → 500, re-panics `http.ErrAbortHandler` |
-| `RequestIDHandler` | Keeps a safe `X-Request-ID` or generates a UUID; `ContextWithRequestID` / `RequestIDFromContext` |
-| `TraceHandler(opts...)` | OTel server span; `WithTraceServiceName`, `WithTraceIgnorePaths` |
-| `LogHandler(opts...)` / `LogHandlerWith(log, opts...)` | Access log via `core/logger` with method/pattern/status/duration/ip/request_id; `WithLogSkipPaths`, `WithLogServiceName` |
-| `MaxConnsHandler(n)` | Cap in-flight requests → 503 |
-| `TimeoutHandler(d)` | Bound handler time → 503 with `Request Timeout` (go-zero style), discards late writes; handler panics are re-raised on the caller goroutine so recovery middleware still handles them |
-| `MaxBytesHandler(n)` | 413 for oversized bodies, `http.MaxBytesReader` for streaming, sets `Connection: close` |
-| `GunzipHandler` | Transparently decompresses `Content-Encoding: gzip` |
-| `RateLimitHandler(limiter)` / `RateLimitPerSecondHandler(rate, burst)` | 429 via `core/ratelimit` |
-| `BreakerHandler(br)` | Circuit breaker; 5xx responses count as failures → 503 when open |
-| `SignatureHandler(cfg)` | HMAC-signed body check with key rotation and timestamp TTL; the timestamp is checked before the body is read |
-| `Authorize(parser, opts...)` | Bearer token check; RFC 6750 challenge (`invalid_request` → 400, `invalid_token` → 401), missing parser → 500, `WithUnauthorizedCallback` |
+| `NewRecoveryHandler(RecoveryConfig)` | Recovers panics → 500, re-panics `http.ErrAbortHandler` |
+| `NewRequestIDHandler(RequestIDConfig)` | Keeps a safe `X-Request-ID` or generates a UUID; `ContextWithRequestID` / `RequestIDFromContext` |
+| `NewTraceHandler(TraceConfig)` | OTel server span; `ServiceName`, `IgnorePaths` |
+| `NewLogHandler(LogConfig, logger)` | Access log via `core/logger`; `ServiceName`, `SkipPaths`, `TrustedProxies`, `ClientIP` |
+| `NewMaxConnsHandler(MaxConnsConfig)` | Cap in-flight requests → 503 |
+| `NewTimeoutHandler(TimeoutConfig)` | Bound handler time → 503 with `Request Timeout`, discards late writes; handler panics are re-raised on the caller goroutine so recovery middleware still handles them. The response is buffered, so streaming is refused: `Flush` returns `http.ErrHandlerTimeout` and `Hijack` returns `http.ErrNotSupported` (leave it off for SSE/WebSocket). |
+| `NewMaxBytesHandler(MaxBytesConfig)` | 413 for oversized bodies, `http.MaxBytesReader` for streaming, sets `Connection: close` |
+| `NewGunzipHandler(GunzipConfig)` | Transparently decompresses `Content-Encoding: gzip` |
+| `NewRateLimitHandler(RateLimitConfig)` / `NewRateLimitPerSecondHandler(rate, burst)` | 429 via `core/ratelimit` |
+| `NewBreakerHandler(BreakerConfig)` | Circuit breaker; 5xx responses count as failures → 503 when open |
+| `NewSignatureHandler(SignatureConfig)` | HMAC check over `METHOD / escaped-path / raw-query / timestamp / body` with key rotation and a timestamp TTL (zero uses the 5-minute default, negative disables it); the timestamp is checked before the body is read |
+| `NewAuthHandler(AuthConfig)` | Bearer token check; RFC 6750 challenge (`invalid_request` → 400, `invalid_token` → 401), missing parser → 500, optional `Callback` |
 
 Default authorization failures write 400/401/500 with an RFC 6750 `WWW-Authenticate` challenge
-and no body. Install `WithUnauthorizedCallback` when the application needs a custom body or extra
+and no body. Set `AuthConfig.Callback` when the application needs a custom body or extra
 reporting.
 
 ## token package
@@ -369,7 +484,7 @@ claims, err := parser.Parse(signed)      // Subject / Issuer / ExpiresAt / Data
 `Parse` verifies `iss` when `Issuer` is configured and requires the `exp` claim. `PrevSecret`
 must satisfy the same 8-character minimum as `Secret`.
 
-`handler.Authorize` stores the verified claims in the request context:
+`handler.AuthHandler` stores the verified claims in the request context:
 
 ```go
 claims, ok := token.ClaimsFrom(r.Context())
@@ -378,13 +493,21 @@ claims, ok := token.ClaimsFrom(r.Context())
 ## Service integration
 
 `*rest.Server` has `Start() error` and `Stop() error`, so it plugs straight into
-`core/service`:
+`core/service`. Use `Register` so the configured trace agent service is added to
+the group too:
 
 ```go
+// add application-owned lifecycle services
+server.AddService(metricsService)
+
 sg := service.NewServiceGroup()
-sg.Add(service.AsService(server))
+server.Register(sg) // logger sync + trace agent + AddService services + HTTP server
 sg.Start()
 ```
+
+`server.Register` adds every auxiliary service first and the HTTP server last, so the
+ServiceGroup stops the HTTP server before flushing the logger. The logger sync and the trace
+agent configured through `Middlewares.Trace.Agent` are added automatically by `NewServer`.
 
 ## Notes
 
@@ -400,7 +523,7 @@ sg.Start()
 - An oversized streamed body is answered with 413 and the response carries `Connection: close`, so
   the connection is not reused for another request.
 - `ClientIP` and the access-log `ip` field use the direct peer address and ignore forwarding
-  headers by default. Set `Config.TrustedProxies` (access log) or use `ClientIPTrusted`
+  headers by default. Set `Middlewares.Log.TrustedProxies` (access log) or use `ClientIPTrusted`
   (application code) to trust them from known proxies; `ClientIPFromHeaders` is the legacy
   trust-any-peer helper.
 - A group root route (`Group("/api").Handle("/")`) is served for both `/api` and the exact

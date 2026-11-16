@@ -29,8 +29,8 @@ A miss returns `cache.ErrNotFound`; test it with the standard library `errors.Is
 | `Set(ctx, key, value any)` | Write using the default expiry |
 | `SetEx(ctx, key, value any, ttl)` | Write with an explicit time-to-live `ttl`; `ttl <= 0` falls back to the default |
 | `Delete(ctx, keys...)` | Delete one or more keys |
-| `Take(ctx, key, fetch func()(any, error)) (any, error)` | Call `fetch` on a miss, store the result, and deduplicate concurrent calls to prevent stampedes |
-| `Increment(ctx, key, delta)` | Increment the numeric value at key by `delta`; initializes to `delta` when absent |
+| `Take(ctx, key, fetch func()(any, error)) (any, error)` | Call `fetch` on a miss, store the result, and deduplicate concurrent calls to prevent stampedes. A `(nil, nil)` result is returned as-is and **not cached**; return `ErrNotFound` for not-found rows if you want the short-lived negative placeholder |
+| `Increment(ctx, key, delta)` | Increment the numeric value at key by `delta`; initializes to `delta` when absent and (on Redis) applies the default expiry, so counters do not live forever |
 | `Decrement(ctx, key, delta)` | Decrement the numeric value at key by `delta`; initializes to `-delta` when absent |
 | `Expire(ctx, key, ttl)` | Set the time-to-live `ttl` for a key; expires afterwards; `ttl <= 0` expires it immediately; returns `ErrNotFound` when the key is absent |
 
@@ -68,7 +68,7 @@ u, err = cache.GetAs[User](ctx, c, "user:1")
 
 ### Numeric increment / decrement
 
-`Increment` / `Decrement` serve counter scenarios (page views, inventory, likes, etc.). A missing key is auto-initialized to `delta` / `-delta`; the in-memory implementation keeps the original value type and uses a lock for concurrency safety, while the Redis implementation uses the atomic `INCRBY` operation:
+`Increment` / `Decrement` serve counter scenarios (page views, inventory, likes, etc.). A missing key is auto-initialized to `delta` / `-delta`; the in-memory implementation keeps the original value type and uses a lock for concurrency safety, while the Redis implementation uses an atomic script that also applies the default TTL to a newly created counter:
 
 ```go
 _ = c.Increment(ctx, "visit:20260828", 1) // count +1; initialized to 1 when the key is absent

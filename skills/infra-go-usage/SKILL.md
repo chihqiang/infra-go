@@ -1,6 +1,6 @@
 ---
 name: infra-go-usage
-description: 'Build services in business projects with the infra-go Go infrastructure library. Covers conf (config loading), logger (structured logging), orm (MySQL/PostgreSQL/SQLite), redisx (Redis and distributed locks), cache (unified cache: in-memory/Redis), rest (HTTP server, method-aware routing and route groups, request binding, JSON responses, middleware chain), rest/handler (recovery, request ID, tracing, access log, concurrency/timeout/body limits, gzip, breaker, rate limiting, JWT auth as chain.Middleware), token (JWT issuing and verification), ratelimit (in-memory/Redis limiters), breaker (circuit breaker), retry (retries), taskq (async task queue), storage (unified object storage: local files/OSS/COS/KODO, write/read/exists/delete/URL), ws (realtime WebSocket communication), trace (distributed tracing: agent/span/propagation), hash (password/digest/encryption/HMAC signing), cast (type conversion), stringx (strings), syncx (concurrency primitives), service (ServiceGroup service orchestration). Use when: writing a Go business service and you need to choose, initialize or assemble infra-go modules, combine conf+logger+orm+redisx+rest+token, or set up unified responses, middleware, graceful shutdown and other infrastructure.'
+description: 'Build services in business projects with the infra-go Go infrastructure library. Covers conf (config loading), logger (structured logging), orm (MySQL/PostgreSQL/SQLite), redisx (Redis and distributed locks), cache (unified cache: in-memory/Redis), rest (HTTP server, method-aware routing and route groups, request binding, JSON responses, middleware chain), rest/handler (recovery, request ID, tracing, access log, concurrency/timeout/body limits, gzip, breaker, rate limiting, JWT auth as struct handlers), token (JWT issuing and verification), ratelimit (in-memory/Redis limiters), breaker (circuit breaker), retry (retries), taskq (async task queue), storage (unified object storage: local files/OSS/COS/KODO, write/read/exists/delete/URL), ws (realtime WebSocket communication), trace (distributed tracing: agent/span/propagation), hash (password/digest/encryption/HMAC signing), cast (type conversion), stringx (strings), syncx (concurrency primitives), service (ServiceGroup service orchestration). Use when: writing a Go business service and you need to choose, initialize or assemble infra-go modules, combine conf+logger+orm+redisx+rest+token, or set up unified responses, middleware, graceful shutdown and other infrastructure.'
 ---
 
 # infra-go usage guide
@@ -25,17 +25,17 @@ How to use each `github.com/chihqiang/infra-go` module correctly in a business p
 | In-process memory cache (hot data) | `cache` | `cache.NewMemCache` |
 | Distributed cache (shared across instances) | `cache` | `cache.NewRedisCache` |
 | HTTP server / parameter binding / JSON responses | `rest` | `rest.NewServer` · `rest.Bind` · `rest.OkJSON` |
-| Built-in HTTP middleware | `rest/handler` | `resthandler.RecoverHandler` · `TimeoutHandler` · `LogHandler` · `RateLimitHandler` … (all `chain.Middleware`) |
+| Built-in HTTP middleware | `rest/handler` | `resthandler.NewRecoveryHandler(...).Handle` · `NewTimeoutHandler` · `NewLogHandler` · `NewRateLimitHandler` … (struct + `Config` + `Handle`) |
 | Custom / third-party middleware | `rest` | `server.Use(chain.Middleware)` |
-| API authentication | `token` | `token.NewParser` + `rest.WithRouteAuth(parser)` (or `resthandler.Authorize`) |
-| API rate limiting (limiters) | `ratelimit` | `ratelimit.NewTokenBucket` / `NewRedisTokenBucket`; HTTP middleware `resthandler.RateLimitHandler` |
-| Downstream protection (fail fast via breaker) | `breaker` | `breaker.NewBreaker` or `breaker.Do`; HTTP middleware `resthandler.BreakerHandler` |
+| API authentication | `token` | `token.NewParser` + `rest.WithRouteAuth(parser)` (or `resthandler.NewAuthHandler`) |
+| API rate limiting (limiters) | `ratelimit` | `ratelimit.NewTokenBucket` / `NewRedisTokenBucket`; HTTP middleware `resthandler.NewRateLimitHandler` |
+| Downstream protection (fail fast via breaker) | `breaker` | `breaker.NewBreaker` or `breaker.Do`; HTTP middleware `resthandler.NewBreakerHandler` |
 | Failure retries | `retry` | `retry.Do` |
 | Async task queue | `taskq` | `taskq.NewProducer` / `NewConsumer` |
 | Object storage (local files / OSS/COS/KODO) | `storage` | `storage.New` |
 | WebSocket realtime communication | `ws` | `ws.MustNew` |
 | Distributed tracing (agent / span / propagation) | `trace` | `trace.StartAgent` |
-| HTTP tracing middleware | `rest/handler` | `resthandler.TraceHandler(WithServiceName(...))` |
+| HTTP tracing middleware | `rest/handler` | `resthandler.NewTraceHandler(TraceConfig{...})` |
 | Password / digest hashing | `hash` | `hash.BcryptHashDefault` |
 | Sensitive-data encryption / request signing | `hash` | `hash.AESGCMEncrypt` / `hash.HMACSign` |
 | Type-safe conversion | `cast` | `cast.To[T]` |
@@ -45,8 +45,8 @@ How to use each `github.com/chihqiang/infra-go` module correctly in a business p
 
 **Branching logic (decision points)**:
 
-- Single-host rate limiting → in-memory limiter; shared across instances → Redis limiter; on HTTP mount `resthandler.RateLimitHandler(limiter)`
-- HTTP middleware: common capabilities live in `rest/handler` as `chain.Middleware` (`func(http.HandlerFunc) http.HandlerFunc`), so they work both with `server.Use` and standalone; server-wide defaults are switched on through `rest.MiddlewaresConf`
+- Single-host rate limiting → in-memory limiter; shared across instances → Redis limiter; on HTTP mount `resthandler.NewRateLimitHandler(RateLimitConfig{Enabled: true, Limiter: limiter}).Handle`
+- HTTP middleware: common capabilities live in `rest/handler` as structs with a `Config` and a `Handle(http.HandlerFunc) http.HandlerFunc` method, so they work both with `server.Use` and standalone; server-wide defaults are configured through one config struct per handler inside `rest.MiddlewaresConf`
 - Short-lived temporary data (cache/session/counters) → `redisx`; reliable persistence and transactions → `orm`
 - APIs that must respond synchronously → `rest` (plus `ws` when needed); async consumption is acceptable → `taskq`
 - Mutual exclusion around a critical section → `redisx.Locker` (cross-instance) or `syncx` (single process)
@@ -106,7 +106,7 @@ Follow the convention that `New` returns an error and `MustNew` panics on error:
 
 ```go
 // 1. Logging (global, initialized first)
-logger.New(logger.Config{Level: logger.InfoLevel, AppName: "my-service"})
+logger.New(logger.Config{Level: "info", ServiceName: "my-service"})
 defer logger.Sync()
 
 // 2. Database
@@ -120,9 +120,13 @@ defer client.Close()
 // 4. JWT (used by the auth middleware)
 parser, err := token.NewParser(token.Config{Secret: cfg.JWTSecret})
 
-// 5. Distributed tracing (optional; then add resthandler.TraceHandler)
-trace.StartAgent(trace.Config{Name: "my-service", Endpoint: cfg.OtelEndpoint})
-defer trace.StopAgent()
+// 5. Distributed tracing (optional). With rest, configure the agent on the
+// trace middleware and NewServer starts/stops it:
+// conf.Middlewares.Trace = resthandler.TraceConfig{
+//     Enabled: true,
+//     Agent: trace.Config{Name: "my-service", Endpoint: cfg.OtelEndpoint},
+// }
+// For non-rest programs use trace.StartAgent(...) + defer trace.StopAgent().
 ```
 
 Convention: use `MustXxx` for global singletons / service-level components (panic if startup fails); use `Xxx` and handle the error explicitly for recoverable local objects; every component holding connections or background goroutines gets a `defer Close/Stop/Sync`.
@@ -171,31 +175,52 @@ server.Group("/api").AddRoute(rest.Route{
 ```go
 // config-driven (defaults in rest.Config / DefaultConfig)
 conf := rest.DefaultConfig()
-conf.Middlewares.Timeout = 5 * time.Second
-conf.Middlewares.MaxConns = 200
+conf.Middlewares.Timeout = resthandler.TimeoutConfig{Enabled: true, Timeout: 5 * time.Second}
+conf.Middlewares.MaxConns = resthandler.MaxConnsConfig{Enabled: true, Limit: 200}
 
 // explicit mounting
-server.Use(resthandler.TraceHandler(resthandler.WithTraceIgnorePaths("/healthz")))
-server.Use(resthandler.RateLimitHandler(ratelimit.NewTokenBucket(100, 200))) // 429
-server.Use(resthandler.BreakerHandler(br))                                  // 503 when open
+server.Use(resthandler.NewTraceHandler(resthandler.TraceConfig{
+	Enabled:     true,
+	IgnorePaths: []string{"/healthz"},
+}).Handle)
+server.Use(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
+	Enabled: true,
+	Limiter: ratelimit.NewTokenBucket(100, 200),
+}).Handle) // 429
+server.Use(resthandler.NewBreakerHandler(resthandler.BreakerConfig{
+	Enabled: true,
+	Breaker: br,
+}).Handle) // 503 when open
 
 // per-route auth
-server.Group("/admin").Use(resthandler.Authorize(parser))
+server.Group("/admin").Use(resthandler.NewAuthHandler(resthandler.AuthConfig{
+	Enabled: true,
+	Parser:  parser,
+}).Handle)
 ```
 
 > Third-party `func(http.Handler) http.Handler` middleware converts with `chain.Middleware(func(next http.HandlerFunc) http.HandlerFunc { return adapter(next).ServeHTTP })`; keep `rest/handler` handlers as the default choice since they already share the request-ID/logger conventions.
 
-4. Start it (blocking; supports graceful shutdown on SIGINT/SIGTERM/SIGHUP):
+4. Start it (blocking). The library does not install OS signal handlers; wire
+SIGINT/SIGTERM/SIGHUP to `Stop` yourself:
 
 ```go
-server.Start()
+go func() {
+    sig := make(chan os.Signal, 1)
+    signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+    <-sig
+    _ = server.Stop() // or sg.Stop() when using service.ServiceGroup
+}()
+if err := server.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+    log.Fatal(err)
+}
 ```
 
 ### Step 6 — Orchestrate the lifecycle of several services with service
 
 ```go
 sg := service.NewServiceGroup()
-sg.Add(service.AsService(server))               // *rest.Server: AsService adapts Start()/Stop() error
+server.Register(sg) // HTTP server + trace agent when configured
 sg.Add(service.WithStart(func() { _ = consumer.Run() })) // taskq consumer: wrap it with WithStart
 sg.Start() // blocking; returns once everything has exited; Stop is guaranteed to run only once
 ```
@@ -206,7 +231,7 @@ sg.Start() // blocking; returns once everything has exited; Stop is guaranteed t
 - At the HTTP layer use `rest.OkJSON` / `rest.CreatedJSON` / `rest.NoContent` for success and `rest.Error(w, err)` for failures
 - When trace/request correlation is needed, read `rest.RequestID(r)` / `rest.ClientIP(r)` and log with `logger.XxxCtx(ctx, ...)`
 - Pass `context.Context` across modules consistently (orm / redisx / retry / taskq all support ctx timeouts and cancellation)
-- Inspect semantic errors with `errors.Is`: `redisx.ErrNil`, `token.ErrInvalidToken`, `retry.ErrMaxRetries`, `rest.ErrNotFound`, etc.
+- Inspect semantic errors with `errors.Is`: `redisx.ErrNil`, `token.ErrInvalidToken`, `retry.ErrMaxRetries`, `rest.ErrResourceNotFound`, etc.
 
 ## Acceptance Criteria
 

@@ -38,9 +38,9 @@ func WithRedisClient(client RedisClient) Option {
 	return func(o *options) { o.redisClient = client }
 }
 
-// WithCheckOrigin sets the Origin check function.
-// All origins are allowed by default (suitable for development); production should
-// configure a whitelist.
+// WithCheckOrigin sets the Origin check function. The default is the same-origin
+// check of gorilla/websocket; pass a custom function to allow other origins (for
+// example a whitelist for a separate front-end domain).
 func WithCheckOrigin(fn func(r *http.Request) bool) Option {
 	return func(o *options) { o.checkOrigin = fn }
 }
@@ -92,6 +92,10 @@ type Server struct {
 	// Cluster support
 	cluster *ClusterHandler // cluster handler; non-nil means cluster mode is enabled
 	nodeID  uint16          // node ID
+
+	// closed marks that Close has begun; ServeHTTP refuses to register a new
+	// connection afterwards so a connection can never outlive server shutdown.
+	closed atomic.Bool
 }
 
 // New creates a WebSocket server.
@@ -137,10 +141,10 @@ func New(cfg Config, handler Handler, opts ...Option) (*Server, error) {
 	upgrader := &gws.Upgrader{
 		ReadBufferSize:  c.ReadBufferSize,
 		WriteBufferSize: c.WriteBufferSize,
-		CheckOrigin:     func(r *http.Request) bool { return true },
-	}
-	if opt.checkOrigin != nil {
-		upgrader.CheckOrigin = opt.checkOrigin
+		// CheckOrigin stays nil by default: gorilla then applies its same-origin
+		// check, preventing Cross-Site WebSocket Hijacking. Returning true here
+		// (the old behaviour) let any site open an authenticated connection.
+		CheckOrigin: opt.checkOrigin,
 	}
 	if len(opt.subprotocols) > 0 {
 		upgrader.Subprotocols = opt.subprotocols
@@ -201,6 +205,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Close may have finished while the upgrade was in flight; a connection
+	// registered after Close would never be shut down.
+	if s.closed.Load() {
+		_ = ws.Close()
+		return
+	}
+
 	id := s.nextConnID()
 	conn := &Conn{
 		id:      id,
@@ -218,38 +229,136 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Register in the connection table
 	s.conns.Store(id, conn)
 
+	// Re-check after Store: either this sees closed, or Close's Range sees the
+	// stored connection, so no connection can slip through shutdown.
+	if s.closed.Load() {
+		s.conns.Delete(id)
+		s.room.Delete(id)
+		_ = conn.Close()
+		return
+	}
+
+	// Teardown is registered before any user callback runs. If OnOpen panics, the
+	// old code never reached its defer, leaking the entry in conns, the room
+	// membership and the heartbeat goroutine.
+	var closeErr error
+	defer func() {
+		// Stop the heartbeat and the socket first, then unregister. HandleClose is
+		// invoked last and its panic is contained so it cannot skip cleanup.
+		_ = conn.Close()
+		s.conns.Delete(id)
+		s.room.Delete(id)
+		s.safeHandleClose(conn, closeErr)
+	}()
+
 	// Start the heartbeat
 	s.startPing(conn)
 
 	// Invoke OnOpen
-	s.handler.HandleOpen(conn)
+	if !s.safeHandleOpen(conn) {
+		return
+	}
 
 	// Read loop
-	defer func() {
-		s.handler.HandleClose(conn, nil)
-		s.conns.Delete(id)
-		s.room.Delete(id)
-		conn.Close()
-	}()
-
 	for {
 		// Set the read timeout (based on the heartbeat)
 		_ = ws.SetReadDeadline(time.Now().Add(s.cfg.PingTimeout))
 
 		messageType, data, err := ws.ReadMessage()
 		if err != nil {
-			// Check whether this is a normal close
+			closeErr = err
+			if isNormalClose(err) {
+				s.logger.Info("ws: connection closed", logger.Int64("conn_id", int64(id)))
+				// A normal close is not an error: OnError must not be called for it.
+				closeErr = nil
+				return
+			}
 			var ce *gws.CloseError
 			if errors.As(err, &ce) {
 				s.logger.Info("ws: connection closed",
 					logger.Int64("conn_id", int64(id)),
 					logger.Int("code", ce.Code))
 			}
-			s.handler.HandleError(conn, err)
+			s.safeHandleError(conn, err)
 			return
 		}
 
-		s.handler.HandleMessage(conn, messageType, data)
+		if !s.safeHandleMessage(conn, messageType, data) {
+			closeErr = errHandlerPanic
+			return
+		}
+	}
+}
+
+// errHandlerPanic is passed to HandleClose when a message handler panicked.
+var errHandlerPanic = errors.New("ws: message handler panicked")
+
+// safeHandleOpen invokes OnOpen, recovering from a panic so teardown always runs.
+func (s *Server) safeHandleOpen(conn *Conn) (ok bool) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.logger.Error("ws: panic in OnOpen",
+				logger.Int64("conn_id", int64(conn.id)),
+				logger.Any("panic", recovered))
+			ok = false
+		}
+	}()
+	s.handler.HandleOpen(conn)
+	return true
+}
+
+// safeHandleMessage invokes the message handler; a panic closes the connection
+// instead of escaping into net/http.
+func (s *Server) safeHandleMessage(conn *Conn, messageType int, data []byte) (ok bool) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.logger.Error("ws: panic in HandleMessage",
+				logger.Int64("conn_id", int64(conn.id)),
+				logger.Int("message_type", messageType),
+				logger.Any("panic", recovered))
+			ok = false
+		}
+	}()
+	s.handler.HandleMessage(conn, messageType, data)
+	return true
+}
+
+// safeHandleError invokes OnError; a panic is logged and contained.
+func (s *Server) safeHandleError(conn *Conn, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.logger.Error("ws: panic in HandleError",
+				logger.Int64("conn_id", int64(conn.id)),
+				logger.Any("panic", recovered))
+		}
+	}()
+	s.handler.HandleError(conn, err)
+}
+
+// safeHandleClose invokes OnClose; a panic is logged and contained.
+func (s *Server) safeHandleClose(conn *Conn, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.logger.Error("ws: panic in HandleClose",
+				logger.Int64("conn_id", int64(conn.id)),
+				logger.Any("panic", recovered))
+		}
+	}()
+	s.handler.HandleClose(conn, err)
+}
+
+// isNormalClose reports whether err is a clean WebSocket shutdown rather than a
+// transport failure.
+func isNormalClose(err error) bool {
+	var closeErr *gws.CloseError
+	if !errors.As(err, &closeErr) {
+		return false
+	}
+	switch closeErr.Code {
+	case gws.CloseNormalClosure, gws.CloseGoingAway, gws.CloseNoStatusReceived:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -262,6 +371,11 @@ func (s *Server) startPing(conn *Conn) {
 	})
 
 	go func() {
+		// fillDefault guarantees a positive interval; guard anyway because
+		// time.NewTicker panics on a non-positive duration.
+		if s.cfg.PingInterval <= 0 {
+			return
+		}
 		ticker := time.NewTicker(s.cfg.PingInterval)
 		defer ticker.Stop()
 
@@ -271,6 +385,10 @@ func (s *Server) startPing(conn *Conn) {
 				return
 			case <-ticker.C:
 				if err := conn.WriteMessage(PingMessage, nil); err != nil {
+					// A failed write leaves the connection unusable, but the read loop
+					// may still be blocked on a client that keeps sending data (which
+					// refreshes the read deadline). Close it so teardown runs.
+					_ = conn.Close()
 					return
 				}
 			}
@@ -358,7 +476,11 @@ func (s *Server) Broadcast(data []byte) {
 	// Standalone mode: iterate the local connections
 	s.conns.Range(func(_, v any) bool {
 		conn := v.(*Conn)
-		_ = conn.WriteText(data)
+		if err := conn.WriteText(data); err != nil {
+			// Evict the broken connection; otherwise it stays registered and every
+			// later broadcast pays for another failed write.
+			_ = conn.Close()
+		}
 		return true
 	})
 }
@@ -398,6 +520,10 @@ func (s *Server) BroadcastEvent(event string, data any) error {
 // Call RedisRoom.Clear explicitly when the rooms must be cleared as a whole (e.g. an
 // operations reset).
 func (s *Server) Close() error {
+	// Refuse new connections first: a request that already upgraded must not be
+	// able to register after the connection sweep below.
+	s.closed.Store(true)
+
 	// Stop listening on the cluster
 	if s.cluster != nil {
 		s.cluster.Stop()
@@ -410,12 +536,20 @@ func (s *Server) Close() error {
 		return true
 	})
 
-	// Close all connections
+	// Close all connections concurrently: every Close sends a Close frame with its
+	// own deadline, so closing them one by one could take up to one second per
+	// unresponsive client.
+	var wg sync.WaitGroup
 	s.conns.Range(func(_, v any) bool {
 		conn := v.(*Conn)
-		conn.Close()
+		wg.Add(1)
+		go func(c *Conn) {
+			defer wg.Done()
+			_ = c.Close()
+		}(conn)
 		return true
 	})
+	wg.Wait()
 
 	// Close the Redis client created by the Server
 	if s.ownRedis && s.redisClient != nil {

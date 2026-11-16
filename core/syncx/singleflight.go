@@ -74,8 +74,14 @@ func (sf *SingleFlight[T]) Do(key string, fn func() (T, error)) (T, error) {
 
 	sf.run(call, fn)
 
+	// Delete only when the map still points at this call: Forget may have removed
+	// it and a newer call may have been registered meanwhile. Unconditionally
+	// deleting would drop that newer record, so a later Do would run fn again
+	// concurrently with the newer leader.
 	sf.mu.Lock()
-	delete(sf.calls, key)
+	if sf.calls[key] == call {
+		delete(sf.calls, key)
+	}
 	sf.mu.Unlock()
 
 	call.repanic()
@@ -131,7 +137,9 @@ func (sf *SingleFlight[T]) DoCtx(ctx context.Context, key string, fn func(contex
 	sf.run(call, func() (T, error) { return fn(ctx) })
 
 	sf.mu.Lock()
-	delete(sf.calls, key)
+	if sf.calls[key] == call {
+		delete(sf.calls, key)
+	}
 	sf.mu.Unlock()
 
 	call.repanic()

@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 // agentState holds the resources of one agent lifecycle.
@@ -49,26 +50,48 @@ var (
 // effect that nothing could be restarted after StopAgent, while otel still pointed
 // at a shut-down TracerProvider, so later spans were silently dropped.
 func StartAgent(cfg Config, opts ...Option) {
-	c := fillDefault(cfg, opts...)
+	startAgentIfNeeded(fillDefault(cfg, opts...), true)
+}
 
+// EnsureAgent starts the tracing agent only when none is already running. It
+// returns true when this call started the agent, so the caller can stop it in
+// its own lifecycle. Unlike StartAgent, an already-running agent is not warned
+// about: this is the entry point used by integrations such as rest.Server.
+func EnsureAgent(cfg Config, opts ...Option) bool {
+	return startAgentIfNeeded(fillDefault(cfg, opts...), false)
+}
+
+// IsAgentRunning reports whether a tracing agent is currently installed.
+func IsAgentRunning() bool {
+	agentLk.Lock()
+	defer agentLk.Unlock()
+	return currentAgent != nil
+}
+
+// startAgentIfNeeded starts the agent while holding the lifecycle lock. It
+// reports whether this call created the current agent.
+func startAgentIfNeeded(c Config, warnIfRunning bool) bool {
 	if c.Disabled {
-		return
+		return false
 	}
 
 	agentLk.Lock()
 	defer agentLk.Unlock()
 
 	if currentAgent != nil {
-		logger.Warn("trace agent: already started, ignoring new config; call StopAgent first to reload")
-		return
+		if warnIfRunning {
+			logger.Warn("trace agent: already started, ignoring new config; call StopAgent first to reload")
+		}
+		return false
 	}
 
 	st, err := startAgent(c)
 	if err != nil {
 		logger.Error(fmt.Sprintf("trace agent: %v", err))
-		return
+		return false
 	}
 	currentAgent = st
+	return true
 }
 
 // StopAgent shuts the tracing agent down, flushes spans that were not exported yet
@@ -84,10 +107,14 @@ func StopAgent() {
 		return
 	}
 	currentAgent = nil
+	setCustomPropagator(nil)
 
 	if st.tp != nil {
 		_ = st.tp.Shutdown(context.Background())
 	}
+	// Do not leave the global provider pointing at a shut-down provider: later
+	// otel.Tracer calls would keep creating spans that can never be exported.
+	otel.SetTracerProvider(noop.NewTracerProvider())
 	// Close resources such as files to avoid leaking handles
 	for _, closeFn := range st.closers {
 		if closeFn != nil {
@@ -112,7 +139,17 @@ func startAgent(c Config) (*agentState, error) {
 
 	st := &agentState{}
 
-	// Configure the exporter
+	// Select the propagator for this agent (WithPropagator). The global propagator
+	// is never touched: other instrumentation in the application must stay in
+	// control of it.
+	setCustomPropagator(c.propagator)
+
+	// Configure the exporter. Without an endpoint the provider still records spans
+	// (useful for tests and local context propagation) but nothing is exported, so
+	// say so instead of silently dropping the data.
+	if len(c.Endpoint) == 0 {
+		logger.Warn("trace agent: Endpoint is empty; spans are recorded but not exported")
+	}
 	if len(c.Endpoint) > 0 {
 		exp, closers, err := createExporterWithClosers(c)
 		if err != nil {

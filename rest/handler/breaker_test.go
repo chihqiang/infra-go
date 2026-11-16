@@ -62,7 +62,7 @@ func (b *fakeBreaker) DoWithFallbackAcceptableCtx(
 
 func TestBreakerHandlerAcceptsSuccessfulResponse(t *testing.T) {
 	br := &fakeBreaker{promise: &fakePromise{}}
-	handlerFn := BreakerHandler(br)(func(w http.ResponseWriter, _ *http.Request) {
+	handlerFn := NewBreakerHandler(BreakerConfig{Enabled: true, Breaker: br}).Handle(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -75,7 +75,7 @@ func TestBreakerHandlerAcceptsSuccessfulResponse(t *testing.T) {
 
 func TestBreakerHandlerRejectsServerError(t *testing.T) {
 	br := &fakeBreaker{promise: &fakePromise{}}
-	handlerFn := BreakerHandler(br)(func(w http.ResponseWriter, _ *http.Request) {
+	handlerFn := NewBreakerHandler(BreakerConfig{Enabled: true, Breaker: br}).Handle(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	})
 
@@ -88,7 +88,7 @@ func TestBreakerHandlerRejectsServerError(t *testing.T) {
 
 func TestBreakerHandlerFailsFastWhenOpen(t *testing.T) {
 	called := false
-	handlerFn := BreakerHandler(&fakeBreaker{blocked: true})(func(http.ResponseWriter, *http.Request) {
+	handlerFn := NewBreakerHandler(BreakerConfig{Enabled: true, Breaker: &fakeBreaker{blocked: true}}).Handle(func(http.ResponseWriter, *http.Request) {
 		called = true
 	})
 
@@ -105,7 +105,7 @@ func TestBreakerHandlerFailsFastWhenOpen(t *testing.T) {
 
 func TestBreakerHandlerRejectsPanickingRequest(t *testing.T) {
 	br := &fakeBreaker{promise: &fakePromise{}}
-	handlerFn := BreakerHandler(br)(func(http.ResponseWriter, *http.Request) {
+	handlerFn := NewBreakerHandler(BreakerConfig{Enabled: true, Breaker: br}).Handle(func(http.ResponseWriter, *http.Request) {
 		panic("boom")
 	})
 

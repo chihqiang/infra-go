@@ -189,3 +189,20 @@ func TestGetAs_TakeWrittenValues(t *testing.T) {
 		})
 	}
 }
+
+// TestGetAs_ReturnsCopyOfMutableValue is a regression test: the fast path used to
+// return MemCache's internal slice/map, so mutating the result corrupted the cache
+// (and caused a data race in concurrent reads). Redis already returned a copy.
+func TestGetAs_ReturnsCopyOfMutableValue(t *testing.T) {
+	ctx := context.Background()
+	c := NewMemCache(ctx, time.Minute)
+
+	require.NoError(t, c.Set(ctx, "tags", []string{"a", "b"}))
+	got, err := GetAs[[]string](ctx, c, "tags")
+	require.NoError(t, err)
+	got[0] = "mutated"
+
+	stored, err := GetAs[[]string](ctx, c, "tags")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b"}, stored, "GetAs must return a copy, not the cached value")
+}

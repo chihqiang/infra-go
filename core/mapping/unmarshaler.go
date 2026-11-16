@@ -3,6 +3,7 @@ package mapping
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"reflect"
 	"time"
@@ -23,7 +24,29 @@ type Unmarshaler struct {
 	fillDefault  bool                // whether to only fill defaults
 	fromString   bool                // whether to parse every value from a string
 	canonicalKey func(string) string // key canonicalization function (e.g. lower-casing)
+	// depth is the current recursion depth. Unmarshal works on a per-call copy, so
+	// the shared Unmarshaler stays stateless and safe for concurrent use.
+	depth int
 }
+
+// maxNestingDepth bounds the reflection recursion. Besides deeply nested input it
+// stops self-referential embedded types (type Node struct{ *Node }) from
+// overflowing the goroutine stack, which is a fatal error that cannot be
+// recovered.
+const maxNestingDepth = 64
+
+// enter increases the recursion depth and reports an error once it grows too deep.
+func (u *Unmarshaler) enter(fullName string) error {
+	u.depth++
+	if u.depth > maxNestingDepth {
+		u.depth--
+		return fmt.Errorf("mapping: field %q exceeds the maximum nesting depth of %d", fullName, maxNestingDepth)
+	}
+	return nil
+}
+
+// leave restores the recursion depth after a guarded call.
+func (u *Unmarshaler) leave() { u.depth-- }
 
 // UnmarshalOption defines a configuration option for Unmarshaler.
 type UnmarshalOption func(*Unmarshaler)
@@ -84,7 +107,18 @@ func NewUnmarshaler(key string, opts ...UnmarshalOption) *Unmarshaler {
 }
 
 // Unmarshal deserializes the map data into the target struct v.
-func (u *Unmarshaler) Unmarshal(m map[string]any, v any) error {
+//
+// A panic raised by the reflection engine (for example a malformed config value
+// that does not match the field type) is reported as an error instead of
+// reaching the caller, because a configuration parser must not take the process
+// down.
+func (u *Unmarshaler) Unmarshal(m map[string]any, v any) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("mapping: failed to unmarshal config: %v", recovered)
+		}
+	}()
+
 	rv := reflect.ValueOf(v)
 	if err := ValidatePtr(rv); err != nil {
 		return err
@@ -102,15 +136,23 @@ func (u *Unmarshaler) Unmarshal(m map[string]any, v any) error {
 		valElem = target
 	}
 
-	if u.fillDefault {
-		return u.fillDefaultStruct(elemType, valElem, "")
+	// Work on a copy so depth stays per call while the shared Unmarshaler (for
+	// example defaultUnmarshaler) remains safe for concurrent use.
+	local := *u
+	if local.fillDefault {
+		return local.fillDefaultStruct(elemType, valElem, "")
 	}
 
-	return u.processStruct(elemType, valElem, m, "")
+	return local.processStruct(elemType, valElem, m, "")
 }
 
 // fillDefaultStruct fills only defaults and environment variables.
 func (u *Unmarshaler) fillDefaultStruct(structType reflect.Type, structValue reflect.Value, fullName string) error {
+	if err := u.enter(fullName); err != nil {
+		return err
+	}
+	defer u.leave()
+
 	for i := 0; i < structType.NumField(); i++ {
 		field := structType.Field(i)
 		if !field.IsExported() {
@@ -125,8 +167,11 @@ func (u *Unmarshaler) fillDefaultStruct(structType reflect.Type, structValue ref
 				if err := u.fillDefaultStruct(derefedType, reflect.Indirect(fieldValue), fullName); err != nil {
 					return err
 				}
+				continue
 			}
-			continue
+			// An embedded non-struct field (for example `type Level int; struct{ Level }`)
+			// is an ordinary field: fall through to the normal handling below instead
+			// of skipping it.
 		}
 
 		key, opts, err := parseKeyAndOptions(u.key, field)
@@ -175,6 +220,11 @@ func (u *Unmarshaler) fillDefaultStruct(structType reflect.Type, structValue ref
 
 // processStruct processes all fields of the struct.
 func (u *Unmarshaler) processStruct(structType reflect.Type, structValue reflect.Value, m map[string]any, fullName string) error {
+	if err := u.enter(fullName); err != nil {
+		return err
+	}
+	defer u.leave()
+
 	// Validate the optional dependency names first, so that a misspelled
 	// dependency does not silently break conditional optionality
 	if err := u.validateOptionalDeps(structType, fullName); err != nil {
@@ -204,6 +254,11 @@ func (u *Unmarshaler) processStruct(structType reflect.Type, structValue reflect
 
 // processAnonymousField handles anonymous (embedded) fields.
 func (u *Unmarshaler) processAnonymousField(field reflect.StructField, value reflect.Value, m map[string]any, fullName string) error {
+	if err := u.enter(fullName); err != nil {
+		return err
+	}
+	defer u.leave()
+
 	key, opts, err := parseKeyAndOptions(u.key, field)
 	if err != nil {
 		return err
@@ -214,9 +269,16 @@ func (u *Unmarshaler) processAnonymousField(field reflect.StructField, value ref
 
 	derefedType := Deref(field.Type)
 
-	// If the embedded type is not a struct, treat it as a regular field
+	// If the embedded type is not a struct, treat it as a regular field.
+	//
+	// Anonymous must be cleared before dispatching: processField sends anonymous
+	// fields back to processAnonymousField, so keeping the flag set would recurse
+	// here forever (the old code overflowed the goroutine stack, a fatal error that
+	// cannot be recovered).
 	if derefedType.Kind() != reflect.Struct {
-		return u.processNamedField(field, value, m, fullName)
+		named := field
+		named.Anonymous = false
+		return u.processField(named, value, m, fullName)
 	}
 
 	maybeNewValue(field.Type, value)
@@ -254,6 +316,11 @@ func (u *Unmarshaler) processNamedField(field reflect.StructField, value reflect
 
 // processField handles a single field (the unified entry point).
 func (u *Unmarshaler) processField(field reflect.StructField, value reflect.Value, m map[string]any, fullName string) error {
+	if err := u.enter(fullName); err != nil {
+		return err
+	}
+	defer u.leave()
+
 	if usingDifferentKeys(u.key, field) {
 		return nil
 	}
@@ -616,6 +683,16 @@ func setStringValue(kind reflect.Kind, value reflect.Value, str string, fullName
 	if err != nil {
 		return fmt.Errorf("failed to convert value %q of field %q to %s: %w", str, fullName, kind, err)
 	}
+	if f, ok := v.(float64); ok {
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return fmt.Errorf("value %q of field %q is not a finite number", str, fullName)
+		}
+		// A float64 beyond MaxFloat32 used to be stored as +Inf without an error,
+		// silently turning invalid configuration into an infinity value.
+		if kind == reflect.Float32 && math.Abs(f) > math.MaxFloat32 {
+			return fmt.Errorf("value %q of field %q overflows float32", str, fullName)
+		}
+	}
 	return setMatchedPrimitiveValue(kind, value, v)
 }
 
@@ -635,6 +712,11 @@ func (u *Unmarshaler) setStructValue(fieldType reflect.Type, value reflect.Value
 
 // setSliceValue sets the value of a slice-typed field.
 func (u *Unmarshaler) setSliceValue(fieldType reflect.Type, value reflect.Value, mapValue any, opts *fieldOptions, fullName string) error {
+	if err := u.enter(fullName); err != nil {
+		return err
+	}
+	defer u.leave()
+
 	if !value.CanSet() {
 		return errValueNotSettable
 	}
@@ -664,16 +746,24 @@ func (u *Unmarshaler) setSliceValue(fieldType reflect.Type, value reflect.Value,
 		}
 
 		sliceFullName := fmt.Sprintf("%s[%d]", fullName, i)
+		// time.Duration is an int64, so it can never be reached through the Struct
+		// case below; it has to be handled before switching on the kind.
+		if dereffedBaseType == durationType {
+			if err := u.setDurationValue(baseType, conv.Index(i), ithValue, sliceFullName); err != nil {
+				return err
+			}
+			continue
+		}
+		if dereffedBaseKind == reflect.Interface {
+			// []any: keep the value as-is (assigning a concrete value to an
+			// interface element is valid).
+			SetValue(baseType, conv.Index(i), reflect.ValueOf(ithValue))
+			continue
+		}
 		switch dereffedBaseKind {
 		case reflect.Struct:
-			if dereffedBaseType == durationType {
-				if err := u.setDurationValue(baseType, conv.Index(i), ithValue, sliceFullName); err != nil {
-					return err
-				}
-			} else {
-				if err := u.fillStructElement(baseType, conv.Index(i), ithValue, sliceFullName); err != nil {
-					return err
-				}
+			if err := u.fillStructElement(baseType, conv.Index(i), ithValue, sliceFullName); err != nil {
+				return err
 			}
 		case reflect.Slice:
 			if err := u.setSliceValue(dereffedBaseType, conv.Index(i), ithValue, opts, sliceFullName); err != nil {
@@ -738,24 +828,41 @@ func (u *Unmarshaler) fillSliceValue(slice reflect.Value, index int, baseKind re
 			}
 			return errTypeMismatch
 		}
-		ithVal.Set(reflect.ValueOf(value))
+		// Set through SetValue so pointer elements ([]*bool, []*string, ...) are
+		// wrapped instead of assigning a bare value to a pointer element, which
+		// panics in reflect.
+		SetValue(ithValType, ithVal, reflect.ValueOf(value))
 		return nil
 	}
 }
 
 // setMapValue sets the value of a map-typed field.
 func (u *Unmarshaler) setMapValue(fieldType reflect.Type, value reflect.Value, mapValue any, opts *fieldOptions, fullName string) error {
+	if err := u.enter(fullName); err != nil {
+		return err
+	}
+	defer u.leave()
+
 	if !value.CanSet() {
 		return errValueNotSettable
 	}
 
-	fieldKeyType := fieldType.Key()
-	fieldElemType := fieldType.Elem()
+	// fieldType may be a pointer to map (the caller has only allocated it), so the
+	// map type has to be resolved through Deref. The old code called Key() on the
+	// raw field type and panicked for *map[...] fields.
+	mapType := Deref(fieldType)
+	if mapType.Kind() != reflect.Map {
+		return fmt.Errorf("field %q expects map type, but got %s", fullName, mapType.Kind())
+	}
+	fieldKeyType := mapType.Key()
+	fieldElemType := mapType.Elem()
 
-	mapType := reflect.MapOf(fieldKeyType, fieldElemType)
 	refValue := reflect.ValueOf(mapValue)
+	if !refValue.IsValid() || refValue.Kind() != reflect.Map {
+		return fmt.Errorf("field %q expects map type, but got %T", fullName, mapValue)
+	}
 	if mapType == refValue.Type() {
-		value.Set(refValue)
+		SetValue(fieldType, value, refValue)
 		return nil
 	}
 
@@ -772,31 +879,38 @@ func (u *Unmarshaler) setMapValue(fieldType reflect.Type, value reflect.Value, m
 		keythData := keythValue.Interface()
 		mapFullName := fmt.Sprintf("%s[%s]", fullName, key.String())
 
-		switch dereffedElemKind {
-		case reflect.Struct:
-			if dereffedElemType == durationType {
-				var d time.Duration
-				if err := u.setDurationValue(fieldElemType, reflect.ValueOf(&d).Elem(), keythData, mapFullName); err != nil {
-					return err
-				}
-				targetValue.SetMapIndex(key, reflect.ValueOf(d))
-			} else {
-				nestedMap, ok := keythData.(map[string]any)
-				if !ok {
-					return fmt.Errorf("field %q expects map type", mapFullName)
-				}
-				target := reflect.New(dereffedElemType)
-				if err := u.processStruct(dereffedElemType, target.Elem(), nestedMap, mapFullName); err != nil {
-					return err
-				}
-				SetMapIndexValue(fieldElemType, targetValue, key, target.Elem())
-			}
-		case reflect.Slice:
-			target := reflect.New(dereffedElemType)
-			if err := u.setSliceValue(fieldElemType, target.Elem(), keythData, opts, mapFullName); err != nil {
+		// time.Duration is an int64, so it can never be reached through the Struct
+		// case below; handle it before switching on the kind.
+		if dereffedElemType == durationType {
+			var d time.Duration
+			if err := u.setDurationValue(dereffedElemType, reflect.ValueOf(&d).Elem(), keythData, mapFullName); err != nil {
 				return err
 			}
-			targetValue.SetMapIndex(key, target.Elem())
+			SetMapIndexValue(fieldElemType, targetValue, key, reflect.ValueOf(d))
+			continue
+		}
+		if dereffedElemKind == reflect.Interface {
+			targetValue.SetMapIndex(key, keythValue)
+			continue
+		}
+
+		switch dereffedElemKind {
+		case reflect.Struct:
+			nestedMap, ok := keythData.(map[string]any)
+			if !ok {
+				return fmt.Errorf("field %q expects map type", mapFullName)
+			}
+			target := reflect.New(dereffedElemType)
+			if err := u.processStruct(dereffedElemType, target.Elem(), nestedMap, mapFullName); err != nil {
+				return err
+			}
+			SetMapIndexValue(fieldElemType, targetValue, key, target.Elem())
+		case reflect.Slice:
+			target := reflect.New(fieldElemType).Elem()
+			if err := u.setSliceValue(fieldElemType, target, keythData, opts, mapFullName); err != nil {
+				return err
+			}
+			targetValue.SetMapIndex(key, target)
 		case reflect.Map:
 			nestedMap, ok := keythData.(map[string]any)
 			if !ok {
@@ -813,12 +927,12 @@ func (u *Unmarshaler) setMapValue(fieldType reflect.Type, value reflect.Value, m
 				if dereffedElemKind != reflect.Bool {
 					return errTypeMismatch
 				}
-				targetValue.SetMapIndex(key, reflect.ValueOf(v))
+				SetMapIndexValue(fieldElemType, targetValue, key, reflect.ValueOf(v))
 			case string:
 				if dereffedElemKind != reflect.String {
 					return errTypeMismatch
 				}
-				targetValue.SetMapIndex(key, reflect.ValueOf(v))
+				SetMapIndexValue(fieldElemType, targetValue, key, reflect.ValueOf(v))
 			case json.Number:
 				target := reflect.New(dereffedElemType)
 				if err := setStringValue(dereffedElemKind, target.Elem(), v.String(), mapFullName); err != nil {
@@ -826,15 +940,15 @@ func (u *Unmarshaler) setMapValue(fieldType reflect.Type, value reflect.Value, m
 				}
 				SetMapIndexValue(fieldElemType, targetValue, key, target.Elem())
 			default:
-				if dereffedElemKind != keythValue.Kind() {
+				if !keythValue.Type().AssignableTo(dereffedElemType) {
 					return errTypeMismatch
 				}
-				targetValue.SetMapIndex(key, keythValue)
+				SetMapIndexValue(fieldElemType, targetValue, key, keythValue)
 			}
 		}
 	}
 
-	value.Set(targetValue)
+	SetValue(fieldType, value, targetValue)
 	return nil
 }
 

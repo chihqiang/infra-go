@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/chihqiang/infra-go/core/breaker"
+	"github.com/chihqiang/infra-go/core/logger"
 	"github.com/chihqiang/infra-go/core/ratelimit"
 	"github.com/chihqiang/infra-go/rest/chain"
 	resthandler "github.com/chihqiang/infra-go/rest/handler"
@@ -24,7 +25,10 @@ func WithMiddleware(middlewares ...chain.Middleware) Option {
 // WithRateLimit installs a rate limiter after the built-in middleware, so
 // rejected requests are still traced/logged.
 func WithRateLimit(limiter ratelimit.Limiter) Option {
-	return WithMiddleware(resthandler.RateLimitHandler(limiter))
+	return WithMiddleware(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
+		Enabled: true,
+		Limiter: limiter,
+	}).Handle)
 }
 
 // WithBreaker wraps route handlers with the given circuit breaker. It is placed
@@ -35,13 +39,17 @@ func WithBreaker(br breaker.Breaker) Option {
 		if br == nil {
 			return
 		}
-		s.outerMiddlewares = append(s.outerMiddlewares, resthandler.BreakerHandler(br))
+		s.outerMiddlewares = append(s.outerMiddlewares,
+			resthandler.NewBreakerHandler(resthandler.BreakerConfig{Enabled: true, Breaker: br}).Handle)
 	}
 }
 
-// WithSignature requires an HMAC-signed body on every request.
+// WithSignature requires an HMAC signature on every request. The signature covers
+// the method, escaped path, raw query, timestamp and body; TTL defaults to five
+// minutes when omitted.
 func WithSignature(cfg resthandler.SignatureConfig) Option {
-	return WithMiddleware(resthandler.SignatureHandler(cfg))
+	cfg.Enabled = true
+	return WithMiddleware(resthandler.NewSignatureHandler(cfg).Handle)
 }
 
 // WithTLSConfig applies cfg to the underlying http.Server. It takes effect when
@@ -49,6 +57,19 @@ func WithSignature(cfg resthandler.SignatureConfig) Option {
 func WithTLSConfig(cfg *tls.Config) Option {
 	return func(s *Server) {
 		s.tlsConfig = cfg
+	}
+}
+
+// WithLogger injects a pre-built logger into the server. When set, the
+// access-log middleware uses it directly instead of falling back to the global
+// logger. A nil logger clears the server-owned logger, reverting to the global.
+//
+// This option does not call logger.SetGlobal; callers that want the global to
+// match should call it themselves. It is useful in tests and in multi-server
+// setups where each server should own its logger independently.
+func WithLogger(l logger.ILogger) Option {
+	return func(s *Server) {
+		s.log = l
 	}
 }
 

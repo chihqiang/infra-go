@@ -4,7 +4,6 @@ import (
 	"net/http"
 
 	"github.com/chihqiang/infra-go/core/trace"
-	"github.com/chihqiang/infra-go/rest/chain"
 	"github.com/chihqiang/infra-go/rest/internal/pathmatch"
 	"github.com/chihqiang/infra-go/rest/internal/response"
 	"go.opentelemetry.io/otel"
@@ -13,72 +12,71 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
-// TraceOption customizes TraceHandler.
-type TraceOption func(*traceOptions)
-
-type traceOptions struct {
-	serviceName string
-	ignorePaths []string
+// TraceConfig configures the HTTP tracing middleware. It controls both the
+// request instrumentation and, through Agent, the shared tracing agent.
+type TraceConfig struct {
+	Enabled     bool     `json:",optional"`
+	ServiceName string   `json:",optional"`
+	IgnorePaths []string `json:",optional"`
+	// Agent configures core/trace. When Endpoint is set, Server.Register adds the
+	// internal trace agent service to the core/service.ServiceGroup, which starts
+	// and stops it. When the application already started an agent, the existing
+	// one is reused.
+	Agent trace.Config `json:",optional"`
 }
 
-// WithTraceServiceName labels spans with the service that produced them.
-func WithTraceServiceName(name string) TraceOption {
-	return func(opts *traceOptions) {
-		opts.serviceName = name
+// TraceHandler starts a server span per request.
+type TraceHandler struct {
+	config  TraceConfig
+	ignored *pathmatch.Matcher
+}
+
+// NewTraceHandler creates a TraceHandler.
+func NewTraceHandler(config TraceConfig) *TraceHandler {
+	return &TraceHandler{
+		config:  config,
+		ignored: pathmatch.New(config.IgnorePaths),
 	}
 }
 
-// WithTraceIgnorePaths skips tracing for the given request paths.
-func WithTraceIgnorePaths(paths ...string) TraceOption {
-	return func(opts *traceOptions) {
-		opts.ignorePaths = append(opts.ignorePaths, paths...)
-	}
-}
-
-// TraceHandler starts a server span per request, propagates incoming trace
-// context, and records the response status on the span.
-func TraceHandler(opts ...TraceOption) chain.Middleware {
-	var options traceOptions
-	for _, opt := range opts {
-		opt(&options)
+// Handle wraps next with request tracing.
+func (h *TraceHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
+	if !h.config.Enabled {
+		return next
 	}
 
-	ignored := pathmatch.New(options.ignorePaths)
-
-	return func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			if ignored.Match(r.URL.Path) {
-				next(w, r)
-				return
-			}
-
-			spanName := spanNameFor(r)
-			ctx, _ := trace.ExtractHeader(r.Context(), r.Header)
-			ctx, span := otel.Tracer(trace.TraceName).Start(ctx, spanName,
-				oteltrace.WithSpanKind(oteltrace.SpanKindServer),
-				oteltrace.WithAttributes(requestAttributes(r, options.serviceName)...),
-			)
-
-			recorder := response.NewStatusWriter(w)
-			completed := false
-			// Finish the span from a defer so a panicking handler still ends it.
-			// A panic is recorded as a 500: the outer RecoverHandler answers with
-			// one, but its recovery is invisible to this middleware.
-			defer func() {
-				status := recorder.Status()
-				if !completed {
-					status = http.StatusInternalServerError
-					span.SetStatus(codes.Error, "handler panic")
-				} else if status >= http.StatusInternalServerError {
-					span.SetStatus(codes.Error, http.StatusText(status))
-				}
-				span.SetAttributes(attribute.Int("http.response.status_code", status))
-				span.End()
-			}()
-
-			next(recorder, r.WithContext(ctx))
-			completed = true
+	return func(w http.ResponseWriter, r *http.Request) {
+		if h.ignored.Match(r.URL.Path) {
+			next(w, r)
+			return
 		}
+
+		spanName := spanNameFor(r)
+		ctx, _ := trace.ExtractHeader(r.Context(), r.Header)
+		ctx, span := otel.Tracer(trace.TraceName).Start(ctx, spanName,
+			oteltrace.WithSpanKind(oteltrace.SpanKindServer),
+			oteltrace.WithAttributes(requestAttributes(r, h.config.ServiceName)...),
+		)
+
+		recorder := response.NewStatusWriter(w)
+		completed := false
+		// Finish the span from a defer so a panicking handler still ends it.
+		// A panic is recorded as a 500: the outer RecoveryHandler answers with
+		// one, but its recovery is invisible to this middleware.
+		defer func() {
+			status := recorder.Status()
+			if !completed {
+				status = http.StatusInternalServerError
+				span.SetStatus(codes.Error, "handler panic")
+			} else if status >= http.StatusInternalServerError {
+				span.SetStatus(codes.Error, http.StatusText(status))
+			}
+			span.SetAttributes(attribute.Int("http.response.status_code", status))
+			span.End()
+		}()
+
+		next(recorder, r.WithContext(ctx))
+		completed = true
 	}
 }
 

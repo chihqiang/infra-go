@@ -8,13 +8,13 @@ import (
 
 // Common request errors that map onto HTTP status codes.
 var (
-	ErrBadRequest         = errors.New("rest: bad request")
-	ErrUnauthorized       = errors.New("rest: unauthorized")
-	ErrForbidden          = errors.New("rest: forbidden")
-	ErrNotFound           = errors.New("rest: not found")
-	ErrConflict           = errors.New("rest: conflict")
-	ErrTooManyRequests    = errors.New("rest: too many requests")
-	ErrServiceUnavailable = errors.New("rest: service unavailable")
+	ErrBadRequest        = errors.New("rest: bad request")
+	ErrUnauthorized      = errors.New("rest: unauthorized")
+	ErrForbidden         = errors.New("rest: forbidden")
+	ErrResourceNotFound  = errors.New("rest: resource not found")
+	ErrConflict          = errors.New("rest: conflict")
+	ErrTooManyRequests   = errors.New("rest: too many requests")
+	ErrServerUnavailable = errors.New("rest: service unavailable")
 )
 
 // StatusCoder lets an error choose its own response status.
@@ -43,13 +43,13 @@ func StatusOf(err error) int {
 		return http.StatusUnauthorized
 	case errors.Is(err, ErrForbidden):
 		return http.StatusForbidden
-	case errors.Is(err, ErrNotFound):
+	case errors.Is(err, ErrResourceNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, ErrConflict):
 		return http.StatusConflict
 	case errors.Is(err, ErrTooManyRequests):
 		return http.StatusTooManyRequests
-	case errors.Is(err, ErrServiceUnavailable):
+	case errors.Is(err, ErrServerUnavailable):
 		return http.StatusServiceUnavailable
 	default:
 		return http.StatusInternalServerError

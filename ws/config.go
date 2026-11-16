@@ -19,10 +19,11 @@ const (
 type Config struct {
 	// PingInterval is the heartbeat interval, 25 seconds by default.
 	// The server sends a Ping frame to the client at this interval and the client must
-	// reply with a Pong within PingTimeout.
+	// reply with a Pong within PingTimeout. Non-positive values use the default.
 	PingInterval time.Duration `json:",default=25s"`
 	// PingTimeout is the heartbeat timeout, 60 seconds by default.
 	// The connection is closed when no client message or Pong arrives within this time.
+	// Non-positive values use the default.
 	PingTimeout time.Duration `json:",default=60s"`
 	// ReadBufferSize is the read buffer size in bytes, 4096 by default.
 	ReadBufferSize int `json:",default=4096"`
@@ -74,22 +75,32 @@ func fillDefault(cfg Config) Config {
 		panic(err)
 	}
 
-	if cfg.PingInterval != 0 {
+	// Negative values fall back to the default: they would panic (ticker with a
+	// non-positive interval) or disable limits unintentionally.
+	if cfg.PingInterval > 0 {
 		c.PingInterval = cfg.PingInterval
 	}
-	if cfg.PingTimeout != 0 {
+	// Negative values fall back to the default: they would panic (ticker with a
+	// non-positive interval) or disable limits unintentionally.
+	if cfg.PingTimeout > 0 {
 		c.PingTimeout = cfg.PingTimeout
 	}
-	if cfg.ReadBufferSize != 0 {
+	// Negative values fall back to the default: they would panic (ticker with a
+	// non-positive interval) or disable limits unintentionally.
+	if cfg.ReadBufferSize > 0 {
 		c.ReadBufferSize = cfg.ReadBufferSize
 	}
-	if cfg.WriteBufferSize != 0 {
+	// Negative values fall back to the default: they would panic (ticker with a
+	// non-positive interval) or disable limits unintentionally.
+	if cfg.WriteBufferSize > 0 {
 		c.WriteBufferSize = cfg.WriteBufferSize
 	}
 	if cfg.WriteTimeout != 0 {
 		c.WriteTimeout = cfg.WriteTimeout
 	}
-	if cfg.MaxMessageSize != 0 {
+	// Negative values fall back to the default: they would panic (ticker with a
+	// non-positive interval) or disable limits unintentionally.
+	if cfg.MaxMessageSize > 0 {
 		c.MaxMessageSize = cfg.MaxMessageSize
 	}
 	c.NodeID = cfg.NodeID

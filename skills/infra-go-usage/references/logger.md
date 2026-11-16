@@ -1,23 +1,23 @@
 # logger
 
-A logging package built on [go.uber.org/zap](https://github.com/uber-go/zap) and [lumberjack](https://github.com/natefinch/lumberjack), offering a concise, easy-to-use API while keeping zap's high performance, with built-in automatic log file rotation. No zap types are exposed, so users never need to import zap.
+A structured logging package implemented with the Go standard library, offering a concise API with JSON/plain encoding and built-in size- or daily-based log file rotation. It has no third-party logging dependencies.
 
 ## Features
 
 - **Interface-driven**: decoupled through the `ILogger` interface, which eases mock testing and swapping implementations between libraries
-- **No zap dependency**: provides its own `Field` type and field constructors (`String`, `Int`, `Err`, etc.), so users never import zap
+- **Standard-library implementation**: provides its own `Field` type and field constructors (`String`, `Int`, `Err`, etc.); no third-party logging library is imported
 - **Four kinds of logging API**: structured logs, formatted logs, context-aware structured logs and context-aware formatted logs
-- **Multiple output formats**: JSON encoding (production) and Console encoding (development)
-- **Multiple output targets**: stdout, stderr and files; can write to several targets at once
-- **Log rotation**: built on lumberjack — size-based splitting, backup count retention, age-based cleanup and optional gzip compression
+- **Two encodings**: `json` (production) and `plain` (development)
+- **Output modes**: console, file and volume (`Path/<ServiceName>/<hostname>/`)
+- **Log rotation**: size-based or daily splitting, backup count retention, age-based cleanup and optional gzip compression
 - **Default-value tags**: Config defines defaults with `default` struct tags, following the conf standard
 - **Automatic directory creation**: missing directories are created automatically for file output
 - **Global Logger**: a built-in global instance that supports direct package-level calls
 - **Context logging**: `Ctx`-suffixed methods extract fields (traceID, spanID, etc.) from `context.Context` automatically
 - **Extensible extractors**: register custom context field extractors with `RegisterContextExtractor` (returns an unregister function, so it can be undone)
 - **Caller information**: records the caller's file name and line number automatically (correctly skipping wrapper layers)
-- **Stack traces**: optionally record stack traces at Error level and above
-- **Application name**: optionally emits a fixed application name field
+- **Stack traces**: record stack traces at Error level and above, throttled by `StackCooldownMillis`
+- **Service name**: emitted as the `app` field and used for volume paths
 
 ## Installation
 
@@ -53,61 +53,71 @@ func main() {
 
 ```go
 l := logger.New(logger.Config{
-    Level:       logger.InfoLevel,
-    Encoding:    logger.JSONEncoding,
-    Output:      []string{"stdout", "/var/log/app.log"},
-    ErrorOutput: "stderr",
-    Caller:      true,
-    Stacktrace:  false,
-    AppName:     "my-service",
-    Rotation: logger.RotationConfig{
-        MaxSize:    100,  // MB
-        MaxBackups: 7,
-        MaxAge:     30,   // days
-        Compress:   true,
-    },
+    ServiceName: "my-service",
+    Mode:        "file",
+    Encoding:    "json",
+    TimeFormat:  "2006-01-02T15:04:05.000Z07:00",
+    Path:        "/var/log/app",
+    Level:       "info",
+    Rotation:    "size",
+    MaxSize:     100, // MB
+    MaxBackups:  7,
+    KeepDays:    30,
+    Compress:    true,
 })
 ```
 
-> `New` returns the `ILogger` interface. Zero-value fields are filled with their defaults automatically; the defaults are defined by the `default` struct tag.
+> `New` returns the `ILogger` interface. Zero-value fields are filled with their defaults automatically.
 
 ### Config reference
 
-| Field | Type | Default | Tag | Description |
-| ------ | ------ | -------- | ------ | ------ |
-| `Level` | `Level` | `InfoLevel` | `default=0` | Log level |
-| `Encoding` | `Encoding` | `JSONEncoding` | `default=json` | Encoding format: `JSONEncoding` or `ConsoleEncoding` |
-| `Output` | `[]string` | `["stdout"]` | `default=[stdout]` | Output target list; accepts `"stdout"`, `"stderr"` or file paths |
-| `ErrorOutput` | `string` | `"stderr"` | `default=stderr` | Target for internal error output |
-| `Caller` | `bool` | `true` | `default=true` | Whether to record caller information |
-| `Stacktrace` | `bool` | `false` | `optional` | Whether to record stack traces at Error level and above |
-| `TimeLayout` | `string` | ISO8601 | `default=2006-01-02T15:04:05.000Z07:00` | Time layout |
-| `AppName` | `string` | `""` | `optional` | Application name, emitted as the fixed field `app` |
-| `Rotation` | `RotationConfig` | see below | — | Log file rotation config; only applies to file-path outputs |
+```go
+type Config struct {
+    ServiceName         string `json:",optional"`
+    Mode                string `json:",default=console,options=[console,file,volume]"`
+    Encoding            string `json:",default=json,options=[json,plain]"`
+    TimeFormat          string `json:",optional"`
+    Path                string `json:",default=logs"`
+    Level               string `json:",default=info,options=[debug,info,error,severe]"`
+    MaxContentLength    uint32 `json:",optional"`
+    Compress            bool   `json:",optional"`
+    Stat                bool   `json:",default=true"`
+    KeepDays            int    `json:",optional"`
+    StackCooldownMillis int    `json:",default=100"`
+    MaxBackups          int    `json:",default=0"`
+    MaxSize             int    `json:",default=0"`
+    Rotation            string `json:",default=daily,options=[daily,size]"`
+}
+```
 
-#### RotationConfig
+| Field | Default | Description |
+| ------ | ------- | ----------- |
+| `ServiceName` | `""` | Service name; volume mode uses it in the log path, and it is emitted as the `app` field |
+| `Mode` | `console` | `console`, `file` or `volume` |
+| `Encoding` | `json` | `json` or `plain` |
+| `TimeFormat` | ISO8601 | Timestamp layout |
+| `Path` | `logs` | Log directory for file/volume modes |
+| `Level` | `info` | `debug`, `info`, `error` or `severe` (`warn` is also accepted); `severe` keeps only fatal entries |
+| `MaxContentLength` | `0` | Truncate messages to this many bytes; zero means no limit |
+| `Compress` | `false` | Gzip rotated backups |
+| `Stat` | `true` | Kept for go-zero `LogConf` compatibility |
+| `KeepDays` | `0` | Delete backups older than this many days; zero keeps forever |
+| `StackCooldownMillis` | `100` | Minimum interval between stack traces for error-level entries |
+| `MaxBackups` | `0` | Maximum number of backups kept; zero keeps all |
+| `MaxSize` | `0` | Maximum active file size in MB for size rotation; zero means no limit |
+| `Rotation` | `daily` | `daily` or `size` |
 
-| Field | Type | Default | Tag | Description |
-| ------ | ------ | -------- | ------ | ------ |
-| `MaxSize` | `int` | `100` | `default=100` | Maximum size of a single log file (MB); rotation is triggered beyond it |
-| `MaxBackups` | `int` | `7` | `default=7` | Maximum number of old log files to keep; the oldest are deleted beyond it |
-| `MaxAge` | `int` | `30` | `default=30` | Maximum age of old log files in days; older ones are deleted |
-| `Compress` | `bool` | `false` | `optional` | Whether to gzip the old log files |
-| `LocalTime` | `bool` | `true` | `default=true` | Whether to use local time to name backup files; `false` uses UTC |
-
-> The rotation config only applies to file-path `Output` entries; `"stdout"` / `"stderr"` are unaffected.
+File mode writes `access.log`, `error.log` and `severe.log` under `Path`; volume mode writes
+under `Path/<ServiceName>/<hostname>/`. Console mode writes access logs to stdout and
+error/severe logs to stderr. Caller information is always included.
 
 ### Log levels
 
-```go
-logger.DebugLevel  // debug information
-logger.InfoLevel   // general information (default)
-logger.WarnLevel   // warnings
-logger.ErrorLevel  // errors
-logger.DPanicLevel // panics in development mode
-logger.PanicLevel  // panic then exit
-logger.FatalLevel  // os.Exit(1) after a fatal error
-```
+`Config.Level` accepts the strings `debug`, `info`, `error` and `severe`; `warn` is accepted as an
+extension. `severe` maps to `logger.FatalLevel`, because fatal entries are the ones routed to
+`severe.log`. The exported `logger.DebugLevel`, `InfoLevel`, `WarnLevel`, `ErrorLevel`,
+`DPanicLevel`, `PanicLevel` and `FatalLevel` constants remain available for code that compares
+levels internally.
 
 ## The ILogger interface
 
@@ -155,10 +165,10 @@ type ILogger interface {
 
 ### Structured logging (high performance)
 
-Pass key/value pairs with `logger.Field` for the best performance. No zap import needed.
+Pass key/value pairs with `logger.Field` for structured output.
 
 ```go
-l := logger.New(logger.Config{AppName: "api-server"})
+l := logger.New(logger.Config{ServiceName: "api-server"})
 
 l.Info("request received",
     logger.String("method", "GET"),
@@ -171,7 +181,7 @@ l.Info("request received",
 Output:
 
 ```json
-{"level":"INFO","time":"...","caller":"main.go:12","app":"api-server","msg":"request received","method":"GET","path":"/api/users","status":200,"latency":"42ms"}
+{"level":"INFO","time":"...","caller":"main.go:12","app":"api-server","msg":"request received","method":"GET","path":"/api/users","status":200,"latency":42}
 ```
 
 #### Field constructors
@@ -219,9 +229,9 @@ Replacing the global Logger:
 
 ```go
 l := logger.New(logger.Config{
-    Level:    logger.DebugLevel,
-    Encoding: logger.ConsoleEncoding,
-    AppName:  "my-app",
+    Level:    "debug",
+    Encoding: "plain",
+    ServiceName: "my-app",
 })
 logger.SetGlobal(l)
 ```
@@ -317,57 +327,67 @@ Suited to production and easy for log collection systems to parse.
 
 ### Console encoding
 
-Suited to development: human-readable and colorized.
+Suited to development: human-readable plain text.
 
 ```text
 2026-01-01T12:00:00.000+0800    INFO    main.go:10    hello    {"key": "value"}
 ```
 
-## Output targets
+## Output modes
 
-### Standard output / error
+### Console
+
+```go
+logger.New(logger.Config{Mode: "console", Encoding: "plain"})
+```
+
+Console mode writes access logs to stdout and error/severe logs to stderr.
+
+### File (automatic rotation)
 
 ```go
 logger.New(logger.Config{
-    Output: []string{"stdout"},      // standard output
-    ErrorOutput: "stderr",           // standard error
+    ServiceName: "my-service",
+    Mode:        "file",
+    Path:        "/var/log/my-service",
+    Rotation:    "size",
+    MaxSize:     100, // a single file is at most 100MB
+    MaxBackups:  7,   // keep 7 backups
+    KeepDays:    30,  // keep them for 30 days
+    Compress:    true,
 })
 ```
 
-### File output (automatic rotation)
+File mode creates:
 
-File output uses [lumberjack](https://github.com/natefinch/lumberjack) for automatic rotation, so log files never grow without bound.
-
-```go
-logger.New(logger.Config{
-    Output: []string{"/var/log/app.log"},
-    Rotation: logger.RotationConfig{
-        MaxSize:    100,  // a single file is at most 100MB
-        MaxBackups: 7,    // keep 7 backups
-        MaxAge:     30,   // keep them for 30 days
-        Compress:   true, // gzip the old files
-    },
-})
+```text
+/var/log/my-service/
+├── access.log
+├── error.log
+└── severe.log
 ```
 
 Rotation behavior:
 
-1. When the log file exceeds `MaxSize`, the current file is renamed to `app-<timestamp>.log` (or `.log.gz` when compression is enabled)
-2. A new `app.log` is created and writing continues
-3. If the number of backups exceeds `MaxBackups`, the oldest backups are deleted
-4. If a backup is older than `MaxAge` days, it is deleted
+1. In `size` mode, the active file is rotated before a write that would exceed `MaxSize`.
+   In `daily` mode it rotates when the date changes.
+2. The active file is renamed to `access-<timestamp>.log` (or `.log.gz` when compression is enabled)
+   and a new file is opened.
+3. Backups beyond `MaxBackups` are deleted.
+4. Backups older than `KeepDays` days are deleted.
 
-When `Rotation` is not set the defaults apply (100MB / 7 files / 30 days / no compression).
+Defaults are `Rotation=daily`, `MaxSize=0`, `MaxBackups=0`, `KeepDays=0`, no compression.
+Missing directories are created automatically.
 
-Missing directories are created automatically for file output.
+### Volume
 
-### Multiple output targets
-
-Writing to the console and a file at the same time:
+Volume mode is intended for containers and writes to `Path/<ServiceName>/<hostname>/`:
 
 ```go
 logger.New(logger.Config{
-    Output: []string{"stdout", "/var/log/app.log"},
+    ServiceName: "my-service",
+    Mode:        "volume",
+    Path:        "/var/log",
 })
 ```
 
@@ -383,30 +403,24 @@ import (
 )
 
 func main() {
-    // create the Logger
     l := logger.New(logger.Config{
-        Level:      logger.InfoLevel,
-        Encoding:   logger.JSONEncoding,
-        Output:     []string{"stdout", "/var/log/myapp/app.log"},
-        Caller:     true,
-        Stacktrace: true,
-        AppName:    "myapp",
-        Rotation: logger.RotationConfig{
-            MaxSize:    100,
-            MaxBackups: 7,
-            MaxAge:     30,
-            Compress:   true,
-        },
+        ServiceName: "myapp",
+        Mode:        "file",
+        Encoding:    "json",
+        Path:        "/var/log/myapp",
+        Level:       "info",
+        Rotation:    "size",
+        MaxSize:     100,
+        MaxBackups:  7,
+        KeepDays:    30,
+        Compress:    true,
     })
     logger.SetGlobal(l)
 
-    // structured logs
     logger.Info("server starting",
         logger.String("host", "0.0.0.0"),
         logger.Int("port", 8080),
     )
-
-    // formatted logs
     logger.Infof("server shutdown after %v", time.Since(start))
 }
 ```
@@ -414,7 +428,7 @@ func main() {
 ## Performance recommendations
 
 - **Production**: use the structured logging methods (`Info`, `Error`, etc.) for the best performance
-- **Development**: use `ConsoleEncoding` and `DebugLevel`; the formatted methods are more convenient
+- **Development**: use `Encoding: "plain"` and `Level: "debug"`; the formatted methods are more convenient
 - **Tracing**: use the `Ctx`-suffixed methods to inject traceID/spanID automatically, with no manual passing
 - **Before exiting**: always call `Sync()` to flush the buffer so logs aren't lost
 - **Rotation**: always configure `Rotation` in production so log files don't grow without bound

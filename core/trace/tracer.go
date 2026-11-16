@@ -60,7 +60,7 @@ func (s *metadataSupplier) Keys() []string {
 // Used by a gRPC client to pass the current span context to the server when starting a
 // request.
 func Inject(ctx context.Context, metadata *metadata.MD) {
-	otel.GetTextMapPropagator().Inject(ctx, &metadataSupplier{
+	activePropagator().Inject(ctx, &metadataSupplier{
 		metadata: metadata,
 	})
 }
@@ -69,7 +69,7 @@ func Inject(ctx context.Context, metadata *metadata.MD) {
 // Used by a gRPC server to restore the span context passed by the client when receiving
 // a request.
 func Extract(ctx context.Context, metadata *metadata.MD) (context.Context, trace.SpanContext) {
-	ctx = otel.GetTextMapPropagator().Extract(ctx, &metadataSupplier{
+	ctx = activePropagator().Extract(ctx, &metadataSupplier{
 		metadata: metadata,
 	})
 	return ctx, trace.SpanContextFromContext(ctx)
@@ -81,14 +81,14 @@ func Extract(ctx context.Context, metadata *metadata.MD) (context.Context, trace
 // Used by an HTTP client to pass the current span context to the server when starting a
 // request.
 func InjectHeader(ctx context.Context, header http.Header) {
-	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(header))
+	activePropagator().Inject(ctx, propagation.HeaderCarrier(header))
 }
 
 // ExtractHeader extracts the trace context from an HTTP header.
 // Used by an HTTP server to restore the span context passed by the client when receiving
 // a request.
 func ExtractHeader(ctx context.Context, header http.Header) (context.Context, trace.SpanContext) {
-	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(header))
+	ctx = activePropagator().Extract(ctx, propagation.HeaderCarrier(header))
 	return ctx, trace.SpanContextFromContext(ctx)
 }
 
@@ -107,10 +107,14 @@ func SpanContextFromContext(ctx context.Context) trace.SpanContext {
 }
 
 // TracerFromContext returns the tracer from the context.
-// If the context holds a valid span, its TracerProvider is used; otherwise the global
-// TracerProvider is used.
+//
+// A recording local span contributes its own TracerProvider. A span restored from
+// propagated headers (Extract/ExtractHeader) is a non-recording remote span whose
+// TracerProvider is the noop implementation; using it would create non-recording
+// child spans and silently drop the whole server-side trace, so the global
+// TracerProvider is used for it instead.
 func TracerFromContext(ctx context.Context) trace.Tracer {
-	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
+	if span := trace.SpanFromContext(ctx); span.IsRecording() {
 		return span.TracerProvider().Tracer(TraceName)
 	}
 	return otel.Tracer(TraceName)

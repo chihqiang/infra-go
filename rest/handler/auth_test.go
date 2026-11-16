@@ -26,7 +26,7 @@ func TestAuthorizeStoresClaims(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handlerFn := Authorize(parser)(func(w http.ResponseWriter, r *http.Request) {
+	handlerFn := NewAuthHandler(AuthConfig{Enabled: true, Parser: parser}).Handle(func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := token.ClaimsFrom(r.Context())
 		if !ok {
 			t.Error("claims missing from context")
@@ -49,7 +49,7 @@ func TestAuthorizeStoresClaims(t *testing.T) {
 func TestAuthorizeRejectsBadHeaders(t *testing.T) {
 	parser := newTokenParser(t)
 	called := false
-	handlerFn := Authorize(parser)(func(http.ResponseWriter, *http.Request) {
+	handlerFn := NewAuthHandler(AuthConfig{Enabled: true, Parser: parser}).Handle(func(http.ResponseWriter, *http.Request) {
 		called = true
 	})
 
@@ -117,7 +117,7 @@ func TestAuthorizeRejectsBadHeaders(t *testing.T) {
 
 func TestAuthorizeRejectsMultipleAuthorizationHeaders(t *testing.T) {
 	parser := newTokenParser(t)
-	handlerFn := Authorize(parser)(func(http.ResponseWriter, *http.Request) {})
+	handlerFn := NewAuthHandler(AuthConfig{Enabled: true, Parser: parser}).Handle(func(http.ResponseWriter, *http.Request) {})
 
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	request.Header.Add(AuthorizationHeader, "Bearer first")
@@ -140,7 +140,7 @@ func TestAuthorizeAcceptsLowercaseScheme(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handlerFn := Authorize(parser)(func(w http.ResponseWriter, _ *http.Request) {
+	handlerFn := NewAuthHandler(AuthConfig{Enabled: true, Parser: parser}).Handle(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -156,12 +156,14 @@ func TestAuthorizeAcceptsLowercaseScheme(t *testing.T) {
 
 func TestAuthorizeUsesCallback(t *testing.T) {
 	parser := newTokenParser(t)
-	handlerFn := Authorize(parser, WithUnauthorizedCallback(
-		func(w http.ResponseWriter, r *http.Request, err error) {
+	handlerFn := NewAuthHandler(AuthConfig{
+		Enabled: true,
+		Parser:  parser,
+		Callback: func(w http.ResponseWriter, r *http.Request, err error) {
 			w.Header().Set("X-Reason", err.Error())
 			w.WriteHeader(http.StatusForbidden)
 		},
-	))(func(http.ResponseWriter, *http.Request) {})
+	}).Handle(func(http.ResponseWriter, *http.Request) {})
 
 	recorder := httptest.NewRecorder()
 	handlerFn.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -175,7 +177,7 @@ func TestAuthorizeUsesCallback(t *testing.T) {
 }
 
 func TestAuthorizeWithoutParserReturnsServerError(t *testing.T) {
-	handlerFn := Authorize(nil)(func(http.ResponseWriter, *http.Request) {})
+	handlerFn := NewAuthHandler(AuthConfig{Enabled: true}).Handle(func(http.ResponseWriter, *http.Request) {})
 
 	recorder := httptest.NewRecorder()
 	handlerFn.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -190,11 +192,13 @@ func TestAuthorizeWithoutParserReturnsServerError(t *testing.T) {
 
 func TestAuthorizeCallbackDefaultsStatus(t *testing.T) {
 	parser := newTokenParser(t)
-	handlerFn := Authorize(parser, WithUnauthorizedCallback(
-		func(w http.ResponseWriter, _ *http.Request, err error) {
+	handlerFn := NewAuthHandler(AuthConfig{
+		Enabled: true,
+		Parser:  parser,
+		Callback: func(w http.ResponseWriter, _ *http.Request, err error) {
 			w.Header().Set("X-Reason", err.Error())
 		},
-	))(func(http.ResponseWriter, *http.Request) {})
+	}).Handle(func(http.ResponseWriter, *http.Request) {})
 
 	recorder := httptest.NewRecorder()
 	handlerFn.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))

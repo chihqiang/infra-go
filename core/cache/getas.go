@@ -42,11 +42,6 @@ func GetAs[T any](ctx context.Context, c Cache, key string) (T, error) {
 		return zero, err
 	}
 
-	// The backend may already have returned T itself (e.g. MemCache stored a T).
-	if v, ok := raw.(T); ok {
-		return v, nil
-	}
-
 	// Always decode through a JSON round-trip: the Redis backend returns a
 	// JSON-compatible representation and the raw value returned by MemCache is
 	// serializable as well. Decoding straight into the concrete type T keeps large

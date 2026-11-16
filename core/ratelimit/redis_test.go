@@ -329,3 +329,26 @@ func TestStoreTypeConstants(t *testing.T) {
 	assert.Equal(t, StoreType("memory"), StoreMemory)
 	assert.Equal(t, StoreType("redis"), StoreRedis)
 }
+
+// TestRedisTokenBucket_ZeroRate is a regression test: rate=0 made the Lua script
+// compute math.ceil(burst/0)=inf, so EXPIRE failed after the state had been written.
+// Allow() swallowed the error and returned false while leaking a key without a TTL.
+func TestRedisTokenBucket_ZeroRate(t *testing.T) {
+	client, cleanup := newMiniRedis(t)
+	defer cleanup()
+
+	tb := NewRedisTokenBucket(client, "test:tb:zero", 0, 2)
+
+	// The bucket starts full and never refills, matching the in-memory limiter.
+	assert.True(t, tb.Allow())
+	assert.True(t, tb.Allow())
+	assert.False(t, tb.Allow())
+
+	allowed, err := tb.AllowContext(context.Background())
+	require.NoError(t, err, "rate=0 must not make the script fail")
+	assert.False(t, allowed)
+
+	ttl, err := client.TTL(context.Background(), "test:tb:zero").Result()
+	require.NoError(t, err)
+	assert.Equal(t, time.Duration(-1), ttl, "the never-refilling bucket must not carry a bogus TTL")
+}

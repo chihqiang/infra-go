@@ -96,10 +96,11 @@ Registers all routes and the middleware chain in one place:
 func Register(server *rest.Server, svcCtx *svc.ServiceContext) {
     // request id / recovery / access log / trace are switched on by
     // rest.DefaultConfig(); mount extras here
-    server.Use(resthandler.TraceHandler(
-        resthandler.WithTraceIgnorePaths("/healthz"),
-        resthandler.WithTraceServiceName("my-service"),
-    ))
+    server.Use(resthandler.NewTraceHandler(resthandler.TraceConfig{
+        Enabled:     true,
+        IgnorePaths: []string{"/healthz"},
+        ServiceName: "my-service",
+    }).Handle)
 
     v1 := server.Group("/api/v1")
     v1.AddRoute(rest.Route{
@@ -148,7 +149,7 @@ GORM entities (table names, comments, indexes), constants and DTOs, matching `db
 
 Business-specific middleware (auth, audit, permissions, context injection) implements `chain.Middleware` (`func(http.HandlerFunc) http.HandlerFunc`) for `route` to mount.
 
-- For common capabilities use the rest built-ins directly: `rest.WithRouteAuth` (JWT auth), `resthandler.RateLimitHandler` (rate limiting), `resthandler.TraceHandler` (tracing), `resthandler.RecoverHandler`, etc.
+- For common capabilities use the rest built-ins directly: `rest.WithRouteAuth` (JWT auth), `resthandler.NewRateLimitHandler` (rate limiting), `resthandler.NewTraceHandler` (tracing), `resthandler.NewRecoveryHandler`, etc.
 - To bring in a third-party standard `func(http.Handler) http.Handler` middleware, wrap it into `chain.Middleware` before calling `server.Use`.
 - Reading the current user's claims inside a handler: `token.ClaimsFrom(r.Context())`.
 
@@ -160,7 +161,7 @@ Business-specific middleware (auth, audit, permissions, context injection) imple
 | `svc` | `orm` · `redisx` · `token` · `hash` (assembly) |
 | `route` | `rest` (AddRoute/Group/Use) |
 | `handler` | `rest` (Bind / Error / JSONBaseResponse) |
-| `middleware` | `rest.WithRouteAuth` · `resthandler.RateLimitHandler` · rest built-in handlers |
+| `middleware` | `rest.WithRouteAuth` · `resthandler.NewRateLimitHandler` · rest built-in handlers |
 | `logic` | `orm` · `redisx` · `retry` · `taskq` · `syncx` · `cast` · `hash` |
 | `main.go` | `conf` · `logger` · `rest` · `service` (multi-service orchestration) |
 
