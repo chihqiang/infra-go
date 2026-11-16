@@ -198,3 +198,22 @@ func TestOverrideStructFields_SelfReferentialGraph(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nesting depth")
 }
+
+// TestUnmarshal_IgnoredFieldDoesNotRequireParent used to fail with
+// `field "Nested" not set`: a child field tagged `json:"-"` can never be supplied
+// by the config, yet it made the enclosing struct look required.
+func TestUnmarshal_IgnoredFieldDoesNotRequireParent(t *testing.T) {
+	type Nested struct {
+		Enabled bool   `json:",default=true"`
+		Runtime func() `json:"-"`
+	}
+	type Config struct {
+		Nested Nested `json:"nested"`
+		Name   string `json:"name"`
+	}
+
+	var c Config
+	require.NoError(t, UnmarshalJsonMap(map[string]any{"name": "svc"}, &c))
+	assert.True(t, c.Nested.Enabled)
+	assert.Equal(t, "svc", c.Name)
+}

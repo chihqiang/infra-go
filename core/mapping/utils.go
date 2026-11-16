@@ -397,9 +397,15 @@ func implicitValueRequiredStruct(tag string, tp reflect.Type) bool {
 			return true
 		}
 
-		_, opts, err := parseKeyAndOptions(tag, childField)
+		childKey, opts, err := parseKeyAndOptions(tag, childField)
 		if err != nil {
 			return true
+		}
+
+		// An ignored field ("json:\"-\"") is never read from the input, so it must
+		// not make the enclosing struct required.
+		if childKey == ignoreKey {
+			continue
 		}
 
 		if opts == nil {

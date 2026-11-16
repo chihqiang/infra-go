@@ -55,16 +55,38 @@ main.go ──► config ──► svc(ServiceContext) ──► route ──►
 Holds only config structs; declare defaults, ranges and enums with `json` tags, and leave sensitive items empty to be supplied via environment variables:
 
 ```go
+// rest.Config is embedded, not carried in a separate HTTP/Server field: conf and
+// mapping flatten anonymous embedded structs, so the server keys live at the top
+// level of config.yaml and main.go passes the embedded value straight to NewServer.
 type Config struct {
-    App      App                `json:"app"`
-    Server   rest.Config `json:"server"`
-    DB       orm.Config  `json:"db"`
-    Token    token.Config `json:"token"`
-    Logger   logger.Config      `json:"logger"`
-    Security SecurityConfig     `json:"security"`
-    Redis    redisx.Config      `json:"redis,optional"`
+    rest.Config
+    App      App            `json:"app"`
+    DB       orm.Config     `json:"db"`
+    Token    token.Config   `json:"token"`
+    Security SecurityConfig `json:"security"`
+    Redis    redisx.Config  `json:"redis,optional"`
 }
 ```
+
+```yaml
+# config.yaml — server keys are top level because rest.Config is embedded;
+# omitted sections still get their struct-tag defaults
+host: 0.0.0.0
+port: 8080
+readTimeout: 10s
+app:
+  name: my-service
+db:
+  driver: mysql
+```
+
+```go
+server, err := rest.NewServer(cfg.Config) // the embedded rest.Config
+```
+
+- Do not add a separate `Server rest.Config` / `HTTP rest.Config` field: it forces `cfg.Server.Port` at every call site and nests all server settings under one config key.
+- Do not add a second `Logger` field either — the embedded `rest.Config` already provides one; an outer field would shadow it and leave two keys competing for the same `logger` section.
+- Embedding promotes `rest.Config.Validate`, so `conf` validates host/port/TLS/middleware settings automatically. A business-level `Validate` must call the embedded one first: `if err := c.Config.Validate(); err != nil { return err }`.
 
 ### svc — dependency assembly (ServiceContext)
 
