@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/chihqiang/infra-go/core/logger"
@@ -14,6 +15,7 @@ import (
 var (
 	ErrInvalidPort        = errors.New("rest: port must be between 0 and 65535")
 	ErrIncompleteTLSFiles = errors.New("rest: cert file and key file must be configured together")
+	ErrInvalidHealthPath  = errors.New("rest: invalid health path")
 )
 
 // defaultShutdownTimeout is used when Config.ShutdownTimeout is zero, so Stop
@@ -38,6 +40,50 @@ type Config struct {
 	// pre-built logger instead.
 	Logger      logger.Config
 	Middlewares MiddlewaresConf
+	// Health configures the built-in GET health endpoint. It is disabled by
+	// default so applications that already register their own health route are
+	// unaffected.
+	Health HealthConfig
+}
+
+// defaultHealthPath is used when HealthConfig.Path is empty.
+const defaultHealthPath = "/health"
+
+// normalizeHealthPath trims the configured path and makes it absolute, so a
+// config value such as "healthz" still registers "/healthz".
+func normalizeHealthPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return defaultHealthPath
+	}
+	if !strings.HasPrefix(path, "/") {
+		return "/" + path
+	}
+	return path
+}
+
+// validHealthPath rejects paths that would make the health route surprising:
+//   - "/" (and a trailing slash) makes the ServeMux pattern a subtree that matches
+//     every request and shadows the 404 handler;
+//   - whitespace, query, fragment and wildcard characters are not a static path.
+func validHealthPath(path string) bool {
+	if path == "" || path == "/" || strings.HasSuffix(path, "/") {
+		return false
+	}
+	return !strings.ContainsAny(path, " \t\r\n?#{}")
+}
+
+// HealthConfig configures the built-in health endpoint.
+//
+// When Enabled is true, NewServer registers GET <Path> (HEAD is handled by the
+// same ServeMux pattern) and answers 200 with {"status":"ok"}. The path must be a
+// static path: "/" and a trailing slash are rejected because they turn the route
+// into a subtree that shadows other handlers.
+type HealthConfig struct {
+	// Enabled registers the endpoint when the server is created. Default false.
+	Enabled bool `json:",optional"`
+	// Path is the health endpoint path, default "/health".
+	Path string `json:",default=/health"`
 }
 
 // MiddlewaresConf groups the configuration of the built-in middleware handlers.
@@ -66,6 +112,7 @@ func DefaultConfig() Config {
 		IdleTimeout:     120 * time.Second,
 		ShutdownTimeout: defaultShutdownTimeout,
 		MaxHeaderBytes:  1 << 20,
+		Health:          HealthConfig{Path: defaultHealthPath},
 		Middlewares: MiddlewaresConf{
 			Recovery:  resthandler.RecoveryConfig{Enabled: true},
 			RequestID: resthandler.RequestIDConfig{Enabled: true},
@@ -128,6 +175,12 @@ func (c Config) Validate() error {
 	}
 	if c.Middlewares.Signature.Enabled && len(c.Middlewares.Signature.Keys) == 0 {
 		return errors.New("rest: signature middleware requires at least one key")
+	}
+	if c.Health.Enabled {
+		path := normalizeHealthPath(c.Health.Path)
+		if !validHealthPath(path) {
+			return fmt.Errorf("%w: %q", ErrInvalidHealthPath, path)
+		}
 	}
 	return nil
 }
