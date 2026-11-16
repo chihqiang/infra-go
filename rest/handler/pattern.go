@@ -6,8 +6,12 @@ type patternContextKey struct{}
 
 // ContextWithPattern stores the matched route template in ctx. Global
 // middleware runs before http.ServeMux dispatches, so r.Pattern is still empty
-// there; the server pre-matches the route and injects it instead.
+// there; the server pre-matches the route and injects it instead. A nil ctx is
+// replaced by context.Background().
 func ContextWithPattern(ctx context.Context, pattern string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if pattern == "" {
 		return ctx
 	}

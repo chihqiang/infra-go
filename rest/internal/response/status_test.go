@@ -87,3 +87,47 @@ func TestStatusWriterForwardsOnlyFirstWriteHeader(t *testing.T) {
 		t.Fatalf("forwarded headers = %d, want 1", inner.headers)
 	}
 }
+
+// interimAwareWriter models net/http: a 1xx response is sent immediately and
+// does not commit the final status.
+type interimAwareWriter struct {
+	http.ResponseWriter
+	final   int
+	interim []int
+}
+
+func (w *interimAwareWriter) WriteHeader(status int) {
+	if status >= 100 && status < 200 {
+		w.interim = append(w.interim, status)
+		return
+	}
+	if w.final == 0 {
+		w.final = status
+	}
+}
+
+func TestStatusWriterKeepsInterimResponseOutOfFinalStatus(t *testing.T) {
+	inner := &interimAwareWriter{ResponseWriter: httptest.NewRecorder()}
+	writer := NewStatusWriter(inner)
+
+	writer.WriteHeader(http.StatusEarlyHints)
+	writer.WriteHeader(http.StatusNotFound)
+
+	if writer.Status() != http.StatusNotFound || inner.final != http.StatusNotFound {
+		t.Fatalf("status = %d / %d, want 404", writer.Status(), inner.final)
+	}
+	if len(inner.interim) != 1 || inner.interim[0] != http.StatusEarlyHints {
+		t.Fatalf("interim = %v, want [103]", inner.interim)
+	}
+}
+
+func TestStatusWriterCommitted(t *testing.T) {
+	writer := NewStatusWriter(httptest.NewRecorder())
+	if writer.Committed() {
+		t.Fatal("a fresh writer must not be committed")
+	}
+	writer.WriteHeader(http.StatusNoContent)
+	if !writer.Committed() {
+		t.Fatal("an explicit status must mark the writer committed")
+	}
+}

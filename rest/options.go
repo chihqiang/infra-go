@@ -60,9 +60,11 @@ func WithTLSConfig(cfg *tls.Config) Option {
 	}
 }
 
-// WithLogger injects a pre-built logger into the server. When set, the
-// access-log middleware uses it directly instead of falling back to the global
-// logger. A nil logger clears the server-owned logger, reverting to the global.
+// WithLogger injects a pre-built logger into the server. The access-log
+// middleware uses it directly instead of falling back to the global logger. It
+// takes precedence over Config.Logger: when both are set, the config logger is
+// not built. A nil logger clears the server-owned logger, reverting to the
+// global logger.
 //
 // This option does not call logger.SetGlobal; callers that want the global to
 // match should call it themselves. It is useful in tests and in multi-server
@@ -70,6 +72,7 @@ func WithTLSConfig(cfg *tls.Config) Option {
 func WithLogger(l logger.ILogger) Option {
 	return func(s *Server) {
 		s.log = l
+		s.loggerSet = true
 	}
 }
 

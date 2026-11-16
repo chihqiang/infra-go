@@ -72,6 +72,18 @@ func TestAuthorizeRejectsBadHeaders(t *testing.T) {
 			noErrorAuth: true,
 		},
 		{
+			name:        "bearer-like unsupported scheme",
+			header:      "Bearer2 abc",
+			status:      http.StatusUnauthorized,
+			noErrorAuth: true,
+		},
+		{
+			name:        "bearer prefix without separator",
+			header:      "Bearerfoo abc",
+			status:      http.StatusUnauthorized,
+			noErrorAuth: true,
+		},
+		{
 			name:      "empty bearer credentials",
 			header:    "Bearer ",
 			status:    http.StatusBadRequest,

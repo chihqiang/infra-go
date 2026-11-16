@@ -119,7 +119,7 @@ func fillStruct(value reflect.Value, values map[string][]string, files map[strin
 			continue
 		}
 
-		set, err := setField(fieldValue, field, fullKey, values, files)
+		set, err := setField(fieldValue, fullKey, values, files)
 		if err != nil {
 			return false, err
 		}
@@ -142,15 +142,20 @@ func isNestedStruct(t reflect.Type) bool {
 	return !reflect.PointerTo(t).Implements(textUnmarshalerType)
 }
 
-// hasNestedKeys reports whether any key lives under prefix ("field.").
+// hasNestedKeys reports whether any key lives under prefix ("field."), matching
+// the same lower-case fallback that field lookups use.
 func hasNestedKeys(values map[string][]string, files map[string][]*multipart.FileHeader, prefix string) bool {
+	lowerPrefix := strings.ToLower(prefix)
+	matches := func(key string) bool {
+		return strings.HasPrefix(key, prefix) || strings.HasPrefix(strings.ToLower(key), lowerPrefix)
+	}
 	for key := range values {
-		if strings.HasPrefix(key, prefix) {
+		if matches(key) {
 			return true
 		}
 	}
 	for key := range files {
-		if strings.HasPrefix(key, prefix) {
+		if matches(key) {
 			return true
 		}
 	}
@@ -178,7 +183,7 @@ func fieldKey(field reflect.StructField, tag string) (string, bool) {
 	return field.Name, true
 }
 
-func setField(value reflect.Value, field reflect.StructField, key string,
+func setField(value reflect.Value, key string,
 	values map[string][]string, files map[string][]*multipart.FileHeader,
 ) (bool, error) {
 	if value.Kind() == reflect.Struct && value.Type() == timeType {
@@ -190,11 +195,11 @@ func setField(value reflect.Value, field reflect.StructField, key string,
 	}
 
 	if value.Kind() == reflect.Slice && value.Type().Elem() == fileHeaderType {
-		return setFiles(value, key, field, files)
+		return setFiles(value, key, files)
 	}
 
 	if value.Kind() == reflect.Slice && value.Type().Elem().Kind() != reflect.Uint8 {
-		items, ok := values[key]
+		items, ok := lookupValues(values, key)
 		if !ok {
 			return false, nil
 		}
@@ -209,14 +214,22 @@ func setField(value reflect.Value, field reflect.StructField, key string,
 }
 
 func firstValue(values map[string][]string, key string) (string, bool) {
-	items, ok := values[key]
-	if !ok {
-		items, ok = values[strings.ToLower(key)]
-	}
+	items, ok := lookupValues(values, key)
 	if !ok || len(items) == 0 {
 		return "", false
 	}
 	return items[0], true
+}
+
+// lookupValues resolves key in values, falling back to its lower-case form so
+// fields without an explicit tag still bind query/form keys such as "tags" into
+// a Go field named "Tags".
+func lookupValues[T any](values map[string][]T, key string) ([]T, bool) {
+	if items, ok := values[key]; ok {
+		return items, true
+	}
+	items, ok := values[strings.ToLower(key)]
+	return items, ok
 }
 
 func setScalar(value reflect.Value, key, raw string) (bool, error) {
@@ -311,14 +324,12 @@ func setSlice(value reflect.Value, key string, items []string) (bool, error) {
 	return true, nil
 }
 
-func setFiles(value reflect.Value, key string, field reflect.StructField,
-	files map[string][]*multipart.FileHeader,
-) (bool, error) {
+func setFiles(value reflect.Value, key string, files map[string][]*multipart.FileHeader) (bool, error) {
 	if files == nil {
 		return false, nil
 	}
 
-	uploaded, ok := files[key]
+	uploaded, ok := lookupValues(files, key)
 	if !ok || len(uploaded) == 0 {
 		return false, nil
 	}

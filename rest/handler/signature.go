@@ -31,6 +31,7 @@ type SignatureConfig struct {
 	TTL time.Duration `json:",optional"`
 	// MaxBody caps the body size read for verification. Zero means unlimited;
 	// keep a MaxBytesHandler in front of this handler to bound memory use.
+	// Config.Validate rejects negative values while the middleware is enabled.
 	MaxBody int64 `json:",optional"`
 	// Now overrides the clock, mainly for tests.
 	Now func() time.Time `json:"-"`
@@ -193,11 +194,12 @@ func signedTimestamp(r *http.Request, cfg SignatureConfig) (int64, error) {
 	if cfg.Now != nil {
 		now = cfg.Now
 	}
-	skew := now().Sub(time.Unix(timestamp, 0))
-	if skew < 0 {
-		skew = -skew
-	}
-	if skew > cfg.TTL {
+	// Compare absolute times instead of now.Sub(timestamp): Sub saturates at the
+	// duration limit, and negating math.MinInt64 overflows, so a timestamp far in
+	// the future (> ~292 years) used to bypass the freshness check entirely.
+	current := now()
+	signedAt := time.Unix(timestamp, 0)
+	if signedAt.Before(current.Add(-cfg.TTL)) || signedAt.After(current.Add(cfg.TTL)) {
 		return 0, errStaleTimestamp
 	}
 	return timestamp, nil

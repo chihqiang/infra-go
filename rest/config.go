@@ -139,6 +139,8 @@ func (c Config) loggerConfigured() bool {
 }
 
 // Validate checks configuration values that cannot be inferred from defaults.
+// Middleware-specific values are only checked when that middleware is enabled,
+// so disabled middleware keeps its settings out of validation.
 func (c Config) Validate() error {
 	if c.Port < 0 || c.Port > 65535 {
 		return fmt.Errorf("%w: %d", ErrInvalidPort, c.Port)
@@ -152,17 +154,19 @@ func (c Config) Validate() error {
 	if c.ReadTimeout < 0 || c.WriteTimeout < 0 || c.IdleTimeout < 0 || c.ShutdownTimeout < 0 {
 		return errors.New("rest: server timeouts must not be negative")
 	}
-	if c.Middlewares.MaxConns.Limit < 0 {
+	if c.Middlewares.MaxConns.Enabled && c.Middlewares.MaxConns.Limit < 0 {
 		return fmt.Errorf("rest: max connections must not be negative: %d", c.Middlewares.MaxConns.Limit)
 	}
-	if c.Middlewares.Timeout.Timeout < 0 {
+	if c.Middlewares.Timeout.Enabled && c.Middlewares.Timeout.Timeout < 0 {
 		return errors.New("rest: middleware timeout must not be negative")
 	}
-	if c.Middlewares.MaxBytes.Limit < 0 {
+	if c.Middlewares.MaxBytes.Enabled && c.Middlewares.MaxBytes.Limit < 0 {
 		return fmt.Errorf("rest: max body bytes must not be negative: %d", c.Middlewares.MaxBytes.Limit)
 	}
-	if _, err := realip.ParseTrustedProxies(c.Middlewares.Log.TrustedProxies); err != nil {
-		return fmt.Errorf("rest: %w", err)
+	if c.Middlewares.Log.Enabled {
+		if _, err := realip.ParseTrustedProxies(c.Middlewares.Log.TrustedProxies); err != nil {
+			return fmt.Errorf("rest: %w", err)
+		}
 	}
 	if c.Middlewares.Auth.Enabled && c.Middlewares.Auth.Parser == nil {
 		return errors.New("rest: auth middleware requires a token parser")
@@ -173,8 +177,13 @@ func (c Config) Validate() error {
 	if c.Middlewares.Breaker.Enabled && c.Middlewares.Breaker.Breaker == nil {
 		return errors.New("rest: breaker middleware requires a breaker")
 	}
-	if c.Middlewares.Signature.Enabled && len(c.Middlewares.Signature.Keys) == 0 {
-		return errors.New("rest: signature middleware requires at least one key")
+	if c.Middlewares.Signature.Enabled {
+		if len(c.Middlewares.Signature.Keys) == 0 {
+			return errors.New("rest: signature middleware requires at least one key")
+		}
+		if c.Middlewares.Signature.MaxBody < 0 {
+			return fmt.Errorf("rest: signature max body must not be negative: %d", c.Middlewares.Signature.MaxBody)
+		}
 	}
 	if c.Health.Enabled {
 		path := normalizeHealthPath(c.Health.Path)

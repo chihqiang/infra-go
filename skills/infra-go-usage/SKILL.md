@@ -228,7 +228,7 @@ sg.Start() // blocking; returns once everything has exited; Stop is guaranteed t
 ### Step 7 — Handle errors, context and unified responses the agreed way
 
 - Error messages and comments in English (the project-wide style)
-- At the HTTP layer use `rest.OkJSON` (wraps the value in the `code`/`msg`/`data` envelope) / `rest.WriteJSON(ctx, w, http.StatusCreated, body)` (raw body) for success, write bodyless statuses with `w.WriteHeader`, and use `rest.ErrorJSON(w, err)` for failures
+- At the HTTP layer use `rest.OkJSON` (wraps the value in the `code`/`msg`/`data` envelope, adding `request_id` when the request ID middleware runs) / `rest.WriteJSON(ctx, w, http.StatusCreated, body)` (raw body) for success, write bodyless statuses with `w.WriteHeader`, and use `rest.ErrorJSON(w, err)` for failures
 - When trace/request correlation is needed, read the ID with `resthandler.RequestIDFromContext(r.Context())` and the client IP with `rest.ClientIP(r)`, then log with `logger.XxxCtx(ctx, ...)`
 - Pass `context.Context` across modules consistently (orm / redisx / retry / taskq all support ctx timeouts and cancellation)
 - Inspect semantic errors with `errors.Is`: `redisx.ErrNil`, `token.ErrInvalidToken`, `retry.ErrMaxRetries`, `rest.ErrResourceNotFound`, etc.

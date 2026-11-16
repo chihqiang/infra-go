@@ -34,3 +34,15 @@ func TestUnixTimeBranches(t *testing.T) {
 	assert.True(t, unixTime("not-a-number").IsZero())
 	assert.True(t, unixTime(nil).IsZero())
 }
+
+// TestClaimsContextToleratesNilContext keeps the helpers safe for standalone
+// handlers that forgot to pass a context.
+func TestClaimsContextToleratesNilContext(t *testing.T) {
+	_, ok := ClaimsFrom(nil)
+	assert.False(t, ok)
+
+	ctx := WithClaims(nil, &Claims{Subject: "alice"})
+	got, ok := ClaimsFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "alice", got.Subject)
+}

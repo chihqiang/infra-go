@@ -20,8 +20,12 @@ func NewDeferredWriter(w http.ResponseWriter) *DeferredWriter {
 	return &DeferredWriter{ResponseWriter: w}
 }
 
-// WriteHeader records status instead of sending it immediately.
+// WriteHeader records status instead of sending it immediately. Informational
+// (1xx) responses are not buffered: only the final status is replayed by Flush.
 func (w *DeferredWriter) WriteHeader(status int) {
+	if status >= 100 && status < 200 && status != http.StatusSwitchingProtocols {
+		return
+	}
 	if w.status != 0 || w.committed {
 		return
 	}

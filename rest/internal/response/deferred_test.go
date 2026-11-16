@@ -55,3 +55,16 @@ func TestDeferredWriterUnwrap(t *testing.T) {
 		t.Fatal("Unwrap() did not return the wrapped writer")
 	}
 }
+
+func TestDeferredWriterKeepsInterimResponseOutOfFinalStatus(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writer := NewDeferredWriter(recorder)
+
+	writer.WriteHeader(http.StatusEarlyHints)
+	writer.WriteHeader(http.StatusNotFound)
+	writer.Flush(http.StatusOK)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", recorder.Code)
+	}
+}

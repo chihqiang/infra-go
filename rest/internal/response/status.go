@@ -9,7 +9,8 @@ import (
 // StatusWriter records the response status while delegating to the inner writer.
 type StatusWriter struct {
 	http.ResponseWriter
-	status int
+	status   int
+	hijacked bool
 }
 
 // NewStatusWriter wraps w so the written status can be inspected afterwards.
@@ -17,9 +18,15 @@ func NewStatusWriter(w http.ResponseWriter) *StatusWriter {
 	return &StatusWriter{ResponseWriter: w}
 }
 
-// WriteHeader records the first status and forwards it. Later calls are
-// dropped, avoiding "superfluous response.WriteHeader" noise from the server.
+// WriteHeader records the first final status and forwards it. Informational
+// (1xx) responses are forwarded without consuming the final-status slot, and
+// later final calls are dropped, avoiding "superfluous response.WriteHeader"
+// noise from the server.
 func (s *StatusWriter) WriteHeader(status int) {
+	if status >= 100 && status < 200 && status != http.StatusSwitchingProtocols {
+		s.ResponseWriter.WriteHeader(status)
+		return
+	}
 	if s.status != 0 {
 		return
 	}
@@ -43,6 +50,12 @@ func (s *StatusWriter) Status() int {
 	return s.status
 }
 
+// Committed reports whether a final status or body was written (or the
+// connection was hijacked), which means the response can no longer be replaced.
+func (s *StatusWriter) Committed() bool {
+	return s.status != 0 || s.hijacked
+}
+
 // Unwrap exposes the underlying writer to http.ResponseController.
 func (s *StatusWriter) Unwrap() http.ResponseWriter {
 	return s.ResponseWriter
@@ -57,5 +70,9 @@ func (s *StatusWriter) Flush() {
 // Hijack implements http.Hijacker so protocol upgrades (WebSocket, CONNECT)
 // keep working behind logging, tracing and breaker middleware.
 func (s *StatusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	return http.NewResponseController(s.ResponseWriter).Hijack()
+	conn, writer, err := http.NewResponseController(s.ResponseWriter).Hijack()
+	if err == nil {
+		s.hijacked = true
+	}
+	return conn, writer, err
 }

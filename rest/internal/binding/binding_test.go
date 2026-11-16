@@ -943,3 +943,78 @@ func TestFormManualReadEnforcesBodyLimit(t *testing.T) {
 		t.Fatalf("status = %d, want 413", statusOf(t, err))
 	}
 }
+
+// TestQueryBindUsesLowercaseForUntaggedSlices keeps slices consistent with
+// scalar fields, which already fall back to the lower-case key.
+func TestQueryBindUsesLowercaseForUntaggedSlices(t *testing.T) {
+	var payload struct {
+		Tags []string
+	}
+	req := httptest.NewRequest(http.MethodGet, "/?tags=go&tags=http", nil)
+	if err := Query.Bind(req, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Tags) != 2 || payload.Tags[0] != "go" {
+		t.Fatalf("tags = %v, want [go http]", payload.Tags)
+	}
+}
+
+func TestQueryBindNestedUntaggedStructUsesLowercaseKeys(t *testing.T) {
+	var payload struct {
+		Profile struct {
+			Name string
+		}
+	}
+	req := httptest.NewRequest(http.MethodGet, "/?profile.name=ada", nil)
+	if err := Query.Bind(req, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Profile.Name != "ada" {
+		t.Fatalf("profile.name = %q, want ada", payload.Profile.Name)
+	}
+}
+
+// TestMultipartBindUsesLowercaseForUntaggedFiles covers []*multipart.FileHeader
+// fields without a form tag.
+func TestMultipartBindUsesLowercaseForUntaggedFiles(t *testing.T) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("attachment", "report.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("content")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var payload struct {
+		Attachment []*multipart.FileHeader
+	}
+	req := httptest.NewRequest(http.MethodPost, "/", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if err := FormMultipart.Bind(req, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Attachment) != 1 || payload.Attachment[0].Filename != "report.txt" {
+		t.Fatalf("attachment = %+v", payload.Attachment)
+	}
+}
+
+type indexedItem struct {
+	Name string `json:"name" binding:"required"`
+}
+
+// TestSliceValidationErrorUsesElementIndex reports the real element position,
+// not the position among the failures.
+func TestSliceValidationErrorUsesElementIndex(t *testing.T) {
+	err := JSON.Bind(jsonRequest(`[{"name":"ok"},{}]`), &[]indexedItem{})
+	if err == nil {
+		t.Fatal("expected a validation error")
+	}
+	if !strings.Contains(err.Error(), "[1]") {
+		t.Fatalf("error = %q, want it to point at element [1]", err)
+	}
+}

@@ -68,13 +68,17 @@ func (v *defaultValidator) ValidateStruct(dst any) error {
 	case reflect.Struct:
 		return v.validator().Struct(dst)
 	case reflect.Slice, reflect.Array:
-		var failures SliceValidationError
+		// Keep one slot per element so the reported index matches the element
+		// position instead of the compacted failure position.
+		failures := make(SliceValidationError, value.Len())
+		failed := false
 		for i := 0; i < value.Len(); i++ {
 			if err := v.ValidateStruct(value.Index(i).Interface()); err != nil {
-				failures = append(failures, err)
+				failures[i] = err
+				failed = true
 			}
 		}
-		if len(failures) > 0 {
+		if failed {
 			return failures
 		}
 		return nil
@@ -83,7 +87,9 @@ func (v *defaultValidator) ValidateStruct(dst any) error {
 	}
 }
 
-// SliceValidationError collects per-element validation failures.
+// SliceValidationError collects per-element validation failures. It keeps one
+// slot per slice element, so a nil entry means that element passed and the
+// index in Error() is the element position.
 type SliceValidationError []error
 
 // Error joins the element failures into one message.

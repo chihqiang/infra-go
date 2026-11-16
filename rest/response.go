@@ -37,7 +37,9 @@ const (
 //	{"code":-1,"msg":"rest: resource not found"}
 //
 // Code is a business code, not an HTTP status; RequestID is filled from the
-// request context when the RequestIDHandler middleware is in the chain.
+// request context, or from the X-Request-ID response header set by the
+// RequestIDHandler middleware when the helper was called without a context
+// (OkJSON, ErrorJSON, ...).
 type BaseResponse[T any] struct {
 	Code      int    `json:"code" xml:"code"`
 	Msg       string `json:"msg" xml:"msg"`
@@ -84,7 +86,7 @@ func OkJSON(w http.ResponseWriter, v any) error {
 // OkJSONCtx writes v as a JSON BaseResponse with status 200 and fills the
 // request ID from ctx.
 func OkJSONCtx(ctx context.Context, w http.ResponseWriter, v any) error {
-	return WriteJSON(ctx, w, http.StatusOK, wrapBaseResponse(ctx, v))
+	return WriteJSON(ctx, w, http.StatusOK, wrapBaseResponse(ctx, w, v))
 }
 
 // ErrorJSON writes err as a JSON BaseResponse. The HTTP status comes from
@@ -95,7 +97,7 @@ func ErrorJSON(w http.ResponseWriter, err error) error {
 
 // ErrorJSONCtx is ErrorJSON with a request context.
 func ErrorJSONCtx(ctx context.Context, w http.ResponseWriter, err error) error {
-	return WriteJSON(ctx, w, StatusOf(err), wrapBaseResponse(ctx, err))
+	return WriteJSON(ctx, w, StatusOf(err), wrapBaseResponse(ctx, w, err))
 }
 
 // WriteXML writes v as XML with the given HTTP status.
@@ -129,7 +131,7 @@ func OkXMLCtx(ctx context.Context, w http.ResponseWriter, v any) error {
 	body := xmlEnvelope[any]{
 		Version:      xmlVersion,
 		Encoding:     xmlEncoding,
-		BaseResponse: wrapBaseResponse(ctx, v),
+		BaseResponse: wrapBaseResponse(ctx, w, v),
 	}
 	return WriteXML(w, http.StatusOK, body)
 }
@@ -145,7 +147,7 @@ func ErrorXMLCtx(ctx context.Context, w http.ResponseWriter, err error) error {
 	body := xmlEnvelope[any]{
 		Version:      xmlVersion,
 		Encoding:     xmlEncoding,
-		BaseResponse: wrapBaseResponse(ctx, err),
+		BaseResponse: wrapBaseResponse(ctx, w, err),
 	}
 	return WriteXML(w, StatusOf(err), body)
 }
@@ -164,7 +166,7 @@ func WriteHTML(w http.ResponseWriter, status int, v string) error {
 	return nil
 }
 
-func wrapBaseResponse(ctx context.Context, v any) BaseResponse[any] {
+func wrapBaseResponse(ctx context.Context, w http.ResponseWriter, v any) BaseResponse[any] {
 	var response BaseResponse[any]
 	switch data := v.(type) {
 	case CodeMsg:
@@ -190,6 +192,19 @@ func wrapBaseResponse(ctx context.Context, v any) BaseResponse[any] {
 	default:
 		response = BaseResponse[any]{Code: BusinessCodeOK, Msg: BusinessMsgOK, Data: v}
 	}
-	response.RequestID, _ = handler.RequestIDFromContext(ctx)
+	response.RequestID = requestIDFrom(ctx, w)
 	return response
+}
+
+// requestIDFrom prefers the request context (which also covers handlers that
+// pass their own context) and falls back to the response header written by
+// RequestIDHandler, so OkJSON/ErrorJSON without a context still carry the ID.
+func requestIDFrom(ctx context.Context, w http.ResponseWriter) string {
+	if id, ok := handler.RequestIDFromContext(ctx); ok && id != "" {
+		return id
+	}
+	if w != nil {
+		return w.Header().Get(handler.RequestIDHeader)
+	}
+	return ""
 }

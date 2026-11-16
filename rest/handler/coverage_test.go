@@ -148,9 +148,13 @@ func TestSignatureHandler_InvalidTimestamp(t *testing.T) {
 }
 
 func TestNewLogHandler_InvalidTrustedProxies(t *testing.T) {
-	_, err := NewLogHandler(LogConfig{TrustedProxies: []string{"not-an-ip"}}, nil)
+	_, err := NewLogHandler(LogConfig{Enabled: true, TrustedProxies: []string{"not-an-ip"}}, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid trusted proxy")
+
+	// A disabled handler does not parse its configuration.
+	_, err = NewLogHandler(LogConfig{Enabled: false, TrustedProxies: []string{"not-an-ip"}}, nil)
+	require.NoError(t, err)
 }
 
 func TestPatternHelpers(t *testing.T) {
@@ -158,6 +162,10 @@ func TestPatternHelpers(t *testing.T) {
 	ctx := context.Background()
 	assert.Equal(t, ctx, ContextWithPattern(ctx, ""))
 	assert.Equal(t, "GET /x", PatternFromContext(ContextWithPattern(ctx, "GET /x")))
+
+	// A nil context must not panic; it is replaced by a background context.
+	assert.Equal(t, "", PatternFromContext(ContextWithPattern(nil, "")))
+	assert.Equal(t, "GET /y", PatternFromContext(ContextWithPattern(nil, "GET /y")))
 }
 
 func TestTimeoutConfigDisabled(t *testing.T) {

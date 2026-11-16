@@ -69,7 +69,7 @@ func (h *TimeoutHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 		case <-done:
 			// A handler that returns without writing anything *because* the deadline
 			// fired must still produce the timeout response; a handler that wrote
-			// before the deadline keeps its response.
+			// before the deadline and then returned keeps its response.
 			if writtenBeforeDeadline() || !errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				if err := buffered.WriteTo(w); err != nil {
 					return

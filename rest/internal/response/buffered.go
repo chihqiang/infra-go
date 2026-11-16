@@ -33,8 +33,13 @@ func (b *BufferedWriter) Header() http.Header {
 	return b.header
 }
 
-// WriteHeader records the first status written.
+// WriteHeader records the first final status written. Informational (1xx)
+// responses cannot be replayed before the final response, so they are dropped
+// instead of consuming the status slot.
 func (b *BufferedWriter) WriteHeader(status int) {
+	if status >= 100 && status < 200 && status != http.StatusSwitchingProtocols {
+		return
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.written {
