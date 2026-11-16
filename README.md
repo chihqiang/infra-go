@@ -39,9 +39,10 @@ import (
 // Configuration: json tags declare defaults and constraints; conf can load it from a file or
 // from environment variables
 type Config struct {
-    // Server, logger and middleware settings live in rest.Config; its json tags
-    // supply the defaults for fields missing from the config file
-    HTTP rest.Config `json:"http"`
+    // rest.Config is embedded: server, logger and middleware settings flatten into
+    // the top level of the config file, and its json tags supply the defaults for
+    // fields missing from that file
+    rest.Config
 }
 
 // Request body: implement Validate to run checks after decoding
@@ -70,9 +71,9 @@ func main() {
         }
     }
 
-    // 2. HTTP service: NewServer configures the global logger from cfg.HTTP.Logger;
+    // 2. HTTP service: NewServer configures the global logger from cfg.Logger;
     //    recovery + request ID + access log are on by default
-    server, err := rest.NewServer(cfg.HTTP)
+    server, err := rest.NewServer(cfg.Config)
     if err != nil {
         logger.Fatal("create server failed", logger.Err(err))
     }

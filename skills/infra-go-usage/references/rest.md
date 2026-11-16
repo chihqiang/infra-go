@@ -128,6 +128,20 @@ type MiddlewaresConf struct {
 }
 ```
 
+In a business service, embed this struct in the application config instead of giving it its own
+field; `core/conf` / `core/mapping` flatten embedded structs, so the server keys stay at the top
+level of the config file and the embedded value goes straight to `NewServer`:
+
+```go
+type Config struct {
+    rest.Config // flatten: host, port, timeouts, logger, middlewares
+    App App        `json:"app"`
+    DB  orm.Config `json:"db"`
+}
+
+server, err := rest.NewServer(cfg.Config)
+```
+
 `Logger` configures the global logger at server startup. When any field is set, `NewServer`
 builds it and calls `logger.SetGlobal`; the logger sync service added by `NewServer` flushes it
 when the `Server.Register` group stops. The zero `logger.Config` leaves the application's global logger untouched.

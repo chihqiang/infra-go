@@ -152,7 +152,7 @@ func (r *CreateUserRequest) Validate() error {
 2. Register routes; `binding.Bind` decodes by content type and `rest.Error` maps failures to 400/415:
 
 ```go
-server, err := rest.NewServer(cfg.HTTP) // rest.Config from conf
+server, err := rest.NewServer(cfg.Config) // embedded rest.Config from conf
 if err != nil {
     return err
 }
