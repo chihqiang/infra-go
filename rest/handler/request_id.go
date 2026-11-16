@@ -11,7 +11,23 @@ import (
 // RequestIDHeader is the request and response header carrying the request ID.
 const RequestIDHeader = "X-Request-ID"
 
+// RequestIDLogField is the log field name used for the request ID.
+const RequestIDLogField = "request_id"
+
 type requestIDContextKey struct{}
+
+// init wires the request ID into every ctx-aware log call, the way core/trace
+// does for trace_id: once this package is linked, logger.XxxCtx adds
+// request_id whenever the context carries one.
+func init() {
+	logger.RegisterContextExtractor(func(ctx context.Context) []logger.Field {
+		id, ok := RequestIDFromContext(ctx)
+		if !ok {
+			return nil
+		}
+		return []logger.Field{logger.String(RequestIDLogField, id)}
+	})
+}
 
 // RequestIDConfig configures RequestIDHandler.
 type RequestIDConfig struct {

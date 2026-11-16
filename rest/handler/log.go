@@ -86,9 +86,6 @@ func (h *LogHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 			if pattern := PatternFromContext(r.Context()); pattern != "" {
 				fields = append(fields, logger.String("pattern", pattern))
 			}
-			if id, ok := RequestIDFromContext(r.Context()); ok {
-				fields = append(fields, logger.String("request_id", id))
-			}
 
 			message := "http request"
 			switch {

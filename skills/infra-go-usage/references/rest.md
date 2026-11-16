@@ -465,7 +465,7 @@ server.Use(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
 | Handler | Behaviour |
 |---------|-----------|
 | `NewRecoveryHandler(RecoveryConfig)` | Recovers panics → 500, re-panics `http.ErrAbortHandler` |
-| `NewRequestIDHandler(RequestIDConfig)` | Keeps a safe `X-Request-ID` or generates a UUID; `ContextWithRequestID` / `RequestIDFromContext` |
+| `NewRequestIDHandler(RequestIDConfig)` | Keeps a safe `X-Request-ID` or generates a UUID; `ContextWithRequestID` / `RequestIDFromContext`. Importing `rest/handler` also registers a `logger` context extractor, so every `logger.XxxCtx` call carries `request_id` automatically |
 | `NewTraceHandler(TraceConfig)` | OTel server span; `ServiceName`, `IgnorePaths` |
 | `NewLogHandler(LogConfig, logger)` | Access log via `core/logger`; `ServiceName`, `SkipPaths`, `TrustedProxies`, `ClientIP` |
 | `NewMaxConnsHandler(MaxConnsConfig)` | Cap in-flight requests → 503 |

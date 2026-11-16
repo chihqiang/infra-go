@@ -4,6 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/chihqiang/infra-go/core/logger"
@@ -91,21 +94,57 @@ func TestLogRecordsLevelFromStatus(t *testing.T) {
 	}
 }
 
-func TestLogRecordsRequestIDFromContext(t *testing.T) {
-	log := &recordingLogger{}
-	logFn := newLogHandlerForTest(t, LogConfig{}, log)(func(http.ResponseWriter, *http.Request) {})
+// TestRequestIDReachesCtxLogs checks the context extractor registered by this
+// package: any ctx-aware log call carries request_id exactly once, including the
+// access log (which no longer appends the field by hand).
+func TestRequestIDReachesCtxLogs(t *testing.T) {
+	dir := t.TempDir()
+	real := logger.New(logger.Config{Mode: "file", Path: dir, Encoding: "json", Level: "debug"})
+	previous := logger.GetGlobal()
+	logger.SetGlobal(real)
+	t.Cleanup(func() {
+		logger.SetGlobal(previous)
+		_ = real.Sync()
+	})
 
+	logFn := newLogHandlerForTest(t, LogConfig{}, nil)(func(http.ResponseWriter, *http.Request) {})
 	request := httptest.NewRequest(http.MethodGet, "/users", nil)
 	NewRequestIDHandler(RequestIDConfig{Enabled: true}).Handle(func(w http.ResponseWriter, r *http.Request) {
 		logFn.ServeHTTP(w, r)
 	}).ServeHTTP(httptest.NewRecorder(), request)
 
-	if len(log.entries) != 1 {
-		t.Fatalf("entries = %d, want 1", len(log.entries))
+	if err := real.Sync(); err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := log.entries[0].fields["request_id"]; !ok {
-		t.Fatal("request_id field missing from access log")
+
+	content := readLogContent(t, dir)
+	if got := strings.Count(content, `"request_id"`); got != 1 {
+		t.Fatalf("request_id appears %d times, want 1:\n%s", got, content)
 	}
+	if !strings.Contains(content, `"method":"GET"`) {
+		t.Fatalf("access log line missing:\n%s", content)
+	}
+}
+
+func readLogContent(t *testing.T, dir string) string {
+	t.Helper()
+
+	var builder strings.Builder
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		builder.Write(data)
+	}
+	return builder.String()
 }
 
 func TestLogHandlerSkipsPathsAndAddsService(t *testing.T) {
