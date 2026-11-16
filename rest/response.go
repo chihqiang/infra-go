@@ -31,9 +31,13 @@ const (
 	HTMLContentType = "text/html; charset=utf-8"
 )
 
-// BaseResponse is the envelope used by business API errors. Code is a business
-// code, not an HTTP status; RequestID is filled from the request context when
-// the RequestIDHandler middleware is in the chain.
+// BaseResponse is the envelope shared by success and error responses:
+//
+//	{"code":0,"msg":"ok","data":{...}}
+//	{"code":-1,"msg":"rest: resource not found"}
+//
+// Code is a business code, not an HTTP status; RequestID is filled from the
+// request context when the RequestIDHandler middleware is in the chain.
 type BaseResponse[T any] struct {
 	Code      int    `json:"code" xml:"code"`
 	Msg       string `json:"msg" xml:"msg"`

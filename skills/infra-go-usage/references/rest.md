@@ -32,7 +32,8 @@ rest/
 - **Middleware chain**: recovery, request ID, tracing, access log, concurrency limit, timeout,
   body limit, gzip, circuit breaker, rate limit, body signature, JWT auth, CORS
 - **Binding**: JSON / XML / form / multipart / query / header / path with self-validation
-- **Responses**: `BaseResponse` envelope with `request_id`, JSON/XML/HTML writers, error-to-status mapping
+- **Responses**: one `BaseResponse` (`code`/`msg`/`data`/`request_id`) envelope for success and errors,
+  JSON/XML/HTML writers, error-to-status mapping
 - **Lifecycle**: `Start` / `Serve` / `Shutdown` / `Stop`, with `Register` for `service.ServiceGroup`
 
 ## Installation
@@ -146,7 +147,7 @@ server, err := rest.NewServer(rest.Config{
 ```
 
 It registers `GET <Path>` (HEAD is served by the same pattern) and responds with
-`200 {"status":"ok"}`. The path must be static: `/`, a trailing slash, whitespace, query strings
+`200 {"code":0,"msg":"ok","data":{"status":"ok"}}`. The path must be static: `/`, a trailing slash, whitespace, query strings
 and wildcards are rejected with `rest.ErrInvalidHealthPath`, because `/` and a trailing slash turn
 the ServeMux pattern into a subtree that shadows other handlers. Do not register the same path
 again yourself; `http.ServeMux` panics on duplicate patterns.
@@ -331,26 +332,30 @@ server.AddRoute(rest.Route{
 ## Responses
 
 ```go
-rest.WriteJSON(r.Context(), w, http.StatusAccepted, body) // explicit status
-rest.OkJSON(w, body)                                      // 200
-rest.OkJSONCtx(r.Context(), w, body)                      // 200 with context
+rest.WriteJSON(r.Context(), w, http.StatusAccepted, body) // explicit status, raw body
+rest.OkJSON(w, body)                                      // 200, wrapped in BaseResponse
+rest.OkJSONCtx(r.Context(), w, body)                      // 200, wrapped, request_id from ctx
 rest.ErrorJSON(w, err)                                    // HTTP status from StatusOf(err)
-rest.ErrorJSONCtx(r.Context(), w, err)                    // error response with context
-rest.WriteXML(w, http.StatusAccepted, body)
-rest.OkXML(w, body)
-rest.OkXMLCtx(r.Context(), w, body)
+rest.ErrorJSONCtx(r.Context(), w, err)                    // error envelope with request_id
+rest.WriteXML(w, http.StatusAccepted, body)               // explicit status, raw XML
+rest.OkXML(w, body)                                       // 200, wrapped in BaseResponse
+rest.OkXMLCtx(r.Context(), w, body)                       // 200, wrapped, request_id from ctx
 rest.ErrorXML(w, err)
 rest.ErrorXMLCtx(r.Context(), w, err)
 rest.WriteHTML(w, http.StatusOK, "<h1>ok</h1>")
 w.WriteHeader(http.StatusNoContent) // 204, no body
 ```
 
-`rest.OkJSON`/`rest.OkJSONCtx` and `rest.OkXML`/`rest.OkXMLCtx` wrap the value in `BaseResponse` so success and
-failure share the same `code`/`msg`/`data` structure; `request_id` is filled from the request context when the
-request ID middleware is in the chain. Use `rest.WriteJSON`/`rest.WriteXML` when a raw, unwrapped body is needed.
+`rest.OkJSON`/`rest.OkJSONCtx` and `rest.OkXML`/`rest.OkXMLCtx` wrap the value in `BaseResponse`, so success and
+failure share one structure: `{"code":0,"msg":"ok","data":...}` on success and `{"code":-1,"msg":"..."}` on failure.
+`request_id` is filled from the request context when the request ID middleware is in the chain; XML responses are
+wrapped in `<xml version="1.0" encoding="UTF-8">...</xml>`.
+
+Use `rest.WriteJSON`/`rest.WriteXML` when a raw, unwrapped body is needed. `rest.WriteJSON` accepts the request
+context for call-site symmetry, but the writers never log, so log returned errors yourself.
 
 `rest.ErrorJSON` and `rest.ErrorXML` hide details for 5xx (the body keeps `code`/`msg` with the HTTP status text) and
-echo the message for 4xx. The response writers do not log; log the error in your handler if you need it.
+echo the message for 4xx.
 
 Middleware-generated failures (auth, rate/concurrency limits, timeout, breaker, signature, body
 limit, recovery and gunzip) only set the HTTP status and protocol headers
