@@ -1,11 +1,9 @@
 package rest
 
 import (
-	"context"
 	"net/http"
 	"net/netip"
 
-	"github.com/chihqiang/infra-go/rest/handler"
 	"github.com/chihqiang/infra-go/rest/internal/binding"
 	"github.com/chihqiang/infra-go/rest/internal/realip"
 )
@@ -35,6 +33,24 @@ func BindPath(r *http.Request, dst any) error {
 	return binding.BindPath(r, dst)
 }
 
+// PathParam returns the path wildcard value named name, such as "id" for
+// "/groups/{id}". It returns an empty string when the request or value is absent.
+func PathParam(r *http.Request, name string) string {
+	if r == nil {
+		return ""
+	}
+	return r.PathValue(name)
+}
+
+// QueryParam returns the first query value named name. It returns an empty
+// string when the request, URL, or value is absent.
+func QueryParam(r *http.Request, name string) string {
+	if r == nil || r.URL == nil {
+		return ""
+	}
+	return r.URL.Query().Get(name)
+}
+
 // ClientIP returns the direct peer address of r. Forwarding headers are ignored
 // because they can be spoofed by the client; use ClientIPTrusted behind a proxy
 // or ClientIPFromHeaders when the headers come from a trusted network.
@@ -61,28 +77,4 @@ func ClientIPTrusted(r *http.Request, trusted []netip.Prefix) string {
 // ParseTrustedProxies parses IP and CIDR strings for ClientIPTrusted.
 func ParseTrustedProxies(values []string) ([]netip.Prefix, error) {
 	return realip.ParseTrustedProxies(values)
-}
-
-// RequestID returns the ID assigned by handler.RequestIDHandler, or an empty
-// string when the middleware is not part of the chain.
-func RequestID(r *http.Request) string {
-	if r == nil {
-		return ""
-	}
-	return RequestIDFromContext(r.Context())
-}
-
-// ContextWithRequestID returns a context carrying requestID for RequestID,
-// RequestIDFromContext and response envelopes, using the same slot as
-// handler.RequestIDHandler. An empty ID leaves ctx unchanged.
-func ContextWithRequestID(ctx context.Context, requestID string) context.Context {
-	return handler.ContextWithRequestID(ctx, requestID)
-}
-
-// RequestIDFromContext returns the request ID stored in ctx by
-// handler.RequestIDHandler or ContextWithRequestID, or an empty string when
-// absent.
-func RequestIDFromContext(ctx context.Context) string {
-	id, _ := handler.RequestIDFromContext(ctx)
-	return id
 }

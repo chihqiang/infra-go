@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"context"
 	"encoding/json"
 	stderrors "errors"
 	"fmt"
@@ -12,8 +13,6 @@ import (
 	"github.com/chihqiang/infra-go/rest/handler"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func decodeEnvelope(t *testing.T, body []byte) map[string]any {
@@ -26,84 +25,25 @@ func decodeEnvelope(t *testing.T, body []byte) map[string]any {
 	return decoded
 }
 
-func TestJSONBaseResponse(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    any
-		wantCode float64
-		wantMsg  string
-		wantData any
-	}{
-		{name: "success value", input: map[string]string{"name": "ada"}, wantCode: 0, wantMsg: "ok", wantData: map[string]any{"name": "ada"}},
-		{name: "code msg pointer", input: NewCodeError(4001, "invalid"), wantCode: 4001, wantMsg: "invalid"},
-		{name: "code msg struct", input: CodeMsg{Code: 4002, Msg: "conflict"}, wantCode: 4002, wantMsg: "conflict"},
-		{name: "grpc status", input: status.New(codes.NotFound, "missing"), wantCode: 5, wantMsg: "missing"},
-		{name: "grpc error", input: status.Error(codes.Unknown, "boom"), wantCode: 2, wantMsg: "boom"},
-		{name: "plain error", input: stderrors.New("failed"), wantCode: -1, wantMsg: "failed"},
-	}
-
-	for _, test := range tests {
-		recorder := httptest.NewRecorder()
-		JSONBaseResponse(recorder, test.input)
-
-		if recorder.Code != 200 {
-			t.Fatalf("%s: status = %d, want 200", test.name, recorder.Code)
-		}
-		envelope := decodeEnvelope(t, recorder.Body.Bytes())
-		if envelope["code"] != test.wantCode {
-			t.Errorf("%s: code = %v, want %v", test.name, envelope["code"], test.wantCode)
-		}
-		if envelope["msg"] != test.wantMsg {
-			t.Errorf("%s: msg = %v, want %v", test.name, envelope["msg"], test.wantMsg)
-		}
-		if test.wantData != nil {
-			data, ok := envelope["data"].(map[string]any)
-			if !ok || data["name"] != test.wantData.(map[string]any)["name"] {
-				t.Errorf("%s: data = %v", test.name, envelope["data"])
-			}
-		} else if _, present := envelope["data"]; present {
-			t.Errorf("%s: data should be omitted, got %v", test.name, envelope["data"])
-		}
-	}
-}
-
 type namedValue struct {
 	Name string `json:"name" xml:"name"`
 }
 
-func TestXMLBaseResponse(t *testing.T) {
+func TestOkJSONCtx(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	XMLBaseResponse(recorder, namedValue{Name: "ada"})
-
-	if got := recorder.Header().Get("Content-Type"); got != XMLContentType {
-		t.Fatalf("content type = %q, want %q", got, XMLContentType)
+	if err := OkJSONCtx(httptest.NewRequest("GET", "/", nil).Context(), recorder, "pong"); err != nil {
+		t.Fatal(err)
 	}
-	body := recorder.Body.String()
-	for _, want := range []string{
-		`<xml version="1.0" encoding="UTF-8">`,
-		"<code>0</code>",
-		"<msg>ok</msg>",
-		"<data><name>ada</name></data>",
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("xml body missing %q:\n%s", want, body)
-		}
-	}
-}
-
-func TestJSONBaseResponseCtx(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	JSONBaseResponseCtx(httptest.NewRequest("GET", "/", nil).Context(), recorder, "pong")
-
-	envelope := decodeEnvelope(t, recorder.Body.Bytes())
-	if envelope["data"] != "pong" || envelope["code"] != float64(BusinessCodeOK) {
-		t.Fatalf("envelope = %v", envelope)
+	if got, want := recorder.Body.String(), "{\"code\":0,\"msg\":\"ok\",\"data\":\"pong\"}\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
 
 func TestOkXML(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	OkXML(recorder, namedValue{Name: "ada"})
+	if err := OkXML(recorder, namedValue{Name: "ada"}); err != nil {
+		t.Fatal(err)
+	}
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", recorder.Code)
@@ -111,14 +51,17 @@ func TestOkXML(t *testing.T) {
 	if got := recorder.Header().Get("Content-Type"); got != XMLContentType {
 		t.Fatalf("content type = %q, want %q", got, XMLContentType)
 	}
-	if got := recorder.Body.String(); got != "<namedValue><name>ada</name></namedValue>" {
-		t.Fatalf("body = %q", got)
+	want := `<xml version="1.0" encoding="UTF-8"><code>0</code><msg>ok</msg><data><name>ada</name></data></xml>`
+	if got := recorder.Body.String(); got != want {
+		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
 
 func TestWriteXMLUsesGivenStatus(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	WriteXML(recorder, http.StatusAccepted, namedValue{Name: "ada"})
+	if err := WriteXML(recorder, http.StatusAccepted, namedValue{Name: "ada"}); err != nil {
+		t.Fatal(err)
+	}
 
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", recorder.Code)
@@ -127,16 +70,20 @@ func TestWriteXMLUsesGivenStatus(t *testing.T) {
 
 func TestXMLMarshalFailureReturnsInternalServerError(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	OkXML(recorder, make(chan int))
+	if err := OkXML(recorder, make(chan int)); err == nil {
+		t.Fatal("expected XML marshal error")
+	}
 
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", recorder.Code)
 	}
 }
 
-func TestOkHTML(t *testing.T) {
+func TestWriteHTML(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	OkHTML(recorder, "<h1>ok</h1>")
+	if err := WriteHTML(recorder, http.StatusOK, "<h1>ok</h1>"); err != nil {
+		t.Fatal(err)
+	}
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", recorder.Code)
@@ -151,7 +98,9 @@ func TestOkHTML(t *testing.T) {
 
 func TestWriteHTMLUsesGivenStatus(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	WriteHTML(recorder, http.StatusNotFound, "missing")
+	if err := WriteHTML(recorder, http.StatusNotFound, "missing"); err != nil {
+		t.Fatal(err)
+	}
 
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", recorder.Code)
@@ -163,9 +112,22 @@ func TestJSONWriters(t *testing.T) {
 		name   string
 		write  func(http.ResponseWriter, any) error
 		status int
+		want   string
 	}{
-		{name: "ok", write: OkJSON, status: http.StatusOK},
-		{name: "created", write: CreatedJSON, status: http.StatusCreated},
+		{
+			name:   "ok",
+			write:  OkJSON,
+			status: http.StatusOK,
+			want:   "{\"code\":0,\"msg\":\"ok\",\"data\":{\"status\":\"fine\"}}\n",
+		},
+		{
+			name: "created",
+			write: func(w http.ResponseWriter, v any) error {
+				return WriteJSON(context.Background(), w, http.StatusCreated, v)
+			},
+			status: http.StatusCreated,
+			want:   "{\"status\":\"fine\"}\n",
+		},
 	}
 
 	for _, test := range tests {
@@ -179,24 +141,20 @@ func TestJSONWriters(t *testing.T) {
 		if got := recorder.Header().Get("Content-Type"); got != JSONContentType {
 			t.Errorf("%s: content type = %q", test.name, got)
 		}
-		if recorder.Body.String() != "{\"status\":\"fine\"}\n" {
-			t.Errorf("%s: body = %q", test.name, recorder.Body.String())
+		if got := recorder.Body.String(); got != test.want {
+			t.Errorf("%s: body = %q, want %q", test.name, got, test.want)
 		}
 	}
 }
 
-func TestNoContent(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	NoContent(recorder)
-
-	if recorder.Code != http.StatusNoContent || recorder.Body.Len() != 0 {
-		t.Fatalf("response = %d, body %q", recorder.Code, recorder.Body.String())
-	}
+func TestWriteJSONReturnsWriteError(t *testing.T) {
+	err := WriteJSON(context.Background(), &shortWriter{}, http.StatusOK, "body")
+	require.Error(t, err)
 }
 
 func TestErrorMapsStatusAndHidesInternalDetails(t *testing.T) {
 	clientRecorder := httptest.NewRecorder()
-	if err := Error(clientRecorder, ErrResourceNotFound); err != nil {
+	if err := ErrorJSON(clientRecorder, ErrResourceNotFound); err != nil {
 		t.Fatal(err)
 	}
 	if clientRecorder.Code != http.StatusNotFound {
@@ -208,7 +166,7 @@ func TestErrorMapsStatusAndHidesInternalDetails(t *testing.T) {
 	}
 
 	serverRecorder := httptest.NewRecorder()
-	if err := Error(serverRecorder, errDatabase{}); err != nil {
+	if err := ErrorJSON(serverRecorder, errDatabase{}); err != nil {
 		t.Fatal(err)
 	}
 	if serverRecorder.Code != http.StatusInternalServerError {
@@ -226,7 +184,7 @@ func (errDatabase) Error() string { return "database exploded" }
 
 func TestErrorKeepsBusinessCodeMessage(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	if err := Error(recorder, NewCodeError(4001, "invalid order")); err != nil {
+	if err := ErrorJSON(recorder, NewCodeError(4001, "invalid order")); err != nil {
 		t.Fatal(err)
 	}
 	if recorder.Code != http.StatusBadRequest {
@@ -238,46 +196,11 @@ func TestErrorKeepsBusinessCodeMessage(t *testing.T) {
 	}
 }
 
-func TestJSONBaseResponseCtxCarriesRequestID(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	var body []byte
-	var code int
-
-	request := httptest.NewRequest(http.MethodGet, "/users", nil)
-	handler.NewRequestIDHandler(handler.RequestIDConfig{Enabled: true}).Handle(func(w http.ResponseWriter, r *http.Request) {
-		JSONBaseResponseCtx(r.Context(), w, namedValue{Name: "ada"})
-		body = w.(*httptest.ResponseRecorder).Body.Bytes()
-		code = w.(*httptest.ResponseRecorder).Code
-	}).ServeHTTP(recorder, request)
-
-	if code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", code)
-	}
-	envelope := decodeEnvelope(t, body)
-	requestID, ok := envelope["request_id"].(string)
-	if !ok || requestID == "" {
-		t.Fatalf("request_id missing from envelope: %v", envelope)
-	}
-	if got := recorder.Header().Get(handler.RequestIDHeader); got != requestID {
-		t.Fatalf("envelope request_id = %q, response header = %q", requestID, got)
-	}
-}
-
-func TestEnvelopeOmitsRequestIDWithoutMiddleware(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	JSONBaseResponse(recorder, namedValue{Name: "ada"})
-
-	envelope := decodeEnvelope(t, recorder.Body.Bytes())
-	if _, present := envelope["request_id"]; present {
-		t.Fatalf("request_id should be omitted: %v", envelope)
-	}
-}
-
-func TestErrorCtxCarriesRequestID(t *testing.T) {
+func TestErrorJSONCtxCarriesRequestID(t *testing.T) {
 	var body []byte
 	request := httptest.NewRequest(http.MethodGet, "/users", nil)
 	handler.NewRequestIDHandler(handler.RequestIDConfig{Enabled: true}).Handle(func(w http.ResponseWriter, r *http.Request) {
-		_ = ErrorCtx(r.Context(), w, ErrResourceNotFound)
+		_ = ErrorJSONCtx(r.Context(), w, ErrResourceNotFound)
 		body = w.(*httptest.ResponseRecorder).Body.Bytes()
 	}).ServeHTTP(httptest.NewRecorder(), request)
 
@@ -287,31 +210,76 @@ func TestErrorCtxCarriesRequestID(t *testing.T) {
 	}
 }
 
-func TestXMLBaseResponseCtxCarriesRequestID(t *testing.T) {
-	var body string
+// TestOkCtxWrapsSuccessIntoBaseResponse keeps success and error payloads on the
+// same code/msg/data envelope.
+func TestOkCtxWrapsSuccessIntoBaseResponse(t *testing.T) {
+	var jsonBody []byte
+	var xmlBody string
 	request := httptest.NewRequest(http.MethodGet, "/users", nil)
 	handler.NewRequestIDHandler(handler.RequestIDConfig{Enabled: true}).Handle(func(w http.ResponseWriter, r *http.Request) {
-		XMLBaseResponseCtx(r.Context(), w, namedValue{Name: "ada"})
-		body = w.(*httptest.ResponseRecorder).Body.String()
+		recorder := w.(*httptest.ResponseRecorder)
+		if err := OkJSONCtx(r.Context(), w, namedValue{Name: "ada"}); err != nil {
+			t.Error(err)
+		}
+		jsonBody = recorder.Body.Bytes()
+
+		xmlRecorder := httptest.NewRecorder()
+		if err := OkXMLCtx(r.Context(), xmlRecorder, namedValue{Name: "ada"}); err != nil {
+			t.Error(err)
+		}
+		xmlBody = xmlRecorder.Body.String()
 	}).ServeHTTP(httptest.NewRecorder(), request)
 
-	if !strings.Contains(body, "<request_id>") {
-		t.Fatalf("xml envelope missing request_id:\n%s", body)
+	envelope := decodeEnvelope(t, jsonBody)
+	if envelope["code"] != float64(BusinessCodeOK) || envelope["msg"] != BusinessMsgOK {
+		t.Fatalf("json envelope = %v", envelope)
+	}
+	if envelope["request_id"] == nil || envelope["request_id"] == "" {
+		t.Fatalf("request_id missing from success envelope: %v", envelope)
+	}
+	data, ok := envelope["data"].(map[string]any)
+	if !ok || data["name"] != "ada" {
+		t.Fatalf("json data = %v", envelope["data"])
+	}
+
+	for _, want := range []string{"<code>0</code>", "<msg>ok</msg>", "<name>ada</name>", "<request_id>"} {
+		if !strings.Contains(xmlBody, want) {
+			t.Fatalf("xml success envelope missing %q:\n%s", want, xmlBody)
+		}
 	}
 }
 
-func TestOkHTMLCtxWritesHTML(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	OkHTMLCtx(httptest.NewRequest(http.MethodGet, "/", nil).Context(), recorder, "<p>ok</p>")
+func TestErrorXMLCtxCarriesRequestID(t *testing.T) {
+	var body string
+	request := httptest.NewRequest(http.MethodGet, "/users", nil)
+	handler.NewRequestIDHandler(handler.RequestIDConfig{Enabled: true}).Handle(func(w http.ResponseWriter, r *http.Request) {
+		if err := ErrorXMLCtx(r.Context(), w, ErrResourceNotFound); err != nil {
+			t.Error(err)
+		}
+		body = w.(*httptest.ResponseRecorder).Body.String()
+	}).ServeHTTP(httptest.NewRecorder(), request)
 
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", recorder.Code)
+	if !strings.Contains(body, "<request_id>") || !strings.Contains(body, "rest: resource not found") {
+		t.Fatalf("xml error envelope missing request ID or message:\n%s", body)
 	}
-	if got := recorder.Header().Get("Content-Type"); got != HTMLContentType {
-		t.Fatalf("content type = %q", got)
+}
+
+func TestErrorXMLUsesStatusAndEnvelope(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	if err := ErrorXML(recorder, ErrResourceNotFound); err != nil {
+		t.Fatal(err)
 	}
-	if recorder.Body.String() != "<p>ok</p>" {
-		t.Fatalf("body = %q", recorder.Body.String())
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", recorder.Code)
+	}
+	if got := recorder.Header().Get("Content-Type"); got != XMLContentType {
+		t.Fatalf("content type = %q, want %q", got, XMLContentType)
+	}
+	for _, want := range []string{"<code>-1</code>", "<msg>rest: resource not found</msg>"} {
+		if !strings.Contains(recorder.Body.String(), want) {
+			t.Fatalf("xml error envelope missing %q:\n%s", want, recorder.Body.String())
+		}
 	}
 }
 
@@ -320,7 +288,7 @@ func TestOkHTMLCtxWritesHTML(t *testing.T) {
 // maintenance window lost its code and message.
 func TestError_CodeMsg5xxKeepsBusinessMessage(t *testing.T) {
 	w := httptest.NewRecorder()
-	require.NoError(t, Error(w, NewCodeError(http.StatusServiceUnavailable, "maintenance window")))
+	require.NoError(t, ErrorJSON(w, NewCodeError(http.StatusServiceUnavailable, "maintenance window")))
 
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 	var body BaseResponse[any]
@@ -332,7 +300,7 @@ func TestError_CodeMsg5xxKeepsBusinessMessage(t *testing.T) {
 // TestError_Unknown5xxStillHidden keeps internal error details out of the response.
 func TestError_Unknown5xxStillHidden(t *testing.T) {
 	w := httptest.NewRecorder()
-	require.NoError(t, Error(w, stderrors.New("db password leaked here")))
+	require.NoError(t, ErrorJSON(w, stderrors.New("db password leaked here")))
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.NotContains(t, w.Body.String(), "db password")
@@ -343,7 +311,7 @@ func TestError_Unknown5xxStillHidden(t *testing.T) {
 func TestError_WrappedCodeMsgKeepsBusinessMessage(t *testing.T) {
 	w := httptest.NewRecorder()
 	err := fmt.Errorf("load failed: %w", NewCodeError(http.StatusBadGateway, "upstream down"))
-	require.NoError(t, Error(w, err))
+	require.NoError(t, ErrorJSON(w, err))
 
 	var body BaseResponse[any]
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))

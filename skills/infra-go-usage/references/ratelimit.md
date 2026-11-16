@@ -153,7 +153,7 @@ func RateLimitByIP(rdb redis.UniversalClient, rate, burst float64) chain.Middlew
             key := fmt.Sprintf("rate_limit:ip:%s", rest.ClientIP(r))
             limiter := ratelimit.NewRedisTokenBucket(rdb, key, rate, burst)
             if allowed, _ := limiter.AllowContext(r.Context()); !allowed {
-                _ = rest.WriteJSON(w, http.StatusTooManyRequests, rest.WrapBaseResponse(rest.ErrTooManyRequests))
+                _ = rest.ErrorJSON(w, rest.ErrTooManyRequests)
                 return
             }
             next(w, r)

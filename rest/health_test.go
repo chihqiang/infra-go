@@ -36,9 +36,10 @@ func TestHealthEndpointEnabled(t *testing.T) {
 	require.Equal(t, http.StatusOK, recorder.Code)
 	assert.Equal(t, JSONContentType, recorder.Header().Get("Content-Type"))
 
-	var body map[string]string
+	var body BaseResponse[map[string]string]
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
-	assert.Equal(t, "ok", body["status"])
+	assert.Equal(t, BusinessCodeOK, body.Code)
+	assert.Equal(t, "ok", body.Data["status"])
 
 	// The GET pattern also serves HEAD.
 	assert.Equal(t, http.StatusOK, serveHealth(t, srv, http.MethodHead, defaultHealthPath).Code)

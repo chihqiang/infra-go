@@ -11,7 +11,7 @@ rest/
 ├── server.go        — Server: routing, middleware assembly, start and graceful shutdown
 ├── route.go         — Route / RouteOption / RouteGroup / Routes listing
 ├── options.go       — server Option: CORS, TLS, rate limit, breaker, signature
-├── response.go      — WriteJSON / OkJSON / CreatedJSON / NoContent / Error, BaseResponse envelope, XML/HTML writers
+├── response.go      — JSON/XML/HTML writers, error responses and BaseResponse envelope
 ├── errors.go        — error sentinels, StatusCoder, StatusOf, CodeMsg
 ├── chain/           — Middleware type and immutable middleware chain
 ├── router/          — http.ServeMux wrapper, 404/405 detection, path helpers
@@ -32,7 +32,8 @@ rest/
 - **Middleware chain**: recovery, request ID, tracing, access log, concurrency limit, timeout,
   body limit, gzip, circuit breaker, rate limit, body signature, JWT auth, CORS
 - **Binding**: JSON / XML / form / multipart / query / header / path with self-validation
-- **Responses**: `BaseResponse` envelope with `request_id`, JSON/XML/HTML writers, error-to-status mapping
+- **Responses**: one `BaseResponse` (`code`/`msg`/`data`/`request_id`) envelope for success and errors,
+  JSON/XML/HTML writers, error-to-status mapping
 - **Lifecycle**: `Start` / `Serve` / `Shutdown` / `Stop`, with `Register` for `service.ServiceGroup`
 
 ## Installation
@@ -75,7 +76,7 @@ func main() {
         Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
             var req helloRequest
             if err := rest.Bind(r, &req); err != nil {
-                _ = rest.Error(w, err) // binding failures map to 400/415
+                _ = rest.ErrorJSON(w, err) // binding failures map to 400/415
                 return
             }
             _ = rest.OkJSON(w, map[string]string{"msg": "hello, " + req.Name})
@@ -146,7 +147,7 @@ server, err := rest.NewServer(rest.Config{
 ```
 
 It registers `GET <Path>` (HEAD is served by the same pattern) and responds with
-`200 {"status":"ok"}`. The path must be static: `/`, a trailing slash, whitespace, query strings
+`200 {"code":0,"msg":"ok","data":{"status":"ok"}}`. The path must be static: `/`, a trailing slash, whitespace, query strings
 and wildcards are rejected with `rest.ErrInvalidHealthPath`, because `/` and a trailing slash turn
 the ServeMux pattern into a subtree that shadows other handlers. Do not register the same path
 again yourself; `http.ServeMux` panics on duplicate patterns.
@@ -331,20 +332,35 @@ server.AddRoute(rest.Route{
 ## Responses
 
 ```go
-rest.WriteJSON(w, http.StatusAccepted, body) // explicit status
-rest.OkJSON(w, body)                         // 200
-rest.CreatedJSON(w, body)                    // 201
-rest.NoContent(w)                            // 204, no body
-rest.Error(w, err)                           // HTTP status from StatusOf(err)
+rest.WriteJSON(r.Context(), w, http.StatusAccepted, body) // explicit status, raw body
+rest.OkJSON(w, body)                                      // 200, wrapped in BaseResponse
+rest.OkJSONCtx(r.Context(), w, body)                      // 200, wrapped, request_id from ctx
+rest.ErrorJSON(w, err)                                    // HTTP status from StatusOf(err)
+rest.ErrorJSONCtx(r.Context(), w, err)                    // error envelope with request_id
+rest.WriteXML(w, http.StatusAccepted, body)               // explicit status, raw XML
+rest.OkXML(w, body)                                       // 200, wrapped in BaseResponse
+rest.OkXMLCtx(r.Context(), w, body)                       // 200, wrapped, request_id from ctx
+rest.ErrorXML(w, err)
+rest.ErrorXMLCtx(r.Context(), w, err)
+rest.WriteHTML(w, http.StatusOK, "<h1>ok</h1>")
+w.WriteHeader(http.StatusNoContent) // 204, no body
 ```
 
-`rest.Error` hides details for 5xx (body keeps `code`/`msg`, the real error is logged) and echoes
-the message for 4xx.
+`rest.OkJSON`/`rest.OkJSONCtx` and `rest.OkXML`/`rest.OkXMLCtx` wrap the value in `BaseResponse`, so success and
+failure share one structure: `{"code":0,"msg":"ok","data":...}` on success and `{"code":-1,"msg":"..."}` on failure.
+`request_id` is filled from the request context when the request ID middleware is in the chain; XML responses are
+wrapped in `<xml version="1.0" encoding="UTF-8">...</xml>`.
+
+Use `rest.WriteJSON`/`rest.WriteXML` when a raw, unwrapped body is needed. `rest.WriteJSON` accepts the request
+context for call-site symmetry, but the writers never log, so log returned errors yourself.
+
+`rest.ErrorJSON` and `rest.ErrorXML` hide details for 5xx (the body keeps `code`/`msg` with the HTTP status text) and
+echo the message for 4xx.
 
 Middleware-generated failures (auth, rate/concurrency limits, timeout, breaker, signature, body
 limit, recovery and gunzip) only set the HTTP status and protocol headers
 (`Retry-After`, `WWW-Authenticate`, `Connection`) and write no JSON body, matching go-zero's
-handler convention. Use `rest.Error` in the business handler when an error envelope is needed.
+handler convention. Use `rest.ErrorJSON` or `rest.ErrorXML` in the business handler when an error envelope is needed.
 
 Status resolution order in `StatusOf`:
 
@@ -356,7 +372,7 @@ Status resolution order in `StatusOf`:
    `ErrTooManyRequests`, `ErrServerUnavailable`
 4. Anything else → 500
 
-Decode failures are wrapped in an internal error that implements `StatusCoder`, so `rest.Error` maps
+Decode failures are wrapped in an internal error that implements `StatusCoder`, so `rest.ErrorJSON` maps
 them to 400, unsupported content types to 415 and oversized bodies to 413 automatically.
 
 Business errors are created with `rest.NewCodeError(code, msg)`.
@@ -380,6 +396,9 @@ err = rest.BindPath(r, &payload)     // path parameters (path tags)
 | Query | `form` | single values and repeated keys (`[]string`) |
 | Header | `header` | case-insensitive matching |
 | Path | `path` | reads `Request.PathValue`; nested fields use their leaf wildcard name |
+
+For a single value, use `rest.PathParam(r, "id")` for a route wildcard such as
+`/groups/{id}` or `rest.QueryParam(r, "page")` for the first matching query value.
 
 JSON bodies are also recognised when `Content-Type` is missing or is
 `application/x-www-form-urlencoded` (the body starts with `{` or `[` after
@@ -439,7 +458,7 @@ func (r *CreateUser) Validate() error {
 }
 ```
 
-Binding and validation failures carry a status, so `rest.Error(w, err)` answers
+Binding and validation failures carry a status, so `rest.ErrorJSON(w, err)` answers
 400 automatically; an unknown `Content-Type` produces 415.
 
 ## handler package
@@ -488,7 +507,7 @@ server.Use(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
 | Handler | Behaviour |
 |---------|-----------|
 | `NewRecoveryHandler(RecoveryConfig)` | Recovers panics → 500, re-panics `http.ErrAbortHandler` |
-| `NewRequestIDHandler(RequestIDConfig)` | Keeps a safe `X-Request-ID` or generates a UUID; `ContextWithRequestID` / `RequestIDFromContext`. Importing `rest/handler` also registers a `logger` context extractor, so every `logger.XxxCtx` call carries `request_id` automatically |
+| `NewRequestIDHandler(RequestIDConfig)` | Keeps a safe `X-Request-ID` or generates a UUID; `resthandler.RequestIDFromContext(ctx)` reads it from the request context. Importing `rest/handler` also registers a `logger` context extractor, so every `logger.XxxCtx` call carries `request_id` automatically |
 | `NewTraceHandler(TraceConfig)` | OTel server span; `ServiceName`, `IgnorePaths` |
 | `NewLogHandler(LogConfig, logger)` | Access log via `core/logger`; `ServiceName`, `SkipPaths`, `TrustedProxies`, `ClientIP` |
 | `NewMaxConnsHandler(MaxConnsConfig)` | Cap in-flight requests → 503 |

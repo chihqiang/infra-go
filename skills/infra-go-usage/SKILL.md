@@ -149,7 +149,7 @@ func (r *CreateUserRequest) Validate() error {
 }
 ```
 
-2. Register routes; `binding.Bind` decodes by content type and `rest.Error` maps failures to 400/415:
+2. Register routes; `binding.Bind` decodes by content type and `rest.ErrorJSON` maps failures to 400/415:
 
 ```go
 server, err := rest.NewServer(cfg.Config) // embedded rest.Config from conf
@@ -162,10 +162,10 @@ server.Group("/api").AddRoute(rest.Route{
     Handler: func(w http.ResponseWriter, r *http.Request) {
         var req CreateUserRequest
         if err := binding.Bind(r, &req); err != nil {
-            _ = rest.Error(w, err) // 400 / 415 already chosen from the error
+            _ = rest.ErrorJSON(w, err) // 400 / 415 already chosen from the error
             return
         }
-        _ = rest.CreatedJSON(w, createUser(req))
+        _ = rest.WriteJSON(r.Context(), w, http.StatusCreated, createUser(req))
     },
 })
 ```
@@ -228,8 +228,8 @@ sg.Start() // blocking; returns once everything has exited; Stop is guaranteed t
 ### Step 7 — Handle errors, context and unified responses the agreed way
 
 - Error messages and comments in English (the project-wide style)
-- At the HTTP layer use `rest.OkJSON` / `rest.CreatedJSON` / `rest.NoContent` for success and `rest.Error(w, err)` for failures
-- When trace/request correlation is needed, read `rest.RequestID(r)` / `rest.ClientIP(r)` and log with `logger.XxxCtx(ctx, ...)`
+- At the HTTP layer use `rest.OkJSON` (wraps the value in the `code`/`msg`/`data` envelope) / `rest.WriteJSON(ctx, w, http.StatusCreated, body)` (raw body) for success, write bodyless statuses with `w.WriteHeader`, and use `rest.ErrorJSON(w, err)` for failures
+- When trace/request correlation is needed, read the ID with `resthandler.RequestIDFromContext(r.Context())` and the client IP with `rest.ClientIP(r)`, then log with `logger.XxxCtx(ctx, ...)`
 - Pass `context.Context` across modules consistently (orm / redisx / retry / taskq all support ctx timeouts and cancellation)
 - Inspect semantic errors with `errors.Is`: `redisx.ErrNil`, `token.ErrInvalidToken`, `retry.ErrMaxRetries`, `rest.ErrResourceNotFound`, etc.
 
@@ -238,7 +238,7 @@ sg.Start() // blocking; returns once everything has exited; Stop is guaranteed t
 - [ ] Only modules that are actually used have been imported
 - [ ] Configuration is loaded through `conf`, with defaults and environment variable support; sensitive values come from environment variables
 - [ ] All components are initialized in dependency order; connection-holding components have `Close / Stop / Sync`
-- [ ] HTTP routes decode with `rest.Bind` and answer through `rest.OkJSON` / `rest.Error`
+- [ ] HTTP routes decode with `rest.Bind` and answer through `rest.OkJSON` / `rest.ErrorJSON`
 - [ ] Auth / rate limiting / tracing / request ID / recovery are enabled via `rest.MiddlewaresConf` or mounted from `rest/handler`
 - [ ] Custom middleware is written as `chain.Middleware` and mounted with `server.Use`
 - [ ] Multiple services are started and stopped together with `service.NewServiceGroup`, with graceful shutdown
@@ -261,6 +261,6 @@ The API documentation for each module is maintained in the `references/` directo
 | Service orchestration | [service](./references/service.md) · [mapping](./references/mapping.md) |
 | Project structure | [project-structure](./references/project-structure.md) |
 
-> `x` and `respw` no longer exist: client-IP resolution is internal to `rest` (public helpers `rest.ClientIP` / `rest.RequestID`), and response-writer wrappers live in `rest/internal/response`. See [rest](./references/rest.md).
+> `x` and `respw` no longer exist: client-IP resolution is internal to `rest` (public helper `rest.ClientIP`), and request IDs are available through `rest/handler.RequestIDFromContext`; response-writer wrappers live in `rest/internal/response`. See [rest](./references/rest.md).
 
 All modules follow the same conventions: `New` returns an error and `MustNew` panics on error; connection-holding components have `Close / Stop / Sync`; comments and errors in English.

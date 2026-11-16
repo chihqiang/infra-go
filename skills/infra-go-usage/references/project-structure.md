@@ -143,15 +143,15 @@ func (h *OrderHandler) Create(w http.ResponseWriter, r *http.Request) {
     ctx := r.Context()
     var req logic.CreateOrderRequest
     if err := rest.Bind(r, &req); err != nil {
-        _ = rest.ErrorCtx(ctx, w, err) // 400/415 chosen from the error
+        _ = rest.ErrorJSONCtx(ctx, w, err) // 400/415 chosen from the error
         return
     }
     order, err := h.svc.Create(ctx, &req)
     if err != nil {
-        _ = rest.ErrorCtx(ctx, w, err)
+        _ = rest.ErrorJSONCtx(ctx, w, err)
         return
     }
-    rest.JSONBaseResponseCtx(ctx, w, order)
+    _ = rest.OkJSONCtx(ctx, w, order)
 }
 ```
 
@@ -182,7 +182,7 @@ Business-specific middleware (auth, audit, permissions, context injection) imple
 | `config` | `conf` (loading / defaults / validation) |
 | `svc` | `orm` · `redisx` · `token` · `hash` (assembly) |
 | `route` | `rest` (AddRoute/Group/Use) |
-| `handler` | `rest` (Bind / Error / JSONBaseResponse) |
+| `handler` | `rest` (Bind / OkJSONCtx / ErrorJSONCtx) |
 | `middleware` | `rest.WithRouteAuth` · `resthandler.NewRateLimitHandler` · rest built-in handlers |
 | `logic` | `orm` · `redisx` · `retry` · `taskq` · `syncx` · `cast` · `hash` |
 | `main.go` | `conf` · `logger` · `rest` · `service` (multi-service orchestration) |
