@@ -154,20 +154,39 @@ The repository ships a VS Code Copilot skill - [infra-go-usage](./skills/infra-g
 which guides you through choosing and assembling infra-go modules (configuration, logging,
 database, Redis, HTTP, JWT, ...) in a business project.
 
-Install it in one step with the [Agent Skills CLI](https://github.com/vercel-labs/skills)
-(`npx skills`); the skill lives in `skills/infra-go-usage/` in this repository and has been
-pushed to the remote `main` branch:
+The skill lives in `skills/infra-go-usage/` on `main` (`SKILL.md` plus one reference page per
+module), so it travels with the library and is discovered automatically by the
+[Agent Skills CLI](https://github.com/vercel-labs/skills) (`npx skills`). Run the installation
+from the project that should use the skill, not from this repository:
 
 ```bash
-# Install into the current project (defaults to .claude/skills/ or .agents/skills/,
-# auto-detecting the installed agent)
-npx skills add chihqiang/infra-go --skill infra-go-usage
-
-# Preview which skills can be discovered in the repository (without installing)
+# Preview the skills discovered in this repository (nothing is installed)
 npx skills add chihqiang/infra-go --list
 
-# Install into the personal directory (usable across projects) and specify the target agent
+# Install into the current project -> .agents/skills/infra-go-usage (+ skills-lock.json)
+npx skills add chihqiang/infra-go --skill infra-go-usage -a github-copilot
+
+# Install once for all projects -> ~/.agents/skills/infra-go-usage
 npx skills add chihqiang/infra-go --skill infra-go-usage -g -a github-copilot
+
+# Offline / from a local clone of this repository
+npx skills add ./infra-go/skills/infra-go-usage -g -a github-copilot
+```
+
+The CLI copies the whole skill directory and prints the destination it used, so re-run the same
+command after upgrading; `npx skills update` refreshes installed skills and
+`npx skills remove infra-go-usage` uninstalls one.
+
+### Where VS Code looks
+
+For the Copilot harness, VS Code reads project skills from `.github/skills/` and personal skills
+from `~/.copilot/skills/`; local sessions additionally read `.agents/skills/` and
+`~/.agents/skills/`, which is where `npx skills` installs by default. If the skill is not listed
+under **Chat: Open Customizations → Skills**, link it into a directory your harness reads:
+
+```bash
+mkdir -p ~/.copilot/skills
+ln -s ~/.agents/skills/infra-go-usage ~/.copilot/skills/infra-go-usage
 ```
 
 ### Usage
@@ -175,10 +194,6 @@ npx skills add chihqiang/infra-go --skill infra-go-usage -g -a github-copilot
 Once installed, type `/infra-go-usage` in the VS Code chat (or just ask a question, such as
 "build an HTTP service with login authentication and rate limiting using infra-go") and Copilot
 loads the skill automatically to help you follow its workflow.
-
-> Note: this repository keeps the skill in the root `skills/` directory so that it travels with
-> the library; VS Code recognises project-level skills in `.github/skills/`, `.agents/skills/`
-> or `.claude/skills/`.
 
 ## Quality checks
 
