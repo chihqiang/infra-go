@@ -6,6 +6,7 @@
 [![Release](https://img.shields.io/github/release/chihqiang/infra-go.svg?style=flat-square)](https://github.com/chihqiang/infra-go/releases)
 [![GitHub Pull Requests](https://img.shields.io/github/stars/chihqiang/infra-go)](https://github.com/chihqiang/infra-go/stargazers)
 [![HitCount](https://views.whatilearened.today/views/github/chihqiang/infra-go.svg)](https://github.com/chihqiang/infra-go)
+[![Tests](https://github.com/chihqiang/infra-go/actions/workflows/test.yml/badge.svg)](https://github.com/chihqiang/infra-go/actions/workflows/test.yml)
 [![GitHub license](https://img.shields.io/github/license/chihqiang/infra-go)](https://github.com/chihqiang/infra-go/blob/main/LICENSE)
 
 <p>
