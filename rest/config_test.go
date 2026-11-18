@@ -13,6 +13,8 @@ func TestConfigLoadFromYAML(t *testing.T) {
 	const yamlConfig = `
 host: 127.0.0.1
 port: 9090
+readTimeout: 5s
+maxHeaderBytes: 2048
 logger:
   serviceName: api
   mode: file
@@ -42,6 +44,8 @@ middlewares:
 
 	require.Equal(t, "127.0.0.1", cfg.Host)
 	require.Equal(t, 9090, cfg.Port)
+	require.Equal(t, 5*time.Second, cfg.ReadTimeout)
+	require.Equal(t, 2048, cfg.MaxHeaderBytes)
 	require.Equal(t, "api", cfg.Logger.ServiceName)
 	require.Equal(t, "file", cfg.Logger.Mode)
 	require.Equal(t, "debug", cfg.Logger.Level)
@@ -134,6 +138,17 @@ middlewares:
 	require.Nil(t, cfg.Middlewares.Auth.Parser)
 	require.False(t, cfg.Middlewares.RateLimit.Enabled)
 	require.False(t, cfg.Middlewares.Breaker.Enabled)
+}
+
+// TestConfigLoadFromYAMLTLSFiles pins that certFile/keyFile still bind without
+// an explicit key in their tags: the field name is matched case-insensitively.
+func TestConfigLoadFromYAMLTLSFiles(t *testing.T) {
+	var cfg Config
+	require.NoError(t, conf.LoadFromYAMLBytes([]byte("certFile: cert.pem\nkeyFile: key.pem\n"), &cfg))
+	require.NoError(t, cfg.Validate())
+
+	require.Equal(t, "cert.pem", cfg.CertFile)
+	require.Equal(t, "key.pem", cfg.KeyFile)
 }
 
 func TestDefaultConfigValues(t *testing.T) {

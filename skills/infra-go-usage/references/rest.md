@@ -253,7 +253,8 @@ middlewares:
     limit: 1048576
 ```
 
-`middlewares` entries are typed as structs and tagged `optional` (`json:"timeout,optional"`): an
+`middlewares` entries are typed as structs and tagged `optional` (`json:",optional"`, the key is the
+field name): an
 entry that is not listed keeps its zero value, so middleware you rely on must appear in the file.
 The handler's own `default=` tags apply as soon as the entry is present, so `timeout: {}` means
 "enabled with defaults". A section key written with nothing under it (`middlewares:` while every
