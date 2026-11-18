@@ -24,26 +24,26 @@ const defaultShutdownTimeout = 10 * time.Second
 
 // Config configures an HTTP server.
 type Config struct {
-	Host            string        `json:",default=0.0.0.0"`
-	Port            int           `json:",default=8080,range=[0:65535]"`
-	CertFile        string        `json:",optional"`
-	KeyFile         string        `json:",optional"`
-	ReadTimeout     time.Duration `json:",default=10s"`
-	WriteTimeout    time.Duration `json:",default=10s"`
-	IdleTimeout     time.Duration `json:",default=120s"`
-	ShutdownTimeout time.Duration `json:",default=10s"`
-	MaxHeaderBytes  int           `json:",default=1048576"`
+	Host            string        `json:"host,default=0.0.0.0"`
+	Port            int           `json:"port,default=8080,range=[0:65535]"`
+	CertFile        string        `json:"certFile,optional"`
+	KeyFile         string        `json:"keyFile,optional"`
+	ReadTimeout     time.Duration `json:"readTimeout,default=10s"`
+	WriteTimeout    time.Duration `json:"writeTimeout,default=10s"`
+	IdleTimeout     time.Duration `json:"idleTimeout,default=120s"`
+	ShutdownTimeout time.Duration `json:"shutdownTimeout,default=10s"`
+	MaxHeaderBytes  int           `json:"maxHeaderBytes,default=1048576"`
 	// Logger configures the server-owned logger when any field is set. NewServer
 	// builds it, installs it on the server (used by the access-log middleware)
 	// and also sets it as the global logger so package-level logger calls in
 	// other middleware see the same instance. Use WithLogger to inject a
 	// pre-built logger instead.
-	Logger      logger.Config
-	Middlewares MiddlewaresConf
+	Logger      logger.Config   `json:"logger,optional"`
+	Middlewares MiddlewaresConf `json:"middlewares,optional"`
 	// Health configures the built-in GET health endpoint. It is disabled by
 	// default so applications that already register their own health route are
 	// unaffected.
-	Health HealthConfig
+	Health HealthConfig `json:"health,optional"`
 }
 
 // defaultHealthPath is used when HealthConfig.Path is empty.
@@ -81,26 +81,30 @@ func validHealthPath(path string) bool {
 // into a subtree that shadows other handlers.
 type HealthConfig struct {
 	// Enabled registers the endpoint when the server is created. Default false.
-	Enabled bool `json:",optional"`
-	// Path is the health endpoint path. It is only defaulted to "/health" when
-	// Enabled is true, so a disabled health endpoint keeps its path empty.
-	Path string `json:",optional"`
+	Enabled bool `json:"enabled,optional"`
+	// Path is the health endpoint path; the tag default is used when the health
+	// section exists but path is omitted. A config built in code may leave it
+	// empty, so NewServer still normalizes it to "/health" when Enabled is true.
+	Path string `json:"path,default=/health,optional"`
 }
 
 // MiddlewaresConf groups the configuration of the built-in middleware handlers.
+// Every entry is optional: an omitted entry leaves that middleware at its zero
+// value (disabled). The `default=` tags of a handler config apply as soon as the
+// entry itself is present, so `timeout: {}` still means "enabled with defaults".
 type MiddlewaresConf struct {
-	Recovery  resthandler.RecoveryConfig
-	RequestID resthandler.RequestIDConfig
-	Trace     resthandler.TraceConfig
-	Log       resthandler.LogConfig
-	MaxConns  resthandler.MaxConnsConfig
-	Auth      resthandler.AuthConfig
-	RateLimit resthandler.RateLimitConfig
-	Breaker   resthandler.BreakerConfig
-	Timeout   resthandler.TimeoutConfig
-	Gunzip    resthandler.GunzipConfig
-	MaxBytes  resthandler.MaxBytesConfig
-	Signature resthandler.SignatureConfig
+	Recovery  resthandler.RecoveryConfig  `json:"recovery,optional"`
+	RequestID resthandler.RequestIDConfig `json:"requestID,optional"`
+	Trace     resthandler.TraceConfig     `json:"trace,optional"`
+	Log       resthandler.LogConfig       `json:"log,optional"`
+	MaxConns  resthandler.MaxConnsConfig  `json:"maxConns,optional"`
+	Auth      resthandler.AuthConfig      `json:"auth,optional"`
+	RateLimit resthandler.RateLimitConfig `json:"rateLimit,optional"`
+	Breaker   resthandler.BreakerConfig   `json:"breaker,optional"`
+	Timeout   resthandler.TimeoutConfig   `json:"timeout,optional"`
+	Gunzip    resthandler.GunzipConfig    `json:"gunzip,optional"`
+	MaxBytes  resthandler.MaxBytesConfig  `json:"maxBytes,optional"`
+	Signature resthandler.SignatureConfig `json:"signature,optional"`
 }
 
 // DefaultConfig returns the standard HTTP server configuration.
