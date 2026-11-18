@@ -1,6 +1,6 @@
 ---
 name: infra-go-usage
-description: 'Build services in business projects with the infra-go Go infrastructure library: conf (config loading), logger (structured logs), orm (MySQL/PostgreSQL/SQLite on gorm), redisx (Redis client, distributed lock), cache (in-memory and Redis), rest (HTTP server, method-aware routing, route groups, binding, unified JSON responses, middleware chain), rest/handler (recovery, request ID, tracing, access log, concurrency/timeout/body limits, gzip, breaker, rate limit, JWT auth, body signature), token (JWT), ratelimit, breaker, retry, taskq (async queue), storage (local/OSS/COS/KODO), ws (WebSocket), trace (OpenTelemetry), hash (bcrypt/MD5/SHA/HMAC/AES-GCM), cast, stringx, syncx, service (ServiceGroup). Use when: choosing, initializing or assembling infra-go modules in a Go service, combining conf+logger+orm+redisx+rest+token, or setting up unified responses, middleware and graceful shutdown.'
+description: 'Use infra-go modules to build Go business services, including configuration, logging, databases, Redis, HTTP APIs, authentication, middleware, queues, storage and WebSockets.'
 ---
 
 # infra-go usage guide
