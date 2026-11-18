@@ -73,14 +73,14 @@ func main() {
     server.Group("/api").AddRoute(rest.Route{
         Method: http.MethodPost,
         Path:   "/hello",
-        Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        Handler: func(w http.ResponseWriter, r *http.Request) {
             var req helloRequest
             if err := rest.Bind(r, &req); err != nil {
                 _ = rest.ErrorJSON(w, err) // binding failures map to 400/415
                 return
             }
             _ = rest.OkJSON(w, map[string]string{"msg": "hello, " + req.Name})
-        }),
+        },
     })
 
     if err := server.Start(); err != nil {
@@ -308,7 +308,7 @@ CORS wraps the whole chain, so 404/405 responses carry CORS headers too.
 | Method | Purpose |
 |--------|---------|
 | `NewServer(conf Config, opts ...Option) (*Server, error)` | Build a server, validating config |
-| `Handle(method, path string, h http.Handler)` / `HandleFunc` | Register a single route |
+| `Handle(method, path string, h http.HandlerFunc)` / `HandleFunc` | Register a single route |
 | `AddRoute(Route, ...RouteOption)` / `AddRoutes(...Route)` | Register routes with options |
 | `Group(prefix string) *RouteGroup` | Route group, embeddable/nestable, with `Use` |
 | `Use(chain.Middleware)` | Append a server-wide middleware |

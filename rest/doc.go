@@ -21,12 +21,12 @@
 //	server.Group("/api").AddRoute(rest.Route{
 //		Method: http.MethodGet,
 //		Path:   "/groups/{id}",
-//		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+//		Handler: func(w http.ResponseWriter, r *http.Request) {
 //			_ = rest.OkJSON(w, map[string]string{
 //				"id":   rest.PathParam(r, "id"),
 //				"page": rest.QueryParam(r, "page"),
 //			})
-//		}),
+//		},
 //	})
 //
 //	if err := server.Start(); err != nil {

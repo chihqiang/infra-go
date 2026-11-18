@@ -97,9 +97,9 @@ func NewServer(conf Config, opts ...Option) (*Server, error) {
 		// Normalize next to the registration so a disabled Health config is never
 		// touched and an empty Path still becomes "/health".
 		healthPath := normalizeHealthPath(conf.Health.Path)
-		server.Handle(http.MethodGet, healthPath, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		server.Handle(http.MethodGet, healthPath, func(w http.ResponseWriter, _ *http.Request) {
 			_ = OkJSON(w, map[string]string{"status": "ok"})
-		}))
+		})
 	}
 	server.rebuildHandler()
 	if ownedLogger != nil {
@@ -168,15 +168,15 @@ func (s *Server) buildMiddlewares(conf Config) error {
 	return nil
 }
 
-// Handle registers a handler for the given method and path pattern.
-func (s *Server) Handle(method, routePath string, handler http.Handler) {
+// Handle registers a handler function for the given method and path pattern.
+func (s *Server) Handle(method, routePath string, handler http.HandlerFunc) {
 	s.register(method, routePath, handler, true)
 }
 
 // register adds a route to the mux and optionally records it for Routes and
 // PrintRoutes. Aliases such as the exact "/path/{$}" form are registered but not
 // recorded.
-func (s *Server) register(method, routePath string, handler http.Handler, record bool) {
+func (s *Server) register(method, routePath string, handler http.HandlerFunc, record bool) {
 	s.router.Handle(method, routePath, handler)
 	if !record {
 		return
