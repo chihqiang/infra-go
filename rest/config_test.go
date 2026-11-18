@@ -4,8 +4,152 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chihqiang/infra-go/core/conf"
 	resthandler "github.com/chihqiang/infra-go/rest/handler"
+	"github.com/stretchr/testify/require"
 )
+
+func TestConfigLoadFromYAML(t *testing.T) {
+	const yamlConfig = `
+host: 127.0.0.1
+port: 9090
+readTimeout: 5s
+maxHeaderBytes: 2048
+logger:
+  serviceName: api
+  mode: file
+  level: debug
+health:
+  enabled: true
+  path: healthz
+middlewares:
+  recovery:
+    enabled: false
+  requestID:
+    enabled: false
+  log:
+    enabled: true
+    skipPaths: ["/healthz"]
+  timeout:
+    enabled: true
+    timeout: 3s
+  maxBytes:
+    enabled: true
+    limit: 2048
+`
+
+	var cfg Config
+	require.NoError(t, conf.LoadFromYAMLBytes([]byte(yamlConfig), &cfg))
+	require.NoError(t, cfg.Validate())
+
+	require.Equal(t, "127.0.0.1", cfg.Host)
+	require.Equal(t, 9090, cfg.Port)
+	require.Equal(t, 5*time.Second, cfg.ReadTimeout)
+	require.Equal(t, 2048, cfg.MaxHeaderBytes)
+	require.Equal(t, "api", cfg.Logger.ServiceName)
+	require.Equal(t, "file", cfg.Logger.Mode)
+	require.Equal(t, "debug", cfg.Logger.Level)
+	require.Equal(t, "logs", cfg.Logger.Path)
+	require.Equal(t, "json", cfg.Logger.Encoding)
+	require.True(t, cfg.Health.Enabled)
+	require.Equal(t, "healthz", cfg.Health.Path)
+	require.False(t, cfg.Middlewares.Recovery.Enabled)
+	require.False(t, cfg.Middlewares.RequestID.Enabled)
+	require.Equal(t, []string{"/healthz"}, cfg.Middlewares.Log.SkipPaths)
+	require.True(t, cfg.Middlewares.Timeout.Enabled)
+	require.Equal(t, 3*time.Second, cfg.Middlewares.Timeout.Timeout)
+	require.Equal(t, int64(2048), cfg.Middlewares.MaxBytes.Limit)
+}
+
+// TestConfigLoadFromYAMLDefaultSections pins the section semantics: logger,
+// middlewares and health are all optional, so a section that is not written
+// stays zero and its nested `default` tags only apply once the section exists.
+func TestConfigLoadFromYAMLDefaultSections(t *testing.T) {
+	var cfg Config
+	require.NoError(t, conf.LoadFromYAMLBytes([]byte("port: 8080\n"), &cfg))
+	require.NoError(t, cfg.Validate())
+
+	require.Equal(t, 8080, cfg.Port)
+	require.Empty(t, cfg.Logger.Mode)
+	require.Empty(t, cfg.Logger.Path)
+	require.Empty(t, cfg.Logger.Level)
+	require.Zero(t, cfg.Middlewares)
+	require.False(t, cfg.Health.Enabled)
+	require.Empty(t, cfg.Health.Path)
+}
+
+// TestConfigLoadFromYAMLEmptyMiddlewareEntry documents what an empty entry
+// means: `recovery: {}` is present, so its own defaults apply, while entries
+// that are not listed stay disabled.
+func TestConfigLoadFromYAMLEmptyMiddlewareEntry(t *testing.T) {
+	var cfg Config
+	require.NoError(t, conf.LoadFromYAMLBytes([]byte("middlewares:\n  recovery: {}\n"), &cfg))
+
+	require.True(t, cfg.Middlewares.Recovery.Enabled)
+	require.False(t, cfg.Middlewares.RequestID.Enabled)
+	require.False(t, cfg.Middlewares.Log.Enabled)
+	require.False(t, cfg.Middlewares.MaxBytes.Enabled)
+}
+
+// TestConfigLoadFromYAMLNullSections covers a section key written with nothing
+// under it (`middlewares:` with every entry commented out): it must behave like
+// an omitted section instead of failing as a nil value.
+func TestConfigLoadFromYAMLNullSections(t *testing.T) {
+	var cfg Config
+	require.NoError(t, conf.LoadFromYAMLBytes([]byte("logger:\nmiddlewares:\nhealth:\n"), &cfg))
+	require.NoError(t, cfg.Validate())
+
+	require.Empty(t, cfg.Logger.Mode)
+	require.Zero(t, cfg.Middlewares)
+	require.False(t, cfg.Health.Enabled)
+}
+
+// TestConfigLoadFromYAMLHealthDefaultPath pins the health path default: the
+// section only needs `enabled: true`, and path falls back to /health.
+func TestConfigLoadFromYAMLHealthDefaultPath(t *testing.T) {
+	var cfg Config
+	require.NoError(t, conf.LoadFromYAMLBytes([]byte("health:\n  enabled: true\n"), &cfg))
+	require.NoError(t, cfg.Validate())
+
+	require.True(t, cfg.Health.Enabled)
+	require.Equal(t, "/health", cfg.Health.Path)
+}
+
+// TestConfigLoadFromYAMLWithoutRuntimeMiddleware pins the common case: entries
+// whose handler needs a runtime dependency (auth, rateLimit, breaker, signature)
+// can be left out of the file entirely. They stay disabled and Validate does not
+// ask for their parser/limiter/breaker/key.
+func TestConfigLoadFromYAMLWithoutRuntimeMiddleware(t *testing.T) {
+	const yamlConfig = `
+middlewares:
+  recovery: {}
+  log:
+    skipPaths: ["/healthz"]
+`
+	var cfg Config
+	require.NoError(t, conf.LoadFromYAMLBytes([]byte(yamlConfig), &cfg))
+	require.NoError(t, cfg.Validate())
+
+	require.True(t, cfg.Middlewares.Recovery.Enabled)
+	require.True(t, cfg.Middlewares.Log.Enabled)
+	require.False(t, cfg.Middlewares.Signature.Enabled)
+	require.Nil(t, cfg.Middlewares.Signature.Keys)
+	require.False(t, cfg.Middlewares.Auth.Enabled)
+	require.Nil(t, cfg.Middlewares.Auth.Parser)
+	require.False(t, cfg.Middlewares.RateLimit.Enabled)
+	require.False(t, cfg.Middlewares.Breaker.Enabled)
+}
+
+// TestConfigLoadFromYAMLTLSFiles pins that certFile/keyFile still bind without
+// an explicit key in their tags: the field name is matched case-insensitively.
+func TestConfigLoadFromYAMLTLSFiles(t *testing.T) {
+	var cfg Config
+	require.NoError(t, conf.LoadFromYAMLBytes([]byte("certFile: cert.pem\nkeyFile: key.pem\n"), &cfg))
+	require.NoError(t, cfg.Validate())
+
+	require.Equal(t, "cert.pem", cfg.CertFile)
+	require.Equal(t, "key.pem", cfg.KeyFile)
+}
 
 func TestDefaultConfigValues(t *testing.T) {
 	conf := DefaultConfig()

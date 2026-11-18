@@ -220,7 +220,50 @@ are runtime dependencies (`json:"-"`): set them programmatically after loading c
 `Config.Validate` rejects enabling one of them without its dependency.
 
 Tags are consumed by `core/conf` and `core/mapping`, so the same struct works for YAML/JSON files
-and environment expansion. `Config.Validate()` rejects an out-of-range port, half-configured TLS
+and environment expansion. Every config field carries an explicit key and `logger`, `middlewares`
+and `health` are all `optional`: leave a section out and it keeps its zero value. The nested
+`default=` tags apply as soon as the section exists, and each `middlewares` entry you do not list
+stays disabled. Omitting `logger` therefore means `NewServer` builds no server-owned logger and
+leaves the global logger untouched.
+
+```yaml
+logger:
+  serviceName: api
+  mode: file
+  path: /var/log/api
+  level: info
+
+health:
+  enabled: true
+  path: /healthz
+
+middlewares:
+  recovery:
+    enabled: true
+  requestID:
+    enabled: true
+  log:
+    enabled: true
+    skipPaths: ["/healthz"]
+  timeout:
+    enabled: true
+    timeout: 5s
+  maxBytes:
+    enabled: true
+    limit: 1048576
+```
+
+`middlewares` entries are typed as structs and tagged `optional` (`json:",optional"`, the key is the
+field name): an
+entry that is not listed keeps its zero value, so middleware you rely on must appear in the file.
+The handler's own `default=` tags apply as soon as the entry is present, so `timeout: {}` means
+"enabled with defaults". A section key written with nothing under it (`middlewares:` while every
+entry is commented out) is treated like an omitted section instead of failing as a nil value.
+`Health.Path` defaults to `/health` through its tag, so `health: {enabled: true}` is enough;
+`normalizeHealthPath` additionally accepts a relative path such as `healthz` and keeps `/health`
+as the fallback for configs built in code that leave the path empty.
+
+`Config.Validate()` rejects an out-of-range port, half-configured TLS
 and negative server timeouts. Middleware settings (invalid trusted proxies, negative limits, a
 missing parser, limiter, breaker or signature key) are only checked while that middleware is
 enabled, so disabled features do not force their configuration to be valid.
