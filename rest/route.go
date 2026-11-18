@@ -17,7 +17,7 @@ import (
 type Route struct {
 	Method  string
 	Path    string
-	Handler http.Handler
+	Handler http.HandlerFunc
 }
 
 // RouteOption customizes a single route before it is registered.
@@ -29,7 +29,7 @@ func WithRouteMiddleware(middleware ...chain.Middleware) RouteOption {
 		if route.Handler == nil || len(middleware) == 0 {
 			return
 		}
-		route.Handler = chain.New(middleware...).Then(route.Handler)
+		route.Handler = chain.New(middleware...).Then(route.Handler).ServeHTTP
 	}
 }
 
@@ -56,7 +56,7 @@ func applyRouteOptions(route Route, opts []RouteOption) Route {
 // AddRoute registers a route with the server after applying opts.
 func (s *Server) AddRoute(route Route, opts ...RouteOption) {
 	route = applyRouteOptions(route, opts)
-	s.Handle(route.Method, route.Path, route.Handler)
+	s.HandleFunc(route.Method, route.Path, route.Handler)
 }
 
 // AddRoutes registers multiple routes with the server.
@@ -121,16 +121,16 @@ func (g *RouteGroup) Use(middlewares ...chain.Middleware) {
 }
 
 // Handle registers a handler under the group's prefix.
-func (g *RouteGroup) Handle(method, routePath string, handler http.Handler) {
-	wrapped := g.wrap(handler)
-	routePath = router.JoinPath(g.prefix, routePath)
-	g.server.Handle(method, routePath, wrapped)
-	g.registerRootAlias(method, routePath, wrapped)
+func (g *RouteGroup) Handle(method, routePath string, handler http.HandlerFunc) {
+	g.HandleFunc(method, routePath, handler)
 }
 
 // HandleFunc registers a handler function under the group's prefix.
 func (g *RouteGroup) HandleFunc(method, routePath string, handler http.HandlerFunc) {
-	g.Handle(method, routePath, handler)
+	wrapped := g.wrap(handler)
+	routePath = router.JoinPath(g.prefix, routePath)
+	g.server.HandleFunc(method, routePath, wrapped)
+	g.registerRootAlias(method, routePath, wrapped)
 }
 
 // AddRoute registers a route under the group's prefix after applying opts.
@@ -146,7 +146,7 @@ func (g *RouteGroup) AddRoute(route Route, opts ...RouteOption) {
 // ("/api/" for Group("/api").Handle("/")). The mux pattern "{$}" keeps the
 // match exact, so unknown paths below the prefix still return 404 instead of
 // falling through to the root handler.
-func (g *RouteGroup) registerRootAlias(method, routePath string, handler http.Handler) {
+func (g *RouteGroup) registerRootAlias(method, routePath string, handler http.HandlerFunc) {
 	prefix := strings.TrimSuffix(g.prefix, "/")
 	if prefix == "" || routePath != prefix {
 		return
@@ -161,12 +161,12 @@ func (g *RouteGroup) AddRoutes(routes ...Route) {
 	}
 }
 
-func (g *RouteGroup) wrap(handler http.Handler) http.Handler {
+func (g *RouteGroup) wrap(handler http.HandlerFunc) http.HandlerFunc {
 	middlewares := g.middlewareChain()
 	if handler == nil || len(middlewares) == 0 {
 		return handler
 	}
-	return chain.New(middlewares...).Then(handler)
+	return chain.New(middlewares...).Then(handler).ServeHTTP
 }
 
 // middlewareChain resolves inherited middleware at registration time so a

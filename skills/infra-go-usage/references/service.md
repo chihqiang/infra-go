@@ -70,9 +70,9 @@ func main() {
     }
     server.AddRoute(rest.Route{
         Method: "GET", Path: "/ping",
-        Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        Handler: func(w http.ResponseWriter, r *http.Request) {
             _ = rest.OkJSON(w, "pong")
-        }),
+        },
     })
 
     // Register adds *rest.Server and the configured trace agent service; plain

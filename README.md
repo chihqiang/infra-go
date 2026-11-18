@@ -80,14 +80,14 @@ func main() {
     server.Group("/api").AddRoute(rest.Route{
         Method: http.MethodPost,
         Path:   "/hello",
-        Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        Handler: func(w http.ResponseWriter, r *http.Request) {
             var req helloRequest
             if err := rest.Bind(r, &req); err != nil {
                 _ = rest.ErrorJSON(w, err) // binding failures map to 400/415 automatically
                 return
             }
             _ = rest.OkJSON(w, map[string]string{"msg": "hello, " + req.Name})
-        }),
+        },
     })
 
     // 3. Lifecycle orchestration: Register adds the HTTP server, logger sync and
