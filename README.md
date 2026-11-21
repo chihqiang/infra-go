@@ -8,12 +8,25 @@
 [![GitHub license](https://img.shields.io/github/license/chihqiang/ten-go)](https://github.com/chihqiang/ten-go/blob/main/LICENSE)
 
 <p>
- ten-go is an efficient Go infrastructure wrapper library for building services, bundling
- configuration, logging, database, Redis, HTTP, object storage and utility capabilities that
- are pluggable, independently importable and production-ready.
+ ten-go is a Go web framework with batteries included: routing, middleware, auth and WebSocket,
+ plus pluggable infrastructure for configuration, logging, database, Redis, cache, storage and
+ task queues.
 </p>
 
 </div>
+
+## Why ten-go?
+
+`ten` is the number 10, and 10 is written with the only two digits a computer ever uses: `1`
+and `0`. That is the whole idea behind this library — services should be assembled from small,
+predictable parts rather than one opaque block:
+
+| Symbol | What it stands for here |
+|--------|-------------------------|
+| `1` | the modules that are switched on: the config, logger, database, Redis, HTTP and WebSocket pieces a service actually needs |
+| `0` | the parts that stay out: every module is optional, so unused capabilities add no weight |
+
+The `-go` suffix simply says what it is written in.
 
 ## Quick start
 
