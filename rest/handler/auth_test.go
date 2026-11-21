@@ -78,6 +78,31 @@ func TestNewAuthHandlerPanicsOnInvalidTokenConfig(t *testing.T) {
 	NewAuthHandler(AuthConfig{Enabled: true, Config: token.Config{Secret: "short"}})
 }
 
+func TestAuthHandlerSkipsConfiguredPaths(t *testing.T) {
+	parser := newTokenParser(t)
+	handlerFn := NewAuthHandler(AuthConfig{
+		Enabled:   true,
+		Parser:    parser,
+		SkipPaths: []string{"/health", "/public/*"},
+	}).Handle(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	for _, path := range []string{"/health", "/public/info"} {
+		recorder := httptest.NewRecorder()
+		handlerFn.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != http.StatusNoContent {
+			t.Errorf("%s: status = %d, want 204", path, recorder.Code)
+		}
+	}
+
+	protected := httptest.NewRecorder()
+	handlerFn.ServeHTTP(protected, httptest.NewRequest(http.MethodGet, "/private", nil))
+	if protected.Code != http.StatusUnauthorized {
+		t.Fatalf("protected status = %d, want 401", protected.Code)
+	}
+}
+
 func TestAuthorizeRejectsBadHeaders(t *testing.T) {
 	parser := newTokenParser(t)
 	called := false

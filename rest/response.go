@@ -178,11 +178,15 @@ func wrapBaseResponse(ctx context.Context, w http.ResponseWriter, v any) BaseRes
 		response = BaseResponse[any]{Code: int(grpcStatus.Code()), Msg: grpcStatus.Message()}
 	case error:
 		var codeMsg *CodeMsg
+		var statusErr *StatusError
 		status := StatusOf(data)
 		switch {
 		case errors.As(data, &codeMsg):
 			// Business errors are intentional and retain their code and message.
 			response = BaseResponse[any]{Code: codeMsg.Code, Msg: codeMsg.Msg}
+		case errors.As(data, &statusErr) && statusErr != nil:
+			// An explicit status error keeps its message, including 5xx.
+			response = BaseResponse[any]{Code: BusinessCodeError, Msg: statusErr.Error()}
 		case status >= http.StatusInternalServerError:
 			// Hide internal details of unexpected 5xx errors.
 			response = BaseResponse[any]{Code: BusinessCodeError, Msg: http.StatusText(status)}

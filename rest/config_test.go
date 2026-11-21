@@ -149,10 +149,12 @@ auth:
   enabled: true
   secret: a-sufficiently-long-secret
   expire: 1h
+  skipPaths: ["/health", "/public/*"]
 `), &cfg))
 	require.True(t, cfg.Auth.Enabled)
 	require.Equal(t, "a-sufficiently-long-secret", cfg.Auth.Secret)
 	require.Equal(t, time.Hour, cfg.Auth.Expire)
+	require.Equal(t, []string{"/health", "/public/*"}, cfg.Auth.SkipPaths)
 	require.Nil(t, cfg.Auth.Parser)
 
 	parser, err := token.NewParser(token.Config{Secret: cfg.Auth.Secret})
