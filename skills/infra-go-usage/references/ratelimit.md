@@ -84,21 +84,18 @@ if chain.Allow() { /* both limiters passed */ }
 ## HTTP rate limiting middleware
 
 `rest/handler.NewRateLimitHandler(RateLimitConfig{Enabled: true, Limiter: limiter})` wraps any
-`Limiter` from this package. The server can mount it from its middleware config, which keeps the
-dependency in one place:
+`Limiter` from this package. Mount it explicitly for server-wide or scoped limiting:
 
 ```go
 import resthandler "github.com/chihqiang/infra-go/rest/handler"
 
-conf := rest.DefaultConfig()
-conf.Middlewares.RateLimit = resthandler.RateLimitConfig{
-    Enabled: true,
-    Limiter: ratelimit.NewTokenBucket(100, 200),
-}
-server, _ := rest.NewServer(conf)
+server, _ := rest.NewServer(rest.DefaultConfig(),
+    rest.WithRateLimit(ratelimit.NewTokenBucket(100, 200)),
+)
 
-// or mount it manually to control ordering
-server.Use(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
+// Or scope it to a route group:
+api := server.Group("/api")
+api.Use(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
 	Enabled: true,
 	Limiter: ratelimit.NewSlidingWindow(10, time.Minute),
 }).Handle)

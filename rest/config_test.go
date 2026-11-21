@@ -115,11 +115,9 @@ func TestConfigLoadFromYAMLHealthDefaultPath(t *testing.T) {
 	require.Equal(t, "/health", cfg.Health.Path)
 }
 
-// TestConfigLoadFromYAMLWithoutRuntimeMiddleware pins the common case: entries
-// whose handler needs a runtime dependency (auth, rateLimit, breaker, signature)
-// can be left out of the file entirely. They stay disabled and Validate does not
-// ask for their parser/limiter/breaker/key.
-func TestConfigLoadFromYAMLWithoutRuntimeMiddleware(t *testing.T) {
+// TestConfigLoadFromYAMLOmittedMiddlewareEntries pins that unlisted entries
+// remain at their zero values when loading middleware configuration.
+func TestConfigLoadFromYAMLOmittedMiddlewareEntries(t *testing.T) {
 	const yamlConfig = `
 middlewares:
   recovery: {}
@@ -132,12 +130,6 @@ middlewares:
 
 	require.True(t, cfg.Middlewares.Recovery.Enabled)
 	require.True(t, cfg.Middlewares.Log.Enabled)
-	require.False(t, cfg.Middlewares.Signature.Enabled)
-	require.Nil(t, cfg.Middlewares.Signature.Keys)
-	require.False(t, cfg.Middlewares.Auth.Enabled)
-	require.Nil(t, cfg.Middlewares.Auth.Parser)
-	require.False(t, cfg.Middlewares.RateLimit.Enabled)
-	require.False(t, cfg.Middlewares.Breaker.Enabled)
 }
 
 // TestConfigLoadFromYAMLTLSFiles pins that certFile/keyFile still bind without
@@ -182,25 +174,6 @@ func TestConfigValidateRejectsBadValues(t *testing.T) {
 	negativeMiddlewareTimeout := DefaultConfig()
 	negativeMiddlewareTimeout.Middlewares.Timeout = resthandler.TimeoutConfig{Enabled: true, Timeout: -time.Second}
 
-	authWithoutParser := DefaultConfig()
-	authWithoutParser.Middlewares.Auth = resthandler.AuthConfig{Enabled: true}
-
-	rateLimitWithoutLimiter := DefaultConfig()
-	rateLimitWithoutLimiter.Middlewares.RateLimit = resthandler.RateLimitConfig{Enabled: true}
-
-	breakerWithoutBreaker := DefaultConfig()
-	breakerWithoutBreaker.Middlewares.Breaker = resthandler.BreakerConfig{Enabled: true}
-
-	signatureWithoutKeys := DefaultConfig()
-	signatureWithoutKeys.Middlewares.Signature = resthandler.SignatureConfig{Enabled: true}
-
-	negativeSignatureBody := DefaultConfig()
-	negativeSignatureBody.Middlewares.Signature = resthandler.SignatureConfig{
-		Enabled: true,
-		Keys:    [][]byte{[]byte("signing-key")},
-		MaxBody: -1,
-	}
-
 	tests := []struct {
 		name string
 		conf Config
@@ -210,11 +183,6 @@ func TestConfigValidateRejectsBadValues(t *testing.T) {
 		{name: "negative body limit", conf: negativeBody},
 		{name: "negative max conns", conf: negativeConns},
 		{name: "negative middleware timeout", conf: negativeMiddlewareTimeout},
-		{name: "auth without parser", conf: authWithoutParser},
-		{name: "rate limit without limiter", conf: rateLimitWithoutLimiter},
-		{name: "breaker without breaker", conf: breakerWithoutBreaker},
-		{name: "signature without keys", conf: signatureWithoutKeys},
-		{name: "negative signature body limit", conf: negativeSignatureBody},
 		{name: "negative timeout", conf: Config{Port: 80, ReadTimeout: -time.Second}},
 	}
 
@@ -248,10 +216,6 @@ func TestConfigValidateIgnoresDisabledMiddlewareSettings(t *testing.T) {
 	conf.Middlewares.MaxConns = resthandler.MaxConnsConfig{Enabled: false, Limit: -1}
 	conf.Middlewares.Timeout = resthandler.TimeoutConfig{Enabled: false, Timeout: -time.Second}
 	conf.Middlewares.MaxBytes = resthandler.MaxBytesConfig{Enabled: false, Limit: -1}
-	conf.Middlewares.Auth = resthandler.AuthConfig{Enabled: false}
-	conf.Middlewares.RateLimit = resthandler.RateLimitConfig{Enabled: false}
-	conf.Middlewares.Breaker = resthandler.BreakerConfig{Enabled: false}
-	conf.Middlewares.Signature = resthandler.SignatureConfig{Enabled: false, MaxBody: -1}
 
 	if err := conf.Validate(); err != nil {
 		t.Fatalf("disabled middleware settings must not be validated: %v", err)

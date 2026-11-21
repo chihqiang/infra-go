@@ -43,6 +43,12 @@ func WithRouteAuth(parser *token.Parser) RouteOption {
 	}).Handle)
 }
 
+// WithRouteSignature requires a valid HMAC signature for this route.
+func WithRouteSignature(config handler.SignatureConfig) RouteOption {
+	config.Enabled = true
+	return WithRouteMiddleware(handler.NewSignatureHandler(config).Handle)
+}
+
 func applyRouteOptions(route Route, opts []RouteOption) Route {
 	for _, opt := range opts {
 		if opt == nil {

@@ -72,10 +72,6 @@ func NewServer(conf Config, opts ...Option) (*Server, error) {
 		shutdownTimeout: shutdownTimeout,
 		addr:            net.JoinHostPort(conf.Host, strconv.Itoa(conf.Port)),
 	}
-	if conf.Middlewares.Breaker.Enabled {
-		server.outerMiddlewares = append(server.outerMiddlewares,
-			resthandler.NewBreakerHandler(conf.Middlewares.Breaker).Handle)
-	}
 	// Apply options before building the middleware chain: WithLogger must reach
 	// the access-log handler, and WithMiddleware/WithSignature/WithRateLimit
 	// append middleware that has to run after the config-driven built-ins.
@@ -128,10 +124,10 @@ func NewServer(conf Config, opts ...Option) (*Server, error) {
 
 // buildMiddlewares assembles the server chain in execution order: the first
 // entry wraps all later ones. s.frontMiddlewares holds the observability
-// middleware; s.tailMiddlewares starts with Timeout, so middlewares inserted
-// between them (the breaker) observe timeout responses without running before
-// request IDs and logs. Middleware appended by options (WithMiddleware,
-// WithRateLimit, WithSignature) is kept after the config-driven tail.
+// middleware. s.outerMiddlewares (including WithBreaker) follow observability
+// middleware and wrap the tail/routes; the tail starts with Timeout. Middleware
+// appended by options (WithMiddleware, WithRateLimit, WithSignature) runs after
+// the config-driven tail.
 func (s *Server) buildMiddlewares(conf Config) error {
 	front := []chain.Middleware{
 		resthandler.NewRecoveryHandler(conf.Middlewares.Recovery).Handle,
@@ -146,19 +142,16 @@ func (s *Server) buildMiddlewares(conf Config) error {
 	front = append(front,
 		logHandler.Handle,
 		resthandler.NewMaxConnsHandler(conf.Middlewares.MaxConns).Handle,
-		resthandler.NewRateLimitHandler(conf.Middlewares.RateLimit).Handle,
-		resthandler.NewAuthHandler(conf.Middlewares.Auth).Handle,
 	)
 
 	// Gunzip must run before MaxBytes: the limit has to apply to the
 	// decompressed payload, otherwise a small gzip body can expand without
-	// bound (decompression bomb). Signature runs after MaxBytes so it sees the
-	// decompressed, already bounded body.
+	// bound (decompression bomb). Explicitly mounted signature middleware runs
+	// after MaxBytes so it sees the decompressed, already bounded body.
 	tail := []chain.Middleware{
 		resthandler.NewTimeoutHandler(conf.Middlewares.Timeout).Handle,
 		resthandler.NewGunzipHandler(conf.Middlewares.Gunzip).Handle,
 		resthandler.NewMaxBytesHandler(conf.Middlewares.MaxBytes).Handle,
-		resthandler.NewSignatureHandler(conf.Middlewares.Signature).Handle,
 	}
 	// Keep middleware appended by options behind the config-driven built-ins.
 	tail = append(tail, s.tailMiddlewares...)

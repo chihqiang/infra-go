@@ -125,13 +125,9 @@ type MiddlewaresConf struct {
     Trace     resthandler.TraceConfig
     Log       resthandler.LogConfig
     MaxConns  resthandler.MaxConnsConfig
-    Auth      resthandler.AuthConfig
-    RateLimit resthandler.RateLimitConfig
-    Breaker   resthandler.BreakerConfig
     Timeout   resthandler.TimeoutConfig
     Gunzip    resthandler.GunzipConfig
     MaxBytes  resthandler.MaxBytesConfig
-    Signature resthandler.SignatureConfig
 }
 ```
 
@@ -208,16 +204,14 @@ Middlewares: rest.MiddlewaresConf{
         IgnorePaths: []string{"/health*"},
     },
     MaxBytes: resthandler.MaxBytesConfig{Enabled: true, Limit: 1 << 20},
-    Signature: resthandler.SignatureConfig{
-        Enabled: true,
-        Keys:    [][]byte{signingKey},
-    },
 },
 ```
 
-`Auth`, `RateLimit` and `Breaker` also have `Enabled` switches, but their parser/limiter/breaker
-are runtime dependencies (`json:"-"`): set them programmatically after loading config.
-`Config.Validate` rejects enabling one of them without its dependency.
+`Auth`, `Signature`, `RateLimit` and `Breaker` are intentionally not part of
+`MiddlewaresConf`. Use `WithRouteAuth` / `WithRouteSignature` or group middleware to scope auth
+and signatures. Rate limiting and breakers can be explicitly mounted server-wide with
+`WithRateLimit` / `WithBreaker`, or scoped with their handlers via `Group.Use` /
+`WithRouteMiddleware`.
 
 Tags are consumed by `core/conf` and `core/mapping`, so the same struct works for YAML/JSON files
 and environment expansion. Every config field carries an explicit key and `logger`, `middlewares`
@@ -264,9 +258,9 @@ entry is commented out) is treated like an omitted section instead of failing as
 as the fallback for configs built in code that leave the path empty.
 
 `Config.Validate()` rejects an out-of-range port, half-configured TLS
-and negative server timeouts. Middleware settings (invalid trusted proxies, negative limits, a
-missing parser, limiter, breaker or signature key) are only checked while that middleware is
-enabled, so disabled features do not force their configuration to be valid.
+and negative server timeouts. Configured middleware settings (invalid trusted proxies and
+negative limits) are only checked while that middleware is enabled, so disabled features do not
+force their configuration to be valid.
 
 `Middlewares.Log.TrustedProxies` accepts IPs and CIDR ranges. When it is set, the access log only
 honours `X-Forwarded-For` / `X-Real-IP` if the direct peer is in the list, and walks the forwarded
@@ -275,13 +269,15 @@ address is used. `ClientIP` returns the direct peer as well; `ClientIPFromHeader
 trust-any-peer behaviour, and `ClientIPTrusted` / `ParseTrustedProxies` expose the proxy-aware
 logic for application code.
 
-Middleware execution order is fixed by the server:
+The server's configured middleware execution order is fixed:
 
 ```text
-Recover → RequestID → Trace → Log → MaxConns → RateLimit → Auth → [Breaker] → Timeout → Gunzip → MaxBytes → Signature → Use(...) → route
+Recover → RequestID → Trace → Log → MaxConns → Timeout → Gunzip → MaxBytes → Use(...) → route
 ```
 
-`Gunzip` runs before `MaxBytes` so the body limit applies to the decompressed payload; `Signature` runs after `MaxBytes` so it sees the bounded, decompressed body.
+Authentication, signatures, rate limits and breakers are only applied where explicitly mounted.
+A server-level `WithSignature` handler runs after `MaxBytes`, so it sees the bounded,
+decompressed body.
 
 ### Request signing
 
@@ -371,12 +367,21 @@ server.AddRoute(rest.Route{
     Path:    "/profile",
     Handler: profileHandler,
 }, rest.WithRouteAuth(parser))
+
+server.AddRoute(rest.Route{
+    Method:  http.MethodPost,
+    Path:    "/payments",
+    Handler: paymentHandler,
+}, rest.WithRouteSignature(resthandler.SignatureConfig{
+    Keys: [][]byte{signingKey},
+}))
 ```
 
 | Option | Effect |
 |--------|--------|
 | `WithRouteMiddleware(mw ...chain.Middleware)` | Wrap only this route handler |
 | `WithRouteAuth(parser *token.Parser)` | Require a valid bearer token; custom config via `WithRouteMiddleware(handler.NewAuthHandler(...).Handle)` |
+| `WithRouteSignature(config handler.SignatureConfig)` | Require a valid HMAC signature on this route |
 
 ## Responses
 
