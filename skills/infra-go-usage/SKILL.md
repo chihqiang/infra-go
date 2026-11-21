@@ -27,7 +27,7 @@ How to use each `github.com/chihqiang/infra-go` module correctly in a business p
 | HTTP server / parameter binding / JSON responses | `rest` | `rest.NewServer` · `rest.Bind` · `rest.OkJSON` |
 | Built-in HTTP middleware | `rest/handler` | `resthandler.NewRecoveryHandler(...).Handle` · `NewTimeoutHandler` · `NewLogHandler` · `NewRateLimitHandler` … (struct + `Config` + `Handle`) |
 | Custom / third-party middleware | `rest` | `server.Use(chain.Middleware)` |
-| API authentication | `token` | `token.NewParser` + `rest.WithRouteAuth(parser)` for one route, `rest.WithAuth(handler.AuthConfig{Parser: parser})` server-wide (or `resthandler.NewAuthHandler`) |
+| API authentication | `token` | `rest.WithRouteAuth(parser)` for one route; server-wide `rest.WithAuth(handler.AuthConfig{...})` (embeds `token.Config`, so `secret` can come from YAML and the parser is built automatically) |
 | API rate limiting (limiters) | `ratelimit` | `ratelimit.NewTokenBucket` / `NewRedisTokenBucket`; HTTP middleware `resthandler.NewRateLimitHandler` |
 | Downstream protection (fail fast via breaker) | `breaker` | `breaker.NewBreaker` or `breaker.Do`; HTTP middleware `resthandler.NewBreakerHandler` |
 | Failure retries | `retry` | `retry.Do` |

@@ -214,6 +214,31 @@ Middlewares: rest.MiddlewaresConf{
 mounted server-wide with `WithRateLimit` / `WithBreaker`, or scoped with their handlers via
 `Group.Use` / `WithRouteMiddleware`.
 
+`handler.AuthConfig` embeds `token.Config`, so the secret can be loaded from the config file and
+`WithAuth` builds the parser itself — `Parser` (`json:"-"`) never has to be serialised:
+
+```go
+type Config struct {
+    rest.Config
+    Auth resthandler.AuthConfig `json:"auth"`
+}
+
+var cfg Config
+conf.MustLoad("config.yaml", &cfg, conf.UseEnv())
+server, _ := rest.NewServer(cfg.Config, rest.WithAuth(cfg.Auth))
+```
+
+```yaml
+auth:
+  enabled: true
+  secret: ${JWT_SECRET}   # flattened from token.Config
+  expire: 24h
+  realm: api
+```
+
+The embedded `token.Config` is ignored when `Parser` is set explicitly; route-level auth with a
+custom realm still uses `WithRouteMiddleware(handler.NewAuthHandler(cfg).Handle)`.
+
 Tags are consumed by `core/conf` and `core/mapping`, so the same struct works for YAML/JSON files
 and environment expansion. Every config field carries an explicit key and `logger`, `middlewares`
 and `health` are all `optional`: leave a section out and it keeps its zero value. The nested
@@ -352,7 +377,7 @@ server, _ := rest.NewServer(conf,
 | `WithCORS(origins ...string)` | Allow the given origins (all origins when empty, no credentials). Entries with a scheme match exactly; a scheme-less host also allows its subdomains |
 | `WithCORSHeaders(headers ...string)` | Append allowed request headers; it only configures them, CORS still has to be enabled with `WithCORS` / `WithCustomCORS` |
 | `WithCustomCORS(headerFn, notAllowedFn, origins...)` | Customise headers and the rejected-request body |
-| `WithAuth(cfg handler.AuthConfig)` | Require a valid bearer token on every request; `Enabled` is implied, `Parser` is required, and `Realm` / `Callback` customise rejections |
+| `WithAuth(cfg handler.AuthConfig)` | Require a valid bearer token on every request; `Enabled` is implied and the parser is built from the embedded `token.Config` when `Parser` is nil. `Realm` / `Callback` customise rejections |
 | `WithSignature(cfg handler.SignatureConfig)` | Require an HMAC signature on every request |
 | `WithRateLimit(limiter ratelimit.Limiter)` | Apply a rate limiter to every request |
 | `WithBreaker(br breaker.Breaker)` | Wrap the server with a circuit breaker |
@@ -579,7 +604,7 @@ server.Use(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
 | `NewRateLimitHandler(RateLimitConfig)` / `NewRateLimitPerSecondHandler(rate, burst)` | 429 via `core/ratelimit` |
 | `NewBreakerHandler(BreakerConfig)` | Circuit breaker; 5xx responses count as failures → 503 when open |
 | `NewSignatureHandler(SignatureConfig)` | HMAC check over `METHOD / escaped-path / raw-query / timestamp / body` with key rotation and a timestamp TTL (zero uses the 5-minute default, negative disables it); the timestamp is checked before the body is read, and `MaxBody` caps the body read for verification (zero is unlimited) |
-| `NewAuthHandler(AuthConfig)` | Bearer token check; RFC 6750 challenge (`invalid_request` → 400, `invalid_token` → 401), missing parser → 500, optional `Callback` |
+| `NewAuthHandler(AuthConfig)` | Bearer token check; RFC 6750 challenge (`invalid_request` → 400, `invalid_token` → 401), missing parser → 500, optional `Callback`. Builds the parser from the embedded `token.Config` when enabled with a secret |
 
 Default authorization failures write 400/401/500 with an RFC 6750 `WWW-Authenticate` challenge
 and no body. A missing or unsupported scheme (`Basic ...`, `Bearer2 ...`) gets a bare 401 challenge;

@@ -46,6 +46,38 @@ func TestAuthorizeStoresClaims(t *testing.T) {
 	}
 }
 
+func TestNewAuthHandlerBuildsParserFromTokenConfig(t *testing.T) {
+	parser := newTokenParser(t)
+	signed, err := parser.Generate("user-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	config := AuthConfig{Enabled: true}
+	config.Secret = "a-sufficiently-long-secret"
+	handlerFn := NewAuthHandler(config).Handle(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set(AuthorizationHeader, "Bearer "+signed)
+	recorder := httptest.NewRecorder()
+	handlerFn.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", recorder.Code)
+	}
+}
+
+func TestNewAuthHandlerPanicsOnInvalidTokenConfig(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("invalid token config should panic")
+		}
+	}()
+	NewAuthHandler(AuthConfig{Enabled: true, Config: token.Config{Secret: "short"}})
+}
+
 func TestAuthorizeRejectsBadHeaders(t *testing.T) {
 	parser := newTokenParser(t)
 	called := false

@@ -165,10 +165,10 @@ func TestWithAuthProtectsEveryRoute(t *testing.T) {
 	}
 }
 
-func TestWithAuthRequiresParser(t *testing.T) {
+func TestWithAuthRequiresParserOrSecret(t *testing.T) {
 	defer func() {
 		if recover() == nil {
-			t.Fatal("WithAuth without a parser should panic")
+			t.Fatal("WithAuth without a parser or secret should panic")
 		}
 	}()
 	WithAuth(handler.AuthConfig{})

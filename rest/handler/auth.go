@@ -33,9 +33,14 @@ var (
 type UnauthorizedCallback func(w http.ResponseWriter, r *http.Request, err error)
 
 // AuthConfig configures AuthHandler.
+//
+// token.Config is embedded so configuration files can set the secret directly
+// (core/conf and core/mapping flatten embedded structs). When Parser is nil and
+// the embedded config carries a secret, NewAuthHandler builds the parser.
 type AuthConfig struct {
 	Enabled bool `json:",optional"`
-	// Parser verifies bearer tokens; it is required when Enabled is true.
+	token.Config
+	// Parser verifies bearer tokens; it takes precedence over token.Config.
 	Parser *token.Parser `json:"-"`
 	// Realm is the WWW-Authenticate realm; it defaults to "api".
 	Realm string `json:",optional"`
@@ -48,8 +53,18 @@ type AuthHandler struct {
 	config AuthConfig
 }
 
-// NewAuthHandler creates an AuthHandler.
+// NewAuthHandler creates an AuthHandler. When the config is enabled without a
+// Parser, the parser is built from the embedded token.Config, so the secret can
+// come from a configuration file. An invalid token config panics at startup,
+// mirroring NewSignatureHandler.
 func NewAuthHandler(config AuthConfig) *AuthHandler {
+	if config.Enabled && config.Parser == nil && config.Secret != "" {
+		parser, err := token.NewParser(config.Config)
+		if err != nil {
+			panic("handler: invalid auth token config: " + err.Error())
+		}
+		config.Parser = parser
+	}
 	return &AuthHandler{config: config}
 }
 
