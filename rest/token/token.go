@@ -14,12 +14,9 @@ type Parser struct {
 	conf Config
 }
 
-// NewParser validates conf and returns a token parser.
-func NewParser(conf Config) (*Parser, error) {
-	if err := conf.Validate(); err != nil {
-		return nil, err
-	}
-	return &Parser{conf: conf}, nil
+// NewParser returns a token parser for conf.
+func NewParser(conf Config) *Parser {
+	return &Parser{conf: conf}
 }
 
 // Generate signs claims with the current secret. The caller owns every claim,

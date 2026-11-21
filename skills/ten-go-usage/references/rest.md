@@ -7,7 +7,7 @@ helpers, JWT based authentication and a set of ready-to-use handlers.
 
 - **Routing**: Go 1.22 method-aware patterns (`GET /users/{id}`), nested groups, group middleware
 - **Middleware chain**: recovery, request ID, tracing, access log, concurrency limit, timeout,
-  body limit, gzip, circuit breaker, rate limit, body signature, JWT auth, CORS
+  body limit, gzip, circuit breaker, rate limit, JWT auth, CORS
 - **Binding**: JSON / XML / form / multipart / query / header / path with self-validation
 - **Responses**: one `BaseResponse` (`code`/`msg`/`data`/`request_id`) envelope for success and errors,
   JSON/XML/HTML writers, error-to-status mapping
@@ -184,10 +184,10 @@ Middlewares: rest.MiddlewaresConf{
 },
 ```
 
-`Auth`, `Signature`, `RateLimit` and `Breaker` are intentionally not part of
-`MiddlewaresConf`. Auth and signatures can be scaled from a single route up to the whole server:
-`WithRouteAuth` / `WithRouteSignature` protect one route, group middleware covers a subtree, and
-`WithAuth` / `WithSignature` opt in server-wide. Rate limiting and breakers can be explicitly
+`Auth`, `RateLimit` and `Breaker` are intentionally not part of
+`MiddlewaresConf`. Auth can be scaled from a single route up to the whole server:
+`WithRouteAuth` protects one route, group middleware covers a subtree, and
+`WithAuth` opts in server-wide. Rate limiting and breakers can be explicitly
 mounted server-wide with `WithRateLimit` / `WithBreaker`, or scoped with their handlers via
 `Group.Use` / `WithRouteMiddleware`.
 
@@ -219,15 +219,31 @@ auth:
   skipPaths: ["/health", "/public/*"]
 ```
 
+The default extractor is `handler.BearerToken` (RFC 6750 `Authorization: Bearer <token>`). When
+the token arrives elsewhere, set `AuthConfig.TokenExtractor` or pass `WithTokenExtractor`; the
+extractor returns the raw token, and any non-nil error rejects the request with 401
+(`token.ErrMissingToken` is the conventional "no credentials" value):
+
+```go
+server, _ := rest.NewServer(cfg.Config, rest.WithAuth(cfg.Auth.Secret,
+    resthandler.WithTokenExtractor(func(r *http.Request) (string, error) {
+        if value := r.URL.Query().Get("access_token"); value != "" {
+            return value, nil
+        }
+        return "", token.ErrMissingToken
+    }),
+))
+```
+
 `handler.AuthOption` values apply on top of the config, so they work with `WithAuth` and
 `NewAuthHandler` alike:
 
 | Auth option | Effect |
 |-------------|--------|
 | `WithPrevSecret(secret)` | Also accept tokens signed with the previous secret (key rotation) |
-| `WithAuthRealm(realm)` | `WWW-Authenticate` realm, default `api` |
 | `WithAuthSkipPaths(paths...)` | Paths that bypass auth (exact, trailing-`*` prefix or glob) |
 | `WithUnauthorizedCallback(fn)` | Custom rejection body/headers; the default status applies when unset |
+| `WithTokenExtractor(fn)` | Replace the default `BearerToken` extractor to read tokens from a query parameter, cookie or custom header (`nil` restores the default) |
 
 `skipPaths` (and the access-log/trace equivalents) are matched against the cleaned request path:
 `.`/`..` segments and duplicate slashes are removed first, matching ServeMux routing. A request
@@ -295,28 +311,8 @@ The server's configured middleware execution order is fixed:
 Recover → RequestID → Trace → Log → MaxConns → Timeout → Gunzip → MaxBytes → Use(...) → route
 ```
 
-Authentication, signatures, rate limits and breakers are only applied where explicitly mounted.
-A server-level `WithSignature` handler runs after `MaxBytes`, so it sees the bounded,
-decompressed body.
+Authentication, rate limits and breakers are only applied where explicitly mounted.
 
-### Request signing
-
-The signed payload binds a signature to one endpoint:
-
-```text
-METHOD \n escaped-path \n raw-query \n timestamp \n body
-```
-
-Clients sign with the same request object they send:
-
-```go
-timestamp := time.Now().Unix()
-req.Header.Set(resthandler.HeaderTimestamp, strconv.FormatInt(timestamp, 10))
-req.Header.Set(resthandler.HeaderSignature, resthandler.SignRequest(key, timestamp, req, body))
-```
-
-`TTL` defaults to 5 minutes when omitted; a negative value disables freshness checking
-explicitly (replay protection is lost). Servers verify with `X-Signature` / `X-Signature-Timestamp`.
 CORS wraps the whole chain, so 404/405 responses carry CORS headers too.
 
 ## Server
@@ -371,8 +367,7 @@ server, _ := rest.NewServer(conf,
 | `WithCORS(origins ...string)` | Allow the given origins (all origins when empty, no credentials). Entries with a scheme match exactly; a scheme-less host also allows its subdomains |
 | `WithCORSHeaders(headers ...string)` | Append allowed request headers; it only configures them, CORS still has to be enabled with `WithCORS` / `WithCustomCORS` |
 | `WithCustomCORS(headerFn, notAllowedFn, origins...)` | Customise headers and the rejected-request body |
-| `WithAuth(secret string, opts ...handler.AuthOption)` | Require a bearer token signed with `secret` on every request; panics when the secret is missing or shorter than 8 characters. `AuthOption` adds a previous secret, realm, skip paths and a rejection callback |
-| `WithSignature(keys [][]byte, opts ...handler.SignatureOption)` | Require an HMAC signature on every request; several keys allow rotation, and `WithSignatureTTL` / `WithSignatureMaxBody` tune verification |
+| `WithAuth(secret string, opts ...handler.AuthOption)` | Require a bearer token signed with `secret` on every request. `AuthOption` adds a previous secret, skip paths, a rejection callback and a token extractor |
 | `WithRateLimit(limiter ratelimit.Limiter)` | Apply a rate limiter to every request |
 | `WithBreaker(br breaker.Breaker)` | Wrap the server with a circuit breaker |
 
@@ -389,19 +384,12 @@ server.AddRoute(rest.Route{
     Path:    "/profile",
     Handler: profileHandler,
 }, rest.WithRouteAuth("a-long-enough-secret"))
-
-server.AddRoute(rest.Route{
-    Method:  http.MethodPost,
-    Path:    "/payments",
-    Handler: paymentHandler,
-}, rest.WithRouteSignature([][]byte{signingKey}))
 ```
 
 | Option | Effect |
 |--------|--------|
 | `WithRouteMiddleware(mw ...chain.Middleware)` | Wrap only this route handler |
 | `WithRouteAuth(secret string, opts ...handler.AuthOption)` | Require a bearer token signed with `secret`, with the same options as `WithAuth` |
-| `WithRouteSignature(keys [][]byte, opts ...handler.SignatureOption)` | Require a valid HMAC signature on this route |
 
 ## Responses
 
@@ -434,9 +422,9 @@ context for call-site symmetry, but the writers never log, so log returned error
 echo the message for 4xx. A `StatusError` is an explicit choice, so its message is kept
 for 5xx too.
 
-Middleware-generated failures (auth, rate/concurrency limits, timeout, breaker, signature, body
+Middleware-generated failures (auth, rate/concurrency limits, timeout, breaker, body
 limit, recovery and gunzip) only set the HTTP status and protocol headers
-(`Retry-After`, `WWW-Authenticate`, `Connection`) and write no JSON body, matching go-zero's
+(`Retry-After`, `Connection`) and write no JSON body, matching go-zero's
 handler convention. Use `rest.ErrorJSON` or `rest.ErrorXML` in the business handler when an error envelope is needed.
 
 Status resolution order in `StatusOf`:
@@ -598,19 +586,17 @@ server.Use(resthandler.NewRateLimitHandler(ratelimit.NewTokenBucket(100, 200)).H
 | `NewGunzipHandler(GunzipConfig)` | Transparently decompresses `Content-Encoding: gzip` |
 | `NewRateLimitHandler(limiter)` / `NewRateLimitPerSecondHandler(rate, burst)` | 429 via `core/ratelimit`; a nil limiter panics at construction |
 | `NewBreakerHandler(br)` | Circuit breaker; 5xx responses count as failures → 503 when open; a nil breaker panics at construction |
-| `NewSignatureHandler(keys [][]byte, opts ...SignatureOption)` | HMAC check over `METHOD / escaped-path / raw-query / timestamp / body`; several keys allow rotation. Panics without a key. `WithSignatureTTL` bounds the timestamp skew (zero uses the 5-minute default, negative disables it), `WithSignatureMaxBody` caps the body read (zero is unlimited), and the timestamp is checked before the body is read |
-| `NewAuthHandler(cfg AuthConfig, opts ...AuthOption)` | Bearer token check built from `cfg.Secret`; RFC 6750 challenge (`invalid_request` → 400, `invalid_token` → 401). Panics at construction when the secret is missing or shorter than 8 characters. `AuthConfig` is YAML-loadable (`secret`, `prevSecret`, `realm`, `skipPaths`), and options override it |
+| `NewAuthHandler(cfg AuthConfig, opts ...AuthOption)` | Bearer token check built from `cfg.Secret`; any extraction or parse failure answers 401. `AuthConfig` is YAML-loadable (`secret`, `prevSecret`, `skipPaths`), and options override it. `AuthConfig.TokenExtractor` (option `WithTokenExtractor`) replaces `BearerToken` when the token arrives in a query parameter, cookie or custom header |
 
-Default authorization failures write 400/401/500 with an RFC 6750 `WWW-Authenticate` challenge
-and no body. A missing or unsupported scheme (`Basic ...`, `Bearer2 ...`) gets a bare 401 challenge;
-only a header that starts with `Bearer` but has no valid credentials is a 400 `invalid_request`.
-Set `WithUnauthorizedCallback` when the application needs a custom body or extra reporting.
+Default authorization failures write a bodyless 401 and set no challenge header, matching
+go-zero's handler convention. Set `WithUnauthorizedCallback` when the application needs a
+custom body, extra headers or reporting.
 
 ## token package
 
 ```go
-parser, err := token.NewParser(token.Config{
-    Secret:     "a-long-enough-secret", // >= 8 chars
+parser := token.NewParser(token.Config{
+    Secret:     "a-long-enough-secret", // required
     PrevSecret: "the-previous-secret",  // optional, accepted while rotating keys
 })
 
@@ -625,8 +611,7 @@ claims, err := parser.Parse(signed) // jwt.MapClaims as-is
 
 `Config` only holds the verification secrets; `Generate` takes the claims map and `Parse` returns
 it, so the caller owns every field. `Parse` requires `sub` and `exp` but does not verify `iss`, so
-services that must reject other issuers compare `claims["iss"]` themselves. `PrevSecret` must
-satisfy the same 8-character minimum as `Secret`.
+services that must reject other issuers compare `claims["iss"]` themselves.
 
 `handler.AuthHandler` copies the **custom** claims into the request context, one value per
 claim name; standard JWT claims (`aud`, `exp`, `iat`, `iss`, `jti`, `nbf`, `sub`) are skipped:

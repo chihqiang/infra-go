@@ -153,8 +153,7 @@ auth:
 	require.Equal(t, "a-sufficiently-long-secret", cfg.Auth.Secret)
 	require.Equal(t, []string{"/health", "/public/*"}, cfg.Auth.SkipPaths)
 
-	parser, err := token.NewParser(token.Config{Secret: cfg.Auth.Secret})
-	require.NoError(t, err)
+	parser := token.NewParser(token.Config{Secret: cfg.Auth.Secret})
 	signed, err := parser.Generate(jwtlib.MapClaims{
 		"sub": "user-1",
 		"exp": time.Now().Add(time.Hour).Unix(),

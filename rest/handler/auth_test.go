@@ -1,9 +1,9 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -33,10 +33,7 @@ func signSubject(t *testing.T, parser *token.Parser, subject string) string {
 func newTokenParser(t *testing.T) *token.Parser {
 	t.Helper()
 
-	parser, err := token.NewParser(token.Config{Secret: "a-sufficiently-long-secret"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	parser := token.NewParser(token.Config{Secret: "a-sufficiently-long-secret"})
 	return parser
 }
 
@@ -86,15 +83,6 @@ func TestNewAuthHandlerBuildsParserFromSecret(t *testing.T) {
 	}
 }
 
-func TestNewAuthHandlerPanicsOnShortSecret(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("a secret shorter than 8 characters should panic")
-		}
-	}()
-	NewAuthHandler(AuthConfig{Secret: "short"})
-}
-
 func TestAuthHandlerSkipsConfiguredPaths(t *testing.T) {
 	handlerFn := NewAuthHandler(AuthConfig{Secret: authHandlerSecret},
 		WithAuthSkipPaths("/health", "/public/*"),
@@ -131,47 +119,15 @@ func TestAuthorizeRejectsBadHeaders(t *testing.T) {
 	})
 
 	tests := []struct {
-		name        string
-		header      string
-		status      int
-		challenge   []string
-		noErrorAuth bool
+		name   string
+		header string
 	}{
-		{
-			name:        "missing credentials",
-			status:      http.StatusUnauthorized,
-			noErrorAuth: true,
-		},
-		{
-			name:        "unsupported scheme",
-			header:      "Basic abc",
-			status:      http.StatusUnauthorized,
-			noErrorAuth: true,
-		},
-		{
-			name:        "bearer-like unsupported scheme",
-			header:      "Bearer2 abc",
-			status:      http.StatusUnauthorized,
-			noErrorAuth: true,
-		},
-		{
-			name:        "bearer prefix without separator",
-			header:      "Bearerfoo abc",
-			status:      http.StatusUnauthorized,
-			noErrorAuth: true,
-		},
-		{
-			name:      "empty bearer credentials",
-			header:    "Bearer ",
-			status:    http.StatusBadRequest,
-			challenge: []string{`Bearer realm="api"`, `error="invalid_request"`},
-		},
-		{
-			name:      "invalid token",
-			header:    "Bearer not-a-token",
-			status:    http.StatusUnauthorized,
-			challenge: []string{`Bearer realm="api"`, `error="invalid_token"`},
-		},
+		{name: "missing credentials"},
+		{name: "unsupported scheme", header: "Basic abc"},
+		{name: "bearer-like unsupported scheme", header: "Bearer2 abc"},
+		{name: "bearer prefix without separator", header: "Bearerfoo abc"},
+		{name: "empty bearer credentials", header: "Bearer "},
+		{name: "invalid token", header: "Bearer not-a-token"},
 	}
 
 	for _, test := range tests {
@@ -182,20 +138,11 @@ func TestAuthorizeRejectsBadHeaders(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		handlerFn.ServeHTTP(recorder, request)
 
-		if recorder.Code != test.status {
-			t.Errorf("%s: status = %d, want %d", test.name, recorder.Code, test.status)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Errorf("%s: status = %d, want 401", test.name, recorder.Code)
 		}
-		challenge := recorder.Header().Get("WWW-Authenticate")
-		if challenge == "" {
-			t.Errorf("%s: missing WWW-Authenticate", test.name)
-		}
-		for _, want := range test.challenge {
-			if !strings.Contains(challenge, want) {
-				t.Errorf("%s: challenge = %q, want %q", test.name, challenge, want)
-			}
-		}
-		if test.noErrorAuth && strings.Contains(challenge, "error=") {
-			t.Errorf("%s: challenge must not carry error information: %q", test.name, challenge)
+		if challenge := recorder.Header().Get("WWW-Authenticate"); challenge != "" {
+			t.Errorf("%s: WWW-Authenticate = %q, want none", test.name, challenge)
 		}
 	}
 
@@ -213,11 +160,11 @@ func TestAuthorizeRejectsMultipleAuthorizationHeaders(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handlerFn.ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", recorder.Code)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", recorder.Code)
 	}
-	if got := recorder.Header().Get("WWW-Authenticate"); !strings.Contains(got, `error="invalid_request"`) {
-		t.Fatalf("challenge = %q, want invalid_request", got)
+	if got := recorder.Header().Get("WWW-Authenticate"); got != "" {
+		t.Fatalf("WWW-Authenticate = %q, want none", got)
 	}
 }
 
@@ -259,10 +206,7 @@ func TestAuthorizeUsesCallback(t *testing.T) {
 }
 
 func TestAuthHandlerAcceptsPreviousSecret(t *testing.T) {
-	oldParser, err := token.NewParser(token.Config{Secret: "the-previous-secret"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	oldParser := token.NewParser(token.Config{Secret: "the-previous-secret"})
 	signed := signSubject(t, oldParser, "user-1")
 
 	handlerFn := NewAuthHandler(AuthConfig{Secret: authHandlerSecret},
@@ -281,15 +225,6 @@ func TestAuthHandlerAcceptsPreviousSecret(t *testing.T) {
 	}
 }
 
-func TestNewAuthHandlerRequiresSecret(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("auth without a secret should panic")
-		}
-	}()
-	NewAuthHandler(AuthConfig{})
-}
-
 func TestAuthorizeCallbackDefaultsStatus(t *testing.T) {
 	handlerFn := NewAuthHandler(AuthConfig{Secret: authHandlerSecret}, WithUnauthorizedCallback(
 		func(w http.ResponseWriter, _ *http.Request, err error) {
@@ -305,5 +240,119 @@ func TestAuthorizeCallbackDefaultsStatus(t *testing.T) {
 	}
 	if got := recorder.Header().Get("X-Reason"); got == "" {
 		t.Fatal("callback header was not applied")
+	}
+}
+
+func TestAuthHandlerUsesConfigTokenExtractor(t *testing.T) {
+	parser := newTokenParser(t)
+	signed := signSubject(t, parser, "user-1")
+
+	handlerFn := NewAuthHandler(AuthConfig{
+		Secret: authHandlerSecret,
+		TokenExtractor: func(r *http.Request) (string, error) {
+			if value := r.Header.Get("X-Auth-Token"); value != "" {
+				return value, nil
+			}
+			return "", token.ErrMissingToken
+		},
+	}).Handle(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set("X-Auth-Token", signed)
+	recorder := httptest.NewRecorder()
+	handlerFn.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", recorder.Code)
+	}
+}
+
+func TestAuthHandlerUsesWithTokenExtractor(t *testing.T) {
+	parser := newTokenParser(t)
+	signed := signSubject(t, parser, "user-2")
+
+	handlerFn := NewAuthHandler(
+		AuthConfig{
+			Secret: authHandlerSecret,
+			// The option must win over the config value.
+			TokenExtractor: func(*http.Request) (string, error) {
+				return "", token.ErrMissingToken
+			},
+		},
+		WithTokenExtractor(func(r *http.Request) (string, error) {
+			if value := r.URL.Query().Get("access_token"); value != "" {
+				return value, nil
+			}
+			return "", token.ErrMissingToken
+		}),
+	).Handle(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/?access_token="+signed, nil)
+	recorder := httptest.NewRecorder()
+	handlerFn.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", recorder.Code)
+	}
+}
+
+func TestAuthHandlerNilTokenExtractorFallsBackToBearer(t *testing.T) {
+	parser := newTokenParser(t)
+	signed := signSubject(t, parser, "user-3")
+
+	handlerFn := NewAuthHandler(
+		AuthConfig{Secret: authHandlerSecret},
+		WithTokenExtractor(nil),
+	).Handle(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set(AuthorizationHeader, "Bearer "+signed)
+	recorder := httptest.NewRecorder()
+	handlerFn.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 when the extractor is nil", recorder.Code)
+	}
+}
+
+func TestAuthHandlerTokenExtractorErrors(t *testing.T) {
+	tests := []struct {
+		name      string
+		extractor TokenExtractor
+	}{
+		{
+			name:      "missing token",
+			extractor: func(*http.Request) (string, error) { return "", token.ErrMissingToken },
+		},
+		{
+			name:      "malformed token",
+			extractor: func(*http.Request) (string, error) { return "", ErrMalformedAuthorization },
+		},
+		{
+			name:      "custom error",
+			extractor: func(*http.Request) (string, error) { return "", errors.New("token not found") },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handlerFn := NewAuthHandler(
+				AuthConfig{Secret: authHandlerSecret},
+				WithTokenExtractor(tt.extractor),
+			).Handle(func(http.ResponseWriter, *http.Request) {})
+
+			recorder := httptest.NewRecorder()
+			handlerFn.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+
+			if recorder.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401", recorder.Code)
+			}
+		})
 	}
 }

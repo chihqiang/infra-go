@@ -73,8 +73,8 @@ func NewServer(conf Config, opts ...Option) (*Server, error) {
 		addr:            net.JoinHostPort(conf.Host, strconv.Itoa(conf.Port)),
 	}
 	// Apply options before building the middleware chain: WithLogger must reach
-	// the access-log handler, and WithMiddleware/WithSignature/WithRateLimit
-	// append middleware that has to run after the config-driven built-ins.
+	// the access-log handler, and WithMiddleware/WithRateLimit append middleware
+	// that has to run after the config-driven built-ins.
 	for _, opt := range opts {
 		opt(server)
 	}
@@ -126,7 +126,7 @@ func NewServer(conf Config, opts ...Option) (*Server, error) {
 // entry wraps all later ones. s.frontMiddlewares holds the observability
 // middleware. s.outerMiddlewares (including WithBreaker) follow observability
 // middleware and wrap the tail/routes; the tail starts with Timeout. Middleware
-// appended by options (WithMiddleware, WithRateLimit, WithSignature) runs after
+// appended by options (WithMiddleware, WithRateLimit) runs after
 // the config-driven tail.
 func (s *Server) buildMiddlewares(conf Config) error {
 	front := []chain.Middleware{
@@ -146,8 +146,7 @@ func (s *Server) buildMiddlewares(conf Config) error {
 
 	// Gunzip must run before MaxBytes: the limit has to apply to the
 	// decompressed payload, otherwise a small gzip body can expand without
-	// bound (decompression bomb). Explicitly mounted signature middleware runs
-	// after MaxBytes so it sees the decompressed, already bounded body.
+	// bound (decompression bomb).
 	tail := []chain.Middleware{
 		resthandler.NewTimeoutHandler(conf.Middlewares.Timeout).Handle,
 		resthandler.NewGunzipHandler(conf.Middlewares.Gunzip).Handle,
