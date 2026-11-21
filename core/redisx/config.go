@@ -3,7 +3,7 @@ package redisx
 import (
 	"time"
 
-	"github.com/chihqiang/infra-go/core/mapping"
+	"github.com/chihqiang/ten-go/core/mapping"
 )
 
 // Config is the Redis configuration.

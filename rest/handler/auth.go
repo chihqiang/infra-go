@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/chihqiang/infra-go/rest/internal/pathmatch"
-	"github.com/chihqiang/infra-go/rest/token"
+	"github.com/chihqiang/ten-go/rest/internal/pathmatch"
+	"github.com/chihqiang/ten-go/rest/token"
 )
 
 const (

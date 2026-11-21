@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/chihqiang/infra-go/core/logger"
+	"github.com/chihqiang/ten-go/core/logger"
 	"github.com/hibiken/asynq"
 )
 

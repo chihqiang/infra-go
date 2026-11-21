@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/chihqiang/infra-go/core/breaker"
+	"github.com/chihqiang/ten-go/core/breaker"
 )
 
 type fakePromise struct {

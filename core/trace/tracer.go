@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/chihqiang/infra-go/core/logger"
+	"github.com/chihqiang/ten-go/core/logger"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"

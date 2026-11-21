@@ -3,7 +3,7 @@ package handler
 import (
 	"net/http"
 
-	"github.com/chihqiang/infra-go/core/ratelimit"
+	"github.com/chihqiang/ten-go/core/ratelimit"
 )
 
 // MaxConnsConfig configures MaxConnsHandler.

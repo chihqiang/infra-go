@@ -3,7 +3,7 @@ package ws
 import (
 	"time"
 
-	"github.com/chihqiang/infra-go/core/mapping"
+	"github.com/chihqiang/ten-go/core/mapping"
 )
 
 // --- Default constants ---

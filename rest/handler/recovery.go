@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"runtime/debug"
 
-	"github.com/chihqiang/infra-go/core/logger"
-	"github.com/chihqiang/infra-go/rest/internal/response"
+	"github.com/chihqiang/ten-go/core/logger"
+	"github.com/chihqiang/ten-go/rest/internal/response"
 )
 
 // RecoveryConfig configures RecoveryHandler.

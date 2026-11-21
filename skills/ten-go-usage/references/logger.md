@@ -22,7 +22,7 @@ A structured logging package implemented with the Go standard library, offering 
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/core/logger
+go get github.com/chihqiang/ten-go/core/logger
 ```
 
 ## Quick start
@@ -31,7 +31,7 @@ go get github.com/chihqiang/infra-go/core/logger
 package main
 
 import (
-    "github.com/chihqiang/infra-go/core/logger"
+    "github.com/chihqiang/ten-go/core/logger"
 )
 
 func main() {
@@ -290,10 +290,10 @@ defer unregister() // undo it when no longer needed (idempotent; repeated calls 
 
 #### Built-in extractors
 
-The `infra-go/trace` package registers a tracing extractor automatically in `init()`, so no manual setup is required:
+The `ten-go/trace` package registers a tracing extractor automatically in `init()`, so no manual setup is required:
 
 ```go
-import _ "github.com/chihqiang/infra-go/core/trace" // registers the trace_id, span_id extractors automatically
+import _ "github.com/chihqiang/ten-go/core/trace" // registers the trace_id, span_id extractors automatically
 ```
 
 Extracted fields:
@@ -399,7 +399,7 @@ package main
 import (
     "time"
 
-    "github.com/chihqiang/infra-go/core/logger"
+    "github.com/chihqiang/ten-go/core/logger"
 )
 
 func main() {

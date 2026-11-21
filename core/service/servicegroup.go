@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/chihqiang/infra-go/core/logger"
+	"github.com/chihqiang/ten-go/core/logger"
 )
 
 // --- Interface definitions ---

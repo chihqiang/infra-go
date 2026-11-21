@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/chihqiang/infra-go/core/mapping"
+	"github.com/chihqiang/ten-go/core/mapping"
 )
 
 // normalizeMap recursively normalises the values in a map:

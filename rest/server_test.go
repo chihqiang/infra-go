@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chihqiang/infra-go/core/breaker"
-	"github.com/chihqiang/infra-go/core/logger"
-	"github.com/chihqiang/infra-go/core/service"
-	"github.com/chihqiang/infra-go/core/trace"
-	resthandler "github.com/chihqiang/infra-go/rest/handler"
+	"github.com/chihqiang/ten-go/core/breaker"
+	"github.com/chihqiang/ten-go/core/logger"
+	"github.com/chihqiang/ten-go/core/service"
+	"github.com/chihqiang/ten-go/core/trace"
+	resthandler "github.com/chihqiang/ten-go/rest/handler"
 )
 
 func TestServerServeAndStop(t *testing.T) {

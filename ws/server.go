@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/chihqiang/infra-go/core/logger"
+	"github.com/chihqiang/ten-go/core/logger"
 	gws "github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
 )

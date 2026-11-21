@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/chihqiang/infra-go/core/logger"
+	"github.com/chihqiang/ten-go/core/logger"
 )
 
 // --- Default constants ---

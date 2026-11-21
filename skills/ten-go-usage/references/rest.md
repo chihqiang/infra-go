@@ -16,7 +16,7 @@ helpers, JWT based authentication and a set of ready-to-use handlers.
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/rest
+go get github.com/chihqiang/ten-go/rest
 ```
 
 ## Quick start
@@ -27,7 +27,7 @@ package main
 import (
     "net/http"
 
-    "github.com/chihqiang/infra-go/rest"
+    "github.com/chihqiang/ten-go/rest"
 )
 
 type helloRequest struct {

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chihqiang/infra-go/rest/handler"
+	"github.com/chihqiang/ten-go/rest/handler"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

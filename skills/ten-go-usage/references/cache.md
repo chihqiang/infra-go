@@ -16,7 +16,7 @@ Unified cache interface offering two implementations — an **in-memory cache** 
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/core/cache
+go get github.com/chihqiang/ten-go/core/cache
 ```
 
 ## Unified interface

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/chihqiang/infra-go/rest/handler"
+	"github.com/chihqiang/ten-go/rest/handler"
 	"google.golang.org/grpc/status"
 )
 

@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/chihqiang/infra-go/rest/internal/response"
+	"github.com/chihqiang/ten-go/rest/internal/response"
 )
 
 const (

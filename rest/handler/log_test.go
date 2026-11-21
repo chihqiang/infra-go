@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chihqiang/infra-go/core/logger"
+	"github.com/chihqiang/ten-go/core/logger"
 )
 
 type logEntry struct {

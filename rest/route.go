@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/chihqiang/infra-go/rest/chain"
-	"github.com/chihqiang/infra-go/rest/handler"
-	"github.com/chihqiang/infra-go/rest/router"
+	"github.com/chihqiang/ten-go/rest/chain"
+	"github.com/chihqiang/ten-go/rest/handler"
+	"github.com/chihqiang/ten-go/rest/router"
 )
 
 // Route describes an HTTP endpoint.

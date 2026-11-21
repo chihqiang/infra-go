@@ -3,9 +3,9 @@ package handler
 import (
 	"net/http"
 
-	"github.com/chihqiang/infra-go/core/trace"
-	"github.com/chihqiang/infra-go/rest/internal/pathmatch"
-	"github.com/chihqiang/infra-go/rest/internal/response"
+	"github.com/chihqiang/ten-go/core/trace"
+	"github.com/chihqiang/ten-go/rest/internal/pathmatch"
+	"github.com/chihqiang/ten-go/rest/internal/response"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"

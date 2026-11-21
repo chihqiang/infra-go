@@ -14,12 +14,12 @@ providing connection management, event dispatch, room broadcasting, and heartbea
 - **User value storage**: `conn.Set("userID", "xxx")` passes context between Handlers
 - **Config-driven**: Config defines defaults via `default` struct tags, following the conf standard
 - **Consistent style**: English comments, English error messages, and functional options, in line
-  with the other infra-go modules
+  with the other ten-go modules
 
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/ws
+go get github.com/chihqiang/ten-go/ws
 ```
 
 ## Quick start
@@ -34,8 +34,8 @@ import (
     "net/http"
     "time"
 
-    "github.com/chihqiang/infra-go/core/logger"
-    "github.com/chihqiang/infra-go/ws"
+    "github.com/chihqiang/ten-go/core/logger"
+    "github.com/chihqiang/ten-go/ws"
 )
 
 func main() {
@@ -97,7 +97,7 @@ import (
     "encoding/json"
     "net/http"
 
-    "github.com/chihqiang/infra-go/ws"
+    "github.com/chihqiang/ten-go/ws"
     "github.com/redis/go-redis/v9"
 )
 
@@ -481,8 +481,8 @@ import (
     "encoding/json"
     "net/http"
 
-    "github.com/chihqiang/infra-go/core/logger"
-    "github.com/chihqiang/infra-go/ws"
+    "github.com/chihqiang/ten-go/core/logger"
+    "github.com/chihqiang/ten-go/ws"
 )
 
 type ChatMessage struct {

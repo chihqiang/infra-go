@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"net/netip"
 
-	"github.com/chihqiang/infra-go/rest/internal/binding"
-	"github.com/chihqiang/infra-go/rest/internal/realip"
+	"github.com/chihqiang/ten-go/rest/internal/binding"
+	"github.com/chihqiang/ten-go/rest/internal/realip"
 )
 
 // Bind decodes the request into dst with the binder matching its content type,

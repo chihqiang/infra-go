@@ -17,7 +17,7 @@ A package wrapping common hashing algorithms: MD5, SHA1, SHA256, SHA512, SHA3, H
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/core/hash
+go get github.com/chihqiang/ten-go/core/hash
 ```
 
 ## Quick start
@@ -28,7 +28,7 @@ package main
 import (
     "fmt"
 
-    "github.com/chihqiang/infra-go/core/hash"
+    "github.com/chihqiang/ten-go/core/hash"
 )
 
 func main() {
@@ -199,8 +199,8 @@ import (
     "fmt"
     "os"
 
-    "github.com/chihqiang/infra-go/core/hash"
-    "github.com/chihqiang/infra-go/core/logger"
+    "github.com/chihqiang/ten-go/core/hash"
+    "github.com/chihqiang/ten-go/core/logger"
 )
 
 func main() {

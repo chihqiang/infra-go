@@ -1,14 +1,14 @@
 <div align="center">
-<h1>infra-go</h1>
+<h1>ten-go</h1>
 
 [![Auth](https://img.shields.io/badge/Auth-chihqiang-ff69b4)](https://github.com/chihqiang)
-[![Release](https://img.shields.io/github/release/chihqiang/infra-go.svg?style=flat-square)](https://github.com/chihqiang/infra-go/releases)
-[![HitCount](https://views.whatilearened.today/views/github/chihqiang/infra-go.svg)](https://github.com/chihqiang/infra-go)
-[![Tests](https://github.com/chihqiang/infra-go/actions/workflows/test.yml/badge.svg)](https://github.com/chihqiang/infra-go/actions/workflows/test.yml)
-[![GitHub license](https://img.shields.io/github/license/chihqiang/infra-go)](https://github.com/chihqiang/infra-go/blob/main/LICENSE)
+[![Release](https://img.shields.io/github/release/chihqiang/ten-go.svg?style=flat-square)](https://github.com/chihqiang/ten-go/releases)
+[![HitCount](https://views.whatilearened.today/views/github/chihqiang/ten-go.svg)](https://github.com/chihqiang/ten-go)
+[![Tests](https://github.com/chihqiang/ten-go/actions/workflows/test.yml/badge.svg)](https://github.com/chihqiang/ten-go/actions/workflows/test.yml)
+[![GitHub license](https://img.shields.io/github/license/chihqiang/ten-go)](https://github.com/chihqiang/ten-go/blob/main/LICENSE)
 
 <p>
- infra-go is an efficient Go infrastructure wrapper library for building services, bundling
+ ten-go is an efficient Go infrastructure wrapper library for building services, bundling
  configuration, logging, database, Redis, HTTP, object storage and utility capabilities that
  are pluggable, independently importable and production-ready.
 </p>
@@ -29,10 +29,10 @@ import (
     "io/fs"
     "net/http"
 
-    "github.com/chihqiang/infra-go/core/conf"
-    "github.com/chihqiang/infra-go/core/logger"
-    "github.com/chihqiang/infra-go/core/service"
-    "github.com/chihqiang/infra-go/rest"
+    "github.com/chihqiang/ten-go/core/conf"
+    "github.com/chihqiang/ten-go/core/logger"
+    "github.com/chihqiang/ten-go/core/service"
+    "github.com/chihqiang/ten-go/rest"
 )
 
 // Configuration: json tags declare defaults and constraints; conf can load it from a file or
@@ -110,29 +110,29 @@ http:
 ## Modules
 
 The documentation of each module is maintained centrally in
-[skills/infra-go-usage/references](./skills/infra-go-usage/references), one page per module:
+[skills/ten-go-usage/references](./skills/ten-go-usage/references), one page per module:
 
 | Module | Description |
 | ------ | ------ |
-| [conf](./skills/infra-go-usage/references/conf.md) | Configuration parsing with JSON/YAML support, defaults, environment variables and parameter validation |
-| [logger](./skills/infra-go-usage/references/logger.md) | Structured logger with JSON/console encoding and rolling log files |
-| [orm](./skills/infra-go-usage/references/orm.md) | ORM wrapper built on gorm, supporting MySQL/PostgreSQL/SQLite |
-| [redisx](./skills/infra-go-usage/references/redisx.md) | Redis client wrapper: connection pool, health check, distributed lock |
-| [cache](./skills/infra-go-usage/references/cache.md) | Unified cache interface with two implementations: in-memory (LRU eviction, hit-rate statistics) and Redis (protection against cache breakdown and penetration) |
-| [rest](./skills/infra-go-usage/references/rest.md) | HTTP toolkit: config (`Config`), method-aware routing, route groups, middleware chain, request binding and graceful shutdown. Handlers live in `rest/handler` (recovery, request ID, tracing, access log, concurrency/timeout/body limits, gzip, breaker, rate limit, JWT auth, body signature) as structs with a `Config` and a `Handle` method, so they can be reused outside a `rest.Server`; binding is exposed as `rest.Bind*`, and JSON/XML responses plus the unified `code/msg/data` envelope live in `rest` itself (`OkJSON` / `ErrorJSON` / `OkXML` / `ErrorXML`); CORS comes from `rest.WithCORS` |
-| [ratelimit](./skills/infra-go-usage/references/ratelimit.md) | Rate limiters: token bucket/sliding window with in-memory and Redis backends. HTTP integration is `rest/handler.NewRateLimitHandler` |
-| [breaker](./skills/infra-go-usage/references/breaker.md) | Circuit breaker using the Google SRE algorithm: fail fast, degrade and prevent cascading failures |
-| [retry](./skills/infra-go-usage/references/retry.md) | Retry mechanism: exponential backoff, fixed delay and jitter |
-| [hash](./skills/infra-go-usage/references/hash.md) | Hashing and encryption: MD5/SHA/Bcrypt/HMAC, AES-GCM encryption, HMAC signing/verification |
-| [trace](./skills/infra-go-usage/references/trace.md) | Tracing built on OpenTelemetry: agent / span management / gRPC and HTTP header propagation / attribute helpers. HTTP server instrumentation is `rest/handler.NewTraceHandler` |
-| [mapping](./skills/infra-go-usage/references/mapping.md) | map → struct deserialisation with a struct tag parsing engine |
-| [cast](./skills/infra-go-usage/references/cast.md) | Type-safe conversion covering basic types, time, slices and generics |
-| [syncx](./skills/infra-go-usage/references/syncx.md) | Concurrency helpers: SingleFlight/ConcurrentMap/Semaphore |
-| [service](./skills/infra-go-usage/references/service.md) | Service group that starts and stops several Services concurrently, with sync.Once guaranteeing a single stop |
-| [taskq](./skills/infra-go-usage/references/taskq.md) | Asynchronous task queue built on asynq with a producer/consumer pattern |
-| [storage](./skills/infra-go-usage/references/storage.md) | Unified object storage interface supporting local files, Alibaba Cloud OSS, Tencent Cloud COS and Qiniu KODO; provides write/read/exists/delete/URL building |
-| [ws](./skills/infra-go-usage/references/ws.md) | WebSocket service wrapper built on gorilla/websocket: event driven, room broadcast and heartbeat detection |
-| [stringx](./skills/infra-go-usage/references/stringx.md) | String toolkit with common helpers for random generation, predicates, conversion, splitting and joining |
+| [conf](./skills/ten-go-usage/references/conf.md) | Configuration parsing with JSON/YAML support, defaults, environment variables and parameter validation |
+| [logger](./skills/ten-go-usage/references/logger.md) | Structured logger with JSON/console encoding and rolling log files |
+| [orm](./skills/ten-go-usage/references/orm.md) | ORM wrapper built on gorm, supporting MySQL/PostgreSQL/SQLite |
+| [redisx](./skills/ten-go-usage/references/redisx.md) | Redis client wrapper: connection pool, health check, distributed lock |
+| [cache](./skills/ten-go-usage/references/cache.md) | Unified cache interface with two implementations: in-memory (LRU eviction, hit-rate statistics) and Redis (protection against cache breakdown and penetration) |
+| [rest](./skills/ten-go-usage/references/rest.md) | HTTP toolkit: config (`Config`), method-aware routing, route groups, middleware chain, request binding and graceful shutdown. Handlers live in `rest/handler` (recovery, request ID, tracing, access log, concurrency/timeout/body limits, gzip, breaker, rate limit, JWT auth, body signature) as structs with a `Config` and a `Handle` method, so they can be reused outside a `rest.Server`; binding is exposed as `rest.Bind*`, and JSON/XML responses plus the unified `code/msg/data` envelope live in `rest` itself (`OkJSON` / `ErrorJSON` / `OkXML` / `ErrorXML`); CORS comes from `rest.WithCORS` |
+| [ratelimit](./skills/ten-go-usage/references/ratelimit.md) | Rate limiters: token bucket/sliding window with in-memory and Redis backends. HTTP integration is `rest/handler.NewRateLimitHandler` |
+| [breaker](./skills/ten-go-usage/references/breaker.md) | Circuit breaker using the Google SRE algorithm: fail fast, degrade and prevent cascading failures |
+| [retry](./skills/ten-go-usage/references/retry.md) | Retry mechanism: exponential backoff, fixed delay and jitter |
+| [hash](./skills/ten-go-usage/references/hash.md) | Hashing and encryption: MD5/SHA/Bcrypt/HMAC, AES-GCM encryption, HMAC signing/verification |
+| [trace](./skills/ten-go-usage/references/trace.md) | Tracing built on OpenTelemetry: agent / span management / gRPC and HTTP header propagation / attribute helpers. HTTP server instrumentation is `rest/handler.NewTraceHandler` |
+| [mapping](./skills/ten-go-usage/references/mapping.md) | map → struct deserialisation with a struct tag parsing engine |
+| [cast](./skills/ten-go-usage/references/cast.md) | Type-safe conversion covering basic types, time, slices and generics |
+| [syncx](./skills/ten-go-usage/references/syncx.md) | Concurrency helpers: SingleFlight/ConcurrentMap/Semaphore |
+| [service](./skills/ten-go-usage/references/service.md) | Service group that starts and stops several Services concurrently, with sync.Once guaranteeing a single stop |
+| [taskq](./skills/ten-go-usage/references/taskq.md) | Asynchronous task queue built on asynq with a producer/consumer pattern |
+| [storage](./skills/ten-go-usage/references/storage.md) | Unified object storage interface supporting local files, Alibaba Cloud OSS, Tencent Cloud COS and Qiniu KODO; provides write/read/exists/delete/URL building |
+| [ws](./skills/ten-go-usage/references/ws.md) | WebSocket service wrapper built on gorilla/websocket: event driven, room broadcast and heartbeat detection |
+| [stringx](./skills/ten-go-usage/references/stringx.md) | String toolkit with common helpers for random generation, predicates, conversion, splitting and joining |
 
 ## Features
 
@@ -150,32 +150,32 @@ The documentation of each module is maintained centrally in
 
 ## Skill installation
 
-The repository ships a VS Code Copilot skill - [infra-go-usage](./skills/infra-go-usage/SKILL.md) -
-which guides you through choosing and assembling infra-go modules (configuration, logging,
+The repository ships a VS Code Copilot skill - [ten-go-usage](./skills/ten-go-usage/SKILL.md) -
+which guides you through choosing and assembling ten-go modules (configuration, logging,
 database, Redis, HTTP, JWT, ...) in a business project.
 
-The skill lives in `skills/infra-go-usage/` on `main` (`SKILL.md` plus one reference page per
+The skill lives in `skills/ten-go-usage/` on `main` (`SKILL.md` plus one reference page per
 module), so it travels with the library and is discovered automatically by the
 [Agent Skills CLI](https://github.com/vercel-labs/skills) (`npx skills`). Run the installation
 from the project that should use the skill, not from this repository:
 
 ```bash
 # Preview the skills discovered in this repository (nothing is installed)
-npx skills add chihqiang/infra-go --list
+npx skills add chihqiang/ten-go --list
 
-# Install into the current project -> .agents/skills/infra-go-usage (+ skills-lock.json)
-npx skills add chihqiang/infra-go --skill infra-go-usage -a github-copilot
+# Install into the current project -> .agents/skills/ten-go-usage (+ skills-lock.json)
+npx skills add chihqiang/ten-go --skill ten-go-usage -a github-copilot
 
-# Install once for all projects -> ~/.agents/skills/infra-go-usage
-npx skills add chihqiang/infra-go --skill infra-go-usage -g -a github-copilot
+# Install once for all projects -> ~/.agents/skills/ten-go-usage
+npx skills add chihqiang/ten-go --skill ten-go-usage -g -a github-copilot
 
 # Offline / from a local clone of this repository
-npx skills add ./infra-go/skills/infra-go-usage -g -a github-copilot
+npx skills add ./ten-go/skills/ten-go-usage -g -a github-copilot
 ```
 
 The CLI copies the whole skill directory and prints the destination it used, so re-run the same
 command after upgrading; `npx skills update` refreshes installed skills and
-`npx skills remove infra-go-usage` uninstalls one.
+`npx skills remove ten-go-usage` uninstalls one.
 
 ### Where VS Code looks
 
@@ -186,13 +186,13 @@ under **Chat: Open Customizations → Skills**, link it into a directory your ha
 
 ```bash
 mkdir -p ~/.copilot/skills
-ln -s ~/.agents/skills/infra-go-usage ~/.copilot/skills/infra-go-usage
+ln -s ~/.agents/skills/ten-go-usage ~/.copilot/skills/ten-go-usage
 ```
 
 ### Usage
 
-Once installed, type `/infra-go-usage` in the VS Code chat (or just ask a question, such as
-"build an HTTP service with login authentication and rate limiting using infra-go") and Copilot
+Once installed, type `/ten-go-usage` in the VS Code chat (or just ask a question, such as
+"build an HTTP service with login authentication and rate limiting using ten-go") and Copilot
 loads the skill automatically to help you follow its workflow.
 
 ## Quality checks
@@ -205,14 +205,14 @@ go test ./... -race -count=1  # full unit tests + race detection
 
 ## Acknowledgements
 
-infra-go stands on the shoulders of two excellent Go frameworks. The shape of the `rest` package
+ten-go stands on the shoulders of two excellent Go frameworks. The shape of the `rest` package
 - especially the server/engine split, the `chain` + `handler` middleware layout, route groups and
 the `config → server → route → handler → logic` layering - follows
 [go-zero](https://github.com/zeromicro/go-zero)'s `rest` design, and the request binding layer
 (content-type driven selection, tag mapping, `binding` validation tags) follows
 [gin](https://github.com/gin-gonic/gin)'s `binding` package.
 
-Both are MIT licensed; infra-go carries an independent implementation, but the architecture is
+Both are MIT licensed; ten-go carries an independent implementation, but the architecture is
 clearly theirs:
 
 - **go-zero** — `rest`, `rest/chain`, `rest/handler`, `rest/router`, `rest/token` and the
@@ -227,7 +227,7 @@ from.
 
 Released under the [Apache License 2.0](./LICENSE), Copyright 2026 chihqiang.
 
-You may use, modify and redistribute infra-go - including in commercial and closed-source
+You may use, modify and redistribute ten-go - including in commercial and closed-source
 projects - provided the copyright and license notices are preserved. The complete terms,
 including the patent grant and the redistribution requirements, are in the
 [LICENSE](./LICENSE) file.

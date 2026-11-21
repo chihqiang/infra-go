@@ -13,9 +13,9 @@ import (
 
 	jwtlib "github.com/golang-jwt/jwt/v5"
 
-	"github.com/chihqiang/infra-go/core/ratelimit"
-	"github.com/chihqiang/infra-go/rest/handler"
-	"github.com/chihqiang/infra-go/rest/token"
+	"github.com/chihqiang/ten-go/core/ratelimit"
+	"github.com/chihqiang/ten-go/rest/handler"
+	"github.com/chihqiang/ten-go/rest/token"
 )
 
 func TestWithCORSAppliesHeadersAndPreflight(t *testing.T) {

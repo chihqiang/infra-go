@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/chihqiang/infra-go/core/logger"
-	"github.com/chihqiang/infra-go/core/trace"
+	"github.com/chihqiang/ten-go/core/logger"
+	"github.com/chihqiang/ten-go/core/trace"
 )
 
 func TestLoggerSync(t *testing.T) {

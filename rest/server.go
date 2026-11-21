@@ -10,13 +10,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chihqiang/infra-go/core/logger"
-	"github.com/chihqiang/infra-go/core/service"
-	"github.com/chihqiang/infra-go/rest/chain"
-	resthandler "github.com/chihqiang/infra-go/rest/handler"
-	"github.com/chihqiang/infra-go/rest/internal/cors"
-	restservice "github.com/chihqiang/infra-go/rest/internal/service"
-	"github.com/chihqiang/infra-go/rest/router"
+	"github.com/chihqiang/ten-go/core/logger"
+	"github.com/chihqiang/ten-go/core/service"
+	"github.com/chihqiang/ten-go/rest/chain"
+	resthandler "github.com/chihqiang/ten-go/rest/handler"
+	"github.com/chihqiang/ten-go/rest/internal/cors"
+	restservice "github.com/chihqiang/ten-go/rest/internal/service"
+	"github.com/chihqiang/ten-go/rest/router"
 )
 
 // Server is an HTTP server with a method-aware router.

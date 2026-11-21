@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/chihqiang/infra-go/core/mapping"
+	"github.com/chihqiang/ten-go/core/mapping"
 )
 
 const (

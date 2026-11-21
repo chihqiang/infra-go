@@ -14,7 +14,7 @@ A concurrency utility package providing common concurrency control primitives.
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/core/syncx
+go get github.com/chihqiang/ten-go/core/syncx
 ```
 
 ## SingleFlight

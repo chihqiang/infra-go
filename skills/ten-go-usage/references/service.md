@@ -18,12 +18,12 @@ registration order, with panic recovery and graceful shutdown.
   to unblock the other services
 - **Adapters**: `WithStart` / `WithStarter` wrap plain functions; `AsService` adapts objects
   with `Start() error` + `Stop() error` (such as `rest.Server`)
-- **Logger integration**: errors are recorded with the global `infra-go/logger`
+- **Logger integration**: errors are recorded with the global `ten-go/logger`
 
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/core/service
+go get github.com/chihqiang/ten-go/core/service
 ```
 
 ## Core interfaces
@@ -54,8 +54,8 @@ package main
 import (
     "net/http"
 
-    "github.com/chihqiang/infra-go/rest"
-    "github.com/chihqiang/infra-go/core/service"
+    "github.com/chihqiang/ten-go/rest"
+    "github.com/chihqiang/ten-go/core/service"
 )
 
 func main() {

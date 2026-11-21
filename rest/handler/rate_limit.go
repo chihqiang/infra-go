@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/chihqiang/infra-go/core/ratelimit"
+	"github.com/chihqiang/ten-go/core/ratelimit"
 )
 
 // retryAfterer is implemented by limiters that can suggest a retry delay.

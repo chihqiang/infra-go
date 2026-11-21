@@ -28,7 +28,7 @@ func resetResources() {
 func TestFillDefault_AllDefaults(t *testing.T) {
 	c := fillDefault(Config{})
 
-	assert.Equal(t, "infra-go", c.Name)
+	assert.Equal(t, "ten-go", c.Name)
 	assert.Equal(t, "", c.Endpoint)
 	assert.InDelta(t, 1.0, c.Sampler, 0.001)
 	assert.Equal(t, BatcherOTLPGRPC, c.Batcher)

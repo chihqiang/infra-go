@@ -21,7 +21,7 @@ bucket, sliding window, concurrency limit, and chained limiting — freely inter
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/core/ratelimit
+go get github.com/chihqiang/ten-go/core/ratelimit
 ```
 
 ## Limiters
@@ -88,7 +88,7 @@ handler is the opt-in, and a nil limiter panics at construction. Mount it explic
 server-wide or scoped limiting:
 
 ```go
-import resthandler "github.com/chihqiang/infra-go/rest/handler"
+import resthandler "github.com/chihqiang/ten-go/rest/handler"
 
 server, _ := rest.NewServer(rest.DefaultConfig(),
     rest.WithRateLimit(ratelimit.NewTokenBucket(100, 200)),

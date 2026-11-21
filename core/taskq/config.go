@@ -3,8 +3,8 @@ package taskq
 import (
 	"time"
 
-	"github.com/chihqiang/infra-go/core/logger"
-	"github.com/chihqiang/infra-go/core/mapping"
+	"github.com/chihqiang/ten-go/core/logger"
+	"github.com/chihqiang/ten-go/core/mapping"
 )
 
 // --- Default constants ---
