@@ -1,6 +1,6 @@
 package service
 
-import "github.com/chihqiang/infra-go/core/logger"
+import "github.com/chihqiang/ten-go/core/logger"
 
 // LoggerSync flushes a server-owned logger when the ServiceGroup stops. The
 // logger remains installed globally after the server stops.

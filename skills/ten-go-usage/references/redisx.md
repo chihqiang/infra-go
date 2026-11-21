@@ -19,7 +19,7 @@ connection pool management, key prefixes, distributed locks, and more.
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/core/redisx
+go get github.com/chihqiang/ten-go/core/redisx
 ```
 
 ## Quick start
@@ -32,7 +32,7 @@ import (
     "fmt"
     "time"
 
-    "github.com/chihqiang/infra-go/core/redisx"
+    "github.com/chihqiang/ten-go/core/redisx"
 )
 
 func main() {

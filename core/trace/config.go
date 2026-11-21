@@ -3,7 +3,7 @@ package trace
 import "go.opentelemetry.io/otel/propagation"
 
 // TraceName is the tracing name.
-const TraceName = "infra-go"
+const TraceName = "ten-go"
 
 // Batcher is the exporter type.
 type Batcher string
@@ -22,8 +22,8 @@ const (
 // Config is the tracing configuration.
 // Defaults are defined by the default struct tag, following the conf standard.
 type Config struct {
-	// Name is the service name used to identify the trace source, default "infra-go".
-	Name string `json:",default=infra-go"`
+	// Name is the service name used to identify the trace source, default "ten-go".
+	Name string `json:",default=ten-go"`
 	// Endpoint is the exporter address.
 	// When Batcher is file it is a file path.
 	// For the other types it is the exporter service address, e.g. "localhost:4317".

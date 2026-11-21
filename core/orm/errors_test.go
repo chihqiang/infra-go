@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/chihqiang/infra-go/core/orm"
+	"github.com/chihqiang/ten-go/core/orm"
 	"gorm.io/gorm"
 )
 

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chihqiang/infra-go/core/ratelimit"
+	"github.com/chihqiang/ten-go/core/ratelimit"
 )
 
 func TestRateLimitRejectsAfterBurst(t *testing.T) {

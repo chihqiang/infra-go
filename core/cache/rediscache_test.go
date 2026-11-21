@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/chihqiang/infra-go/core/redisx"
+	"github.com/chihqiang/ten-go/core/redisx"
 )
 
 // newMiniRedis creates an embedded miniredis instance and returns the redisx client

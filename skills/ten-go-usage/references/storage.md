@@ -40,8 +40,8 @@ package main
 import (
     "context"
 
-    "github.com/chihqiang/infra-go/core/logger"
-    "github.com/chihqiang/infra-go/core/storage"
+    "github.com/chihqiang/ten-go/core/logger"
+    "github.com/chihqiang/ten-go/core/storage"
 )
 
 func main() {

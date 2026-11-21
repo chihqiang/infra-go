@@ -9,7 +9,7 @@ import (
 
 	jwtlib "github.com/golang-jwt/jwt/v5"
 
-	"github.com/chihqiang/infra-go/rest/token"
+	"github.com/chihqiang/ten-go/rest/token"
 )
 
 // authHandlerSecret matches the secret newTokenParser signs with, so a handler

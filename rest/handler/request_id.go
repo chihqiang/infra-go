@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/chihqiang/infra-go/core/logger"
+	"github.com/chihqiang/ten-go/core/logger"
 	"github.com/google/uuid"
 )
 

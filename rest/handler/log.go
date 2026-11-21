@@ -5,10 +5,10 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/chihqiang/infra-go/core/logger"
-	"github.com/chihqiang/infra-go/rest/internal/pathmatch"
-	"github.com/chihqiang/infra-go/rest/internal/realip"
-	"github.com/chihqiang/infra-go/rest/internal/response"
+	"github.com/chihqiang/ten-go/core/logger"
+	"github.com/chihqiang/ten-go/rest/internal/pathmatch"
+	"github.com/chihqiang/ten-go/rest/internal/realip"
+	"github.com/chihqiang/ten-go/rest/internal/response"
 )
 
 // LogConfig configures LogHandler.

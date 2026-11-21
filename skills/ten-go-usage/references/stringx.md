@@ -14,7 +14,7 @@ conversions, splitting/joining, and other practical helpers.
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/core/stringx
+go get github.com/chihqiang/ten-go/core/stringx
 ```
 
 ## Quick start
@@ -25,7 +25,7 @@ package main
 import (
     "fmt"
 
-    "github.com/chihqiang/infra-go/core/stringx"
+    "github.com/chihqiang/ten-go/core/stringx"
 )
 
 func main() {

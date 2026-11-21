@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chihqiang/infra-go/core/logger"
-	"github.com/chihqiang/infra-go/core/redisx"
-	"github.com/chihqiang/infra-go/core/syncx"
+	"github.com/chihqiang/ten-go/core/logger"
+	"github.com/chihqiang/ten-go/core/redisx"
+	"github.com/chihqiang/ten-go/core/syncx"
 )
 
 // Default configuration.

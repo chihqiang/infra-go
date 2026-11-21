@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/chihqiang/infra-go/core/ratelimit"
-	"github.com/chihqiang/infra-go/rest/token"
+	"github.com/chihqiang/ten-go/core/ratelimit"
+	"github.com/chihqiang/ten-go/rest/token"
 )
 
 func newTestTokenParser(t *testing.T) *token.Parser {

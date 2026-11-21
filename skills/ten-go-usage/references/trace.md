@@ -30,13 +30,13 @@ API for propagating and recording trace context between services.
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/core/trace
+go get github.com/chihqiang/ten-go/core/trace
 ```
 
 ## Quick start
 
 ```go
-import "github.com/chihqiang/infra-go/core/trace"
+import "github.com/chihqiang/ten-go/core/trace"
 
 func main() {
     trace.StartAgent(trace.Config{
@@ -77,7 +77,7 @@ trace.StartAgent(trace.Config{
 
 | Field | Type | Default | Description |
 |------|------|--------|------|
-| `Name` | `string` | `infra-go` | Service name, identifying the trace source |
+| `Name` | `string` | `ten-go` | Service name, identifying the trace source |
 | `Endpoint` | `string` | `""` | Exporter address (a file path for the file type) |
 | `Sampler` | `float64` | `1.0` | Sample rate (`0`–`1.0`); a literal `0` is ignored and falls back to `1.0`, use `WithSampler(0)` if you need `0` |
 | `Batcher` | `Batcher` | `otlpgrpc` | Exporter type |
@@ -188,7 +188,7 @@ template (for example `GET /users/{id}`) with method/path/status attributes, and
 context so downstream code can correlate `trace_id`:
 
 ```go
-import resthandler "github.com/chihqiang/infra-go/rest/handler"
+import resthandler "github.com/chihqiang/ten-go/rest/handler"
 
 server.Use(resthandler.NewTraceHandler(resthandler.TraceConfig{Enabled: true}).Handle)
 server.Use(resthandler.NewTraceHandler(resthandler.TraceConfig{ // skip probes, tag the service
@@ -267,8 +267,8 @@ import (
     "net/http"
     "time"
 
-    "github.com/chihqiang/infra-go/core/logger"
-    "github.com/chihqiang/infra-go/core/trace"
+    "github.com/chihqiang/ten-go/core/logger"
+    "github.com/chihqiang/ten-go/core/trace"
 )
 
 func main() {

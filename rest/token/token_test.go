@@ -40,7 +40,7 @@ func TestGenerateAndParseRoundTrip(t *testing.T) {
 
 	signed, err := parser.Generate(jwtlib.MapClaims{
 		"sub":  "user-1",
-		"iss":  "infra-go",
+		"iss":  "ten-go",
 		"exp":  time.Now().Add(time.Hour).Unix(),
 		"role": "admin",
 	})
@@ -55,8 +55,8 @@ func TestGenerateAndParseRoundTrip(t *testing.T) {
 	if claims["sub"] != "user-1" {
 		t.Fatalf("subject = %v, want user-1", claims["sub"])
 	}
-	if claims["iss"] != "infra-go" {
-		t.Fatalf("issuer = %v, want infra-go", claims["iss"])
+	if claims["iss"] != "ten-go" {
+		t.Fatalf("issuer = %v, want ten-go", claims["iss"])
 	}
 	if claims["role"] != "admin" {
 		t.Fatalf("custom claim role = %v", claims["role"])

@@ -1,16 +1,16 @@
 ---
-name: infra-go-usage
-description: 'Use infra-go modules to build Go business services, including configuration, logging, databases, Redis, HTTP APIs, authentication, middleware, queues, storage and WebSockets.'
+name: ten-go-usage
+description: 'Use ten-go modules to build Go business services, including configuration, logging, databases, Redis, HTTP APIs, authentication, middleware, queues, storage and WebSockets.'
 ---
 
-# infra-go usage guide
+# ten-go usage guide
 
-How to use each `github.com/chihqiang/infra-go` module correctly in a business project: module selection, initialization order, assembly and acceptance criteria. Applies to: starting a new Go business service, or wiring one infrastructure capability into an existing service.
+How to use each `github.com/chihqiang/ten-go` module correctly in a business project: module selection, initialization order, assembly and acceptance criteria. Applies to: starting a new Go business service, or wiring one infrastructure capability into an existing service.
 
 ## When to Use
 
 - Starting a new Go business service that needs configuration, logging, database, Redis, HTTP and other infrastructure
-- Deciding which infra-go module fits a requirement (see the decision table)
+- Deciding which ten-go module fits a requirement (see the decision table)
 - Assembling several modules (such as conf + orm + http + token) correctly
 - Handling errors, context and unified responses the way the project expects
 
@@ -66,13 +66,13 @@ How to use each `github.com/chihqiang/infra-go` module correctly in a business p
 ### Step 2 — Add the dependencies
 
 ```bash
-go get github.com/chihqiang/infra-go/core/conf
-go get github.com/chihqiang/infra-go/core/logger
-go get github.com/chihqiang/infra-go/rest
-go get github.com/chihqiang/infra-go/core/orm
-go get github.com/chihqiang/infra-go/core/redisx
-go get github.com/chihqiang/infra-go/rest/token
-go get github.com/chihqiang/infra-go/core/ratelimit
+go get github.com/chihqiang/ten-go/core/conf
+go get github.com/chihqiang/ten-go/core/logger
+go get github.com/chihqiang/ten-go/rest
+go get github.com/chihqiang/ten-go/core/orm
+go get github.com/chihqiang/ten-go/core/redisx
+go get github.com/chihqiang/ten-go/rest/token
+go get github.com/chihqiang/ten-go/core/ratelimit
 # ...import as needed
 ```
 

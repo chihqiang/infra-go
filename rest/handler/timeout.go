@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/chihqiang/infra-go/rest/internal/response"
+	"github.com/chihqiang/ten-go/rest/internal/response"
 )
 
 // TimeoutConfig configures TimeoutHandler.

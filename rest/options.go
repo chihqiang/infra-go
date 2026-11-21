@@ -4,12 +4,12 @@ import (
 	"crypto/tls"
 	"net/http"
 
-	"github.com/chihqiang/infra-go/core/breaker"
-	"github.com/chihqiang/infra-go/core/logger"
-	"github.com/chihqiang/infra-go/core/ratelimit"
-	"github.com/chihqiang/infra-go/rest/chain"
-	resthandler "github.com/chihqiang/infra-go/rest/handler"
-	"github.com/chihqiang/infra-go/rest/internal/cors"
+	"github.com/chihqiang/ten-go/core/breaker"
+	"github.com/chihqiang/ten-go/core/logger"
+	"github.com/chihqiang/ten-go/core/ratelimit"
+	"github.com/chihqiang/ten-go/rest/chain"
+	resthandler "github.com/chihqiang/ten-go/rest/handler"
+	"github.com/chihqiang/ten-go/rest/internal/cors"
 )
 
 // Option customizes a Server during construction.

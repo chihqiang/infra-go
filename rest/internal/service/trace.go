@@ -6,7 +6,7 @@ package service
 import (
 	"sync"
 
-	"github.com/chihqiang/infra-go/core/trace"
+	"github.com/chihqiang/ten-go/core/trace"
 )
 
 // TraceAgent adapts the global tracing agent to the Service lifecycle. It is

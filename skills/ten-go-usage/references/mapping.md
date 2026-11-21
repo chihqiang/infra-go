@@ -20,7 +20,7 @@ It supports defining defaults, environment variables, optional fields, enum vali
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/core/mapping
+go get github.com/chihqiang/ten-go/core/mapping
 ```
 
 ## Quick start
@@ -33,7 +33,7 @@ import (
     "fmt"
     "time"
 
-    "github.com/chihqiang/infra-go/core/mapping"
+    "github.com/chihqiang/ten-go/core/mapping"
 )
 
 type Config struct {

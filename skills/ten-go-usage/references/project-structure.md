@@ -1,6 +1,6 @@
 # project-structure
 
-Recommended directory structure for a business service, distilled from infra-go best practices. Layered architecture: **entry → config → dependency assembly → route → handler → business logic → data model**.
+Recommended directory structure for a business service, distilled from ten-go best practices. Layered architecture: **entry → config → dependency assembly → route → handler → business logic → data model**.
 
 ## Recommended directory structure
 
@@ -175,9 +175,9 @@ Business-specific middleware (auth, audit, permissions, context injection) imple
 - To bring in a third-party standard `func(http.Handler) http.Handler` middleware, wrap it into `chain.Middleware` before calling `server.Use`.
 - Reading the current user's custom claims inside a handler: `token.Claim(r.Context(), "uid")`.
 
-## Mapping to infra-go modules
+## Mapping to ten-go modules
 
-| Directory | infra-go modules used |
+| Directory | ten-go modules used |
 |------|------|
 | `config` | `conf` (loading / defaults / validation) |
 | `svc` | `orm` · `redisx` · `token` · `hash` (assembly) |

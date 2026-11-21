@@ -1,4 +1,4 @@
-module github.com/chihqiang/infra-go
+module github.com/chihqiang/ten-go
 
 go 1.25.11
 

@@ -214,7 +214,7 @@ func TestLocal_PathTraversalRejected(t *testing.T) {
 	root := t.TempDir()
 	// Place a "sensitive file" outside root to verify it cannot be reached or
 	// deleted through a path traversal.
-	outside := filepath.Join(filepath.Dir(root), "infra-go-secret.txt")
+	outside := filepath.Join(filepath.Dir(root), "ten-go-secret.txt")
 	require.NoError(t, os.WriteFile(outside, []byte("secret"), 0o600))
 	t.Cleanup(func() { _ = os.Remove(outside) })
 
@@ -223,11 +223,11 @@ func TestLocal_PathTraversalRejected(t *testing.T) {
 	ctx := context.Background()
 
 	escapes := []string{
-		"../infra-go-secret.txt",
-		"../../infra-go-secret.txt",
-		"a/../../infra-go-secret.txt", // walks back in the middle
-		"/../../infra-go-secret.txt",  // leading slash plus walk-back
-		"//../infra-go-secret.txt",    // a double slash prefix must not bypass the check
+		"../ten-go-secret.txt",
+		"../../ten-go-secret.txt",
+		"a/../../ten-go-secret.txt", // walks back in the middle
+		"/../../ten-go-secret.txt",  // leading slash plus walk-back
+		"//../ten-go-secret.txt",    // a double slash prefix must not bypass the check
 		"..",                          // points at the parent directory itself
 		"../",                         // parent directory (with a trailing slash)
 	}

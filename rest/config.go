@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chihqiang/infra-go/core/logger"
-	resthandler "github.com/chihqiang/infra-go/rest/handler"
-	"github.com/chihqiang/infra-go/rest/internal/realip"
+	"github.com/chihqiang/ten-go/core/logger"
+	resthandler "github.com/chihqiang/ten-go/rest/handler"
+	"github.com/chihqiang/ten-go/rest/internal/realip"
 )
 
 var (

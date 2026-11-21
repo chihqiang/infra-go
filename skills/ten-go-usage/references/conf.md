@@ -22,7 +22,7 @@ Configuration loading and parsing package; supports JSON / YAML formats and prov
 ### Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/core/conf
+go get github.com/chihqiang/ten-go/core/conf
 ```
 
 ### Basic usage
@@ -35,7 +35,7 @@ package main
 import (
     "fmt"
     "time"
-    "github.com/chihqiang/infra-go/core/conf"
+    "github.com/chihqiang/ten-go/core/conf"
 )
 
 type Config struct {
@@ -461,7 +461,7 @@ import (
     "time"
     "os"
 
-    "github.com/chihqiang/infra-go/core/conf"
+    "github.com/chihqiang/ten-go/core/conf"
 )
 
 type Database struct {

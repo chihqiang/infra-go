@@ -4,7 +4,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/chihqiang/infra-go/core/mapping"
+	"github.com/chihqiang/ten-go/core/mapping"
 	"go.opentelemetry.io/otel/attribute"
 )
 

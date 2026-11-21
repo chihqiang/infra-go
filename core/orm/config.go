@@ -3,7 +3,7 @@ package orm
 import (
 	"time"
 
-	"github.com/chihqiang/infra-go/core/mapping"
+	"github.com/chihqiang/ten-go/core/mapping"
 )
 
 // Driver is the database driver type.

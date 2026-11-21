@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/chihqiang/infra-go/core/cast"
+	"github.com/chihqiang/ten-go/core/cast"
 )
 
 // jsonTagKey is the json tag key name.

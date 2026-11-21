@@ -18,7 +18,7 @@ A database ORM package built on [GORM](https://gorm.io); supports MySQL, Postgre
 ## Installation
 
 ```bash
-go get github.com/chihqiang/infra-go/core/orm
+go get github.com/chihqiang/ten-go/core/orm
 ```
 
 ## Quick start
@@ -27,7 +27,7 @@ go get github.com/chihqiang/infra-go/core/orm
 package main
 
 import (
-    "github.com/chihqiang/infra-go/core/orm"
+    "github.com/chihqiang/ten-go/core/orm"
 )
 
 type User struct {
@@ -227,8 +227,8 @@ The ORM package automatically bridges GORM's logs to the `logger` package. Just 
 package main
 
 import (
-    "github.com/chihqiang/infra-go/core/logger"
-    "github.com/chihqiang/infra-go/core/orm"
+    "github.com/chihqiang/ten-go/core/logger"
+    "github.com/chihqiang/ten-go/core/orm"
 )
 
 func main() {
@@ -317,8 +317,8 @@ import (
     "fmt"
     "time"
 
-    "github.com/chihqiang/infra-go/core/logger"
-    "github.com/chihqiang/infra-go/core/orm"
+    "github.com/chihqiang/ten-go/core/logger"
+    "github.com/chihqiang/ten-go/core/orm"
 )
 
 type User struct {

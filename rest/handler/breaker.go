@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/chihqiang/infra-go/core/breaker"
-	"github.com/chihqiang/infra-go/rest/internal/response"
+	"github.com/chihqiang/ten-go/core/breaker"
+	"github.com/chihqiang/ten-go/rest/internal/response"
 )
 
 // BreakerHandler routes requests through a circuit breaker.

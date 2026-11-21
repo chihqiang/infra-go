@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chihqiang/infra-go/core/hash"
+	"github.com/chihqiang/ten-go/core/hash"
 )
 
 const (

@@ -3,7 +3,7 @@ package ws
 import (
 	"net/http"
 
-	"github.com/chihqiang/infra-go/core/logger"
+	"github.com/chihqiang/ten-go/core/logger"
 )
 
 // Option is a server configuration option.

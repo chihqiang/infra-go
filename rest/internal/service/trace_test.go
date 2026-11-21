@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/chihqiang/infra-go/core/trace"
+	"github.com/chihqiang/ten-go/core/trace"
 )
 
 func TestTraceAgentReusesApplicationAgent(t *testing.T) {

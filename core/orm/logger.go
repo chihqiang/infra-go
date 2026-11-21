@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/chihqiang/infra-go/core/logger"
+	"github.com/chihqiang/ten-go/core/logger"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 )
