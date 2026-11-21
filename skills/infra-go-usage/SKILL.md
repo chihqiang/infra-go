@@ -27,7 +27,7 @@ How to use each `github.com/chihqiang/infra-go` module correctly in a business p
 | HTTP server / parameter binding / JSON responses | `rest` | `rest.NewServer` · `rest.Bind` · `rest.OkJSON` |
 | Built-in HTTP middleware | `rest/handler` | `resthandler.NewRecoveryHandler(...).Handle` · `NewTimeoutHandler` · `NewLogHandler` · `NewRateLimitHandler` … (struct + `Config` + `Handle`) |
 | Custom / third-party middleware | `rest` | `server.Use(chain.Middleware)` |
-| API authentication | `token` | `rest.WithRouteAuth(parser)` for one route; server-wide `rest.WithAuth(handler.AuthConfig{...})` (embeds `token.Config`, so `secret` can come from YAML and the parser is built automatically) |
+| API authentication | `token` | `rest.WithRouteAuth(secret, opts...)` for one route, `rest.WithAuth(secret, opts...)` server-wide; both build the parser from the secret, `resthandler.AuthConfig` makes the section YAML-loadable, and `resthandler.AuthOption` covers previous secret/realm/callback/skip paths |
 | API rate limiting (limiters) | `ratelimit` | `ratelimit.NewTokenBucket` / `NewRedisTokenBucket`; HTTP middleware `resthandler.NewRateLimitHandler` |
 | Downstream protection (fail fast via breaker) | `breaker` | `breaker.NewBreaker` or `breaker.Do`; HTTP middleware `resthandler.NewBreakerHandler` |
 | Failure retries | `retry` | `retry.Do` |
@@ -194,10 +194,9 @@ server.Use(resthandler.NewBreakerHandler(resthandler.BreakerConfig{
 }).Handle) // 503 when open
 
 // per-route auth
-server.Group("/admin").Use(resthandler.NewAuthHandler(resthandler.AuthConfig{
-	Enabled: true,
-	Parser:  parser,
-}).Handle)
+server.Group("/admin").Use(resthandler.NewAuthHandler(
+	resthandler.AuthConfig{Secret: cfg.JWTSecret},
+).Handle)
 ```
 
 > Third-party `func(http.Handler) http.Handler` middleware converts with `chain.Middleware(func(next http.HandlerFunc) http.HandlerFunc { return adapter(next).ServeHTTP })`; keep `rest/handler` handlers as the default choice since they already share the request-ID/logger conventions.

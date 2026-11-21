@@ -19,62 +19,90 @@ const (
 	HeaderTimestamp = "X-Signature-Timestamp"
 )
 
-// SignatureConfig configures SignatureHandler.
-type SignatureConfig struct {
-	Enabled bool `json:",optional"`
-	// Keys holds the accepted HMAC keys; several keys allow key rotation.
-	Keys [][]byte `json:",optional"`
-	// TTL bounds the accepted clock skew of the signed timestamp.
-	// Zero uses the secure default (5 minutes); a negative value explicitly
-	// disables the freshness check (not recommended: captured requests can be
+// SignatureOption customises SignatureHandler.
+type SignatureOption func(*signatureOptions)
+
+type signatureOptions struct {
+	// ttl bounds the accepted clock skew of the signed timestamp. A negative
+	// value explicitly disables the freshness check (captured requests could be
 	// replayed forever).
-	TTL time.Duration `json:",optional"`
-	// MaxBody caps the body size read for verification. Zero means unlimited;
-	// keep a MaxBytesHandler in front of this handler to bound memory use.
-	// Config.Validate rejects negative values while the middleware is enabled.
-	MaxBody int64 `json:",optional"`
-	// Now overrides the clock, mainly for tests.
-	Now func() time.Time `json:"-"`
+	ttl time.Duration
+	// maxBody caps the body size read for verification; zero means unlimited.
+	// Keep a MaxBytesHandler in front of this handler to bound memory use.
+	maxBody int64
+	// now overrides the clock, mainly for tests.
+	now func() time.Time
+}
+
+// WithSignatureTTL bounds the accepted clock skew of the signed timestamp. Zero
+// uses the secure default (5 minutes); a negative value disables the freshness
+// check entirely.
+func WithSignatureTTL(ttl time.Duration) SignatureOption {
+	return func(opts *signatureOptions) {
+		opts.ttl = ttl
+	}
+}
+
+// WithSignatureMaxBody caps the body size read for verification. Zero means
+// unlimited; keep a MaxBytesHandler in front of this handler to bound memory.
+// A negative value panics at construction.
+func WithSignatureMaxBody(maxBody int64) SignatureOption {
+	return func(opts *signatureOptions) {
+		opts.maxBody = maxBody
+	}
+}
+
+// withSignatureClock overrides the clock, mainly for tests.
+func withSignatureClock(now func() time.Time) SignatureOption {
+	return func(opts *signatureOptions) {
+		opts.now = now
+	}
 }
 
 // SignatureHandler rejects requests whose body is not HMAC signed.
 type SignatureHandler struct {
-	config SignatureConfig
+	keys    [][]byte
+	options signatureOptions
 }
 
 // defaultSignatureTTL is the freshness window applied when TTL is zero, so
 // enabling the middleware never silently disables replay protection.
 const defaultSignatureTTL = 5 * time.Minute
 
-// NewSignatureHandler creates a SignatureHandler. It panics when enabled without
-// any keys, since no request could ever be verified. A zero TTL is replaced by the
-// secure default (5 minutes); use a negative TTL to disable the check explicitly.
-func NewSignatureHandler(config SignatureConfig) *SignatureHandler {
-	if config.Enabled && len(config.Keys) == 0 {
+// NewSignatureHandler creates a SignatureHandler for the given HMAC keys;
+// several keys allow rotation. It panics when no key is configured, since no
+// request could ever be verified, and when a negative MaxBody is requested.
+func NewSignatureHandler(keys [][]byte, opts ...SignatureOption) *SignatureHandler {
+	if len(keys) == 0 {
 		panic("handler: SignatureHandler requires at least one key")
 	}
-	if config.TTL == 0 {
-		config.TTL = defaultSignatureTTL
+	var options signatureOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
 	}
-	return &SignatureHandler{config: config}
+	if options.maxBody < 0 {
+		panic("handler: SignatureHandler max body must not be negative")
+	}
+	if options.ttl == 0 {
+		options.ttl = defaultSignatureTTL
+	}
+	return &SignatureHandler{keys: keys, options: options}
 }
 
 // Handle wraps next with signature verification.
 func (h *SignatureHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
-	if !h.config.Enabled {
-		return next
-	}
-
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Validate the timestamp before reading the body: a stale or missing
 		// timestamp must not cost a full body read.
-		timestamp, err := signedTimestamp(r, h.config)
+		timestamp, err := signedTimestamp(r, h.options)
 		if err != nil {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 
-		body, err := readSignedBody(r, h.config.MaxBody)
+		body, err := readSignedBody(r, h.options.maxBody)
 		if err != nil {
 			var maxBytesErr *http.MaxBytesError
 			if errors.Is(err, errBodyTooLarge) || errors.As(err, &maxBytesErr) {
@@ -91,7 +119,7 @@ func (h *SignatureHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 		// payload.
 		payload := signaturePayload(r.Method, signaturePath(r), r.URL.RawQuery, timestamp, body)
 		signature := r.Header.Get(HeaderSignature)
-		for _, key := range h.config.Keys {
+		for _, key := range h.keys {
 			if hash.HMACVerify(key, payload, signature) {
 				next(w, r)
 				return
@@ -176,7 +204,7 @@ func readSignedBody(r *http.Request, maxBody int64) ([]byte, error) {
 	return body, nil
 }
 
-func signedTimestamp(r *http.Request, cfg SignatureConfig) (int64, error) {
+func signedTimestamp(r *http.Request, cfg signatureOptions) (int64, error) {
 	raw := r.Header.Get(HeaderTimestamp)
 	if raw == "" {
 		return 0, errMissingTimestamp
@@ -186,20 +214,20 @@ func signedTimestamp(r *http.Request, cfg SignatureConfig) (int64, error) {
 	if err != nil {
 		return 0, errInvalidTimestamp
 	}
-	if cfg.TTL <= 0 {
+	if cfg.ttl <= 0 {
 		return timestamp, nil
 	}
 
 	now := time.Now
-	if cfg.Now != nil {
-		now = cfg.Now
+	if cfg.now != nil {
+		now = cfg.now
 	}
 	// Compare absolute times instead of now.Sub(timestamp): Sub saturates at the
 	// duration limit, and negating math.MinInt64 overflows, so a timestamp far in
 	// the future (> ~292 years) used to bypass the freshness check entirely.
 	current := now()
 	signedAt := time.Unix(timestamp, 0)
-	if signedAt.Before(current.Add(-cfg.TTL)) || signedAt.After(current.Add(cfg.TTL)) {
+	if signedAt.Before(current.Add(-cfg.ttl)) || signedAt.After(current.Add(cfg.ttl)) {
 		return 0, errStaleTimestamp
 	}
 	return timestamp, nil

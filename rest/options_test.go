@@ -101,7 +101,7 @@ func TestWithMiddlewareAppendsAfterBuiltins(t *testing.T) {
 func TestWithSignatureVerifiesBody(t *testing.T) {
 	key := []byte("signing-key")
 	body := []byte(`{"sku":"a"}`)
-	server, err := NewServer(Config{}, WithSignature(handler.SignatureConfig{Keys: [][]byte{key}}))
+	server, err := NewServer(Config{}, WithSignature([][]byte{key}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,10 +136,7 @@ func TestWithAuthProtectsEveryRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server, err := NewServer(Config{}, WithAuth(handler.AuthConfig{
-		Parser: parser,
-		Realm:  "custom-realm",
-	}))
+	server, err := NewServer(Config{}, WithAuth("a-sufficiently-long-secret"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,8 +149,8 @@ func TestWithAuthProtectsEveryRoute(t *testing.T) {
 	if anonymous.Code != http.StatusUnauthorized {
 		t.Fatalf("anonymous status = %d, want 401", anonymous.Code)
 	}
-	if got := anonymous.Header().Get("WWW-Authenticate"); !strings.Contains(got, `realm="custom-realm"`) {
-		t.Fatalf("challenge = %q, want custom realm", got)
+	if got := anonymous.Header().Get("WWW-Authenticate"); !strings.Contains(got, `realm="api"`) {
+		t.Fatalf("challenge = %q, want the default realm", got)
 	}
 
 	authorized := httptest.NewRecorder()
@@ -165,13 +162,13 @@ func TestWithAuthProtectsEveryRoute(t *testing.T) {
 	}
 }
 
-func TestWithAuthRequiresParserOrSecret(t *testing.T) {
+func TestWithAuthRequiresSecret(t *testing.T) {
 	defer func() {
 		if recover() == nil {
-			t.Fatal("WithAuth without a parser or secret should panic")
+			t.Fatal("WithAuth without a secret should panic")
 		}
 	}()
-	WithAuth(handler.AuthConfig{})
+	WithAuth("")
 }
 
 func TestWithRateLimitRejectsExcessTraffic(t *testing.T) {

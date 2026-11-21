@@ -27,19 +27,17 @@ func TestAuthHandler_CallbackAndRealm(t *testing.T) {
 	callbackCalled := false
 	unwrapped := false
 
-	handlerFn := NewAuthHandler(AuthConfig{
-		Enabled: true,
-		Parser:  newTestTokenParser(t),
-		Realm:   "custom-realm",
-		Callback: func(w http.ResponseWriter, _ *http.Request, _ error) {
+	handlerFn := NewAuthHandler(AuthConfig{Secret: "0123456789abcdef"},
+		WithAuthRealm("custom-realm"),
+		WithUnauthorizedCallback(func(w http.ResponseWriter, _ *http.Request, _ error) {
 			callbackCalled = true
 			if u, ok := w.(interface{ Unwrap() http.ResponseWriter }); ok {
 				unwrapped = u.Unwrap() != nil
 			}
 			w.Header().Set("X-Reason", "denied")
 			_, _ = w.Write([]byte("custom rejection"))
-		},
-	}).Handle(func(http.ResponseWriter, *http.Request) { t.Fatal("must not reach next") })
+		}),
+	).Handle(func(http.ResponseWriter, *http.Request) { t.Fatal("must not reach next") })
 
 	recorder := httptest.NewRecorder()
 	handlerFn.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -137,7 +135,7 @@ func TestSignatureSignRequestHandlesNilRequest(t *testing.T) {
 }
 
 func TestSignatureHandler_InvalidTimestamp(t *testing.T) {
-	handlerFn := newSignatureHandler(SignatureConfig{Keys: [][]byte{[]byte("key")}}).Handle(
+	handlerFn := newSignatureHandler([][]byte{[]byte("key")}).Handle(
 		func(http.ResponseWriter, *http.Request) { t.Fatal("must not reach next") })
 
 	request := httptest.NewRequest(http.MethodPost, "/pay", strings.NewReader("body"))
