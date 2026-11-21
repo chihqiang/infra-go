@@ -359,7 +359,7 @@ server, _ := rest.NewServer(conf,
 | `WithCORS(origins ...string)` | Allow the given origins (all origins when empty, no credentials). Entries with a scheme match exactly; a scheme-less host also allows its subdomains |
 | `WithCORSHeaders(headers ...string)` | Append allowed request headers; it only configures them, CORS still has to be enabled with `WithCORS` / `WithCustomCORS` |
 | `WithCustomCORS(headerFn, notAllowedFn, origins...)` | Customise headers and the rejected-request body |
-| `WithAuth(cfg handler.AuthConfig)` | Require a valid bearer token on every request; `Enabled` is implied and the parser is built from the embedded `token.Config` when `Parser` is nil. `Realm` / `Callback` customise rejections |
+| `WithAuth(cfg handler.AuthConfig)` | Require a valid bearer token on every request; `Enabled` is implied, the parser is built from the embedded `token.Config` when `Parser` is nil, and invalid config panics like `NewAuthHandler`. `Realm` / `Callback` customise rejections |
 | `WithSignature(cfg handler.SignatureConfig)` | Require an HMAC signature on every request |
 | `WithRateLimit(limiter ratelimit.Limiter)` | Apply a rate limiter to every request |
 | `WithBreaker(br breaker.Breaker)` | Wrap the server with a circuit breaker |
@@ -594,7 +594,7 @@ server.Use(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
 | `NewRateLimitHandler(RateLimitConfig)` / `NewRateLimitPerSecondHandler(rate, burst)` | 429 via `core/ratelimit` |
 | `NewBreakerHandler(BreakerConfig)` | Circuit breaker; 5xx responses count as failures → 503 when open |
 | `NewSignatureHandler(SignatureConfig)` | HMAC check over `METHOD / escaped-path / raw-query / timestamp / body` with key rotation and a timestamp TTL (zero uses the 5-minute default, negative disables it); the timestamp is checked before the body is read, and `MaxBody` caps the body read for verification (zero is unlimited) |
-| `NewAuthHandler(AuthConfig)` | Bearer token check; RFC 6750 challenge (`invalid_request` → 400, `invalid_token` → 401), missing parser → 500, optional `Callback`. Builds the parser from the embedded `token.Config` when enabled with a secret; `SkipPaths` (matched against the cleaned path) lets health and public routes bypass auth |
+| `NewAuthHandler(AuthConfig)` | Bearer token check; RFC 6750 challenge (`invalid_request` → 400, `invalid_token` → 401), optional `Callback`. Builds the parser from the embedded `token.Config` when enabled with a secret; enabling without a parser or secret, or with an invalid token config, panics at construction. `SkipPaths` (matched against the cleaned path) lets health and public routes bypass auth |
 
 Default authorization failures write 400/401/500 with an RFC 6750 `WWW-Authenticate` challenge
 and no body. A missing or unsupported scheme (`Basic ...`, `Bearer2 ...`) gets a bare 401 challenge;

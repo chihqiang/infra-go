@@ -54,14 +54,10 @@ func WithSignature(cfg resthandler.SignatureConfig) Option {
 
 // WithAuth requires a valid bearer token on every request. cfg carries the
 // parser or the token secret and the rejection behaviour (realm, callback);
-// Enabled is set automatically. The parser is built from the embedded
-// token.Config when cfg.Parser is nil, so the secret can come from a
-// configuration file. For route or group scoped auth use WithRouteAuth or mount
-// handler.NewAuthHandler yourself.
+// Enabled is set automatically and NewAuthHandler validates the rest, building
+// the parser from the embedded token.Config when cfg.Parser is nil. For route or
+// group scoped auth use WithRouteAuth or mount handler.NewAuthHandler yourself.
 func WithAuth(cfg resthandler.AuthConfig) Option {
-	if cfg.Parser == nil && cfg.Secret == "" {
-		panic("rest: WithAuth requires a token parser or secret")
-	}
 	cfg.Enabled = true
 	return WithMiddleware(resthandler.NewAuthHandler(cfg).Handle)
 }

@@ -58,12 +58,15 @@ type AuthHandler struct {
 	skipPaths *pathmatch.Matcher
 }
 
-// NewAuthHandler creates an AuthHandler. When the config is enabled without a
-// Parser, the parser is built from the embedded token.Config, so the secret can
-// come from a configuration file. An invalid token config panics at startup,
-// mirroring NewSignatureHandler.
+// NewAuthHandler creates an AuthHandler. An enabled config requires a Parser or
+// a secret: the parser is built from the embedded token.Config, so the secret
+// can come from a configuration file. Enabling without either, or with an
+// invalid token config, panics at startup.
 func NewAuthHandler(config AuthConfig) *AuthHandler {
-	if config.Enabled && config.Parser == nil && config.Secret != "" {
+	if config.Enabled && config.Parser == nil {
+		if config.Secret == "" {
+			panic("handler: AuthHandler requires a token parser or secret")
+		}
 		parser, err := token.NewParser(config.Config)
 		if err != nil {
 			panic("handler: invalid auth token config: " + err.Error())

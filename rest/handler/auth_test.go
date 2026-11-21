@@ -252,18 +252,13 @@ func TestAuthorizeUsesCallback(t *testing.T) {
 	}
 }
 
-func TestAuthorizeWithoutParserReturnsServerError(t *testing.T) {
-	handlerFn := NewAuthHandler(AuthConfig{Enabled: true}).Handle(func(http.ResponseWriter, *http.Request) {})
-
-	recorder := httptest.NewRecorder()
-	handlerFn.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
-
-	if recorder.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500", recorder.Code)
-	}
-	if got := recorder.Header().Get("WWW-Authenticate"); got != "" {
-		t.Fatalf("challenge = %q, want none for a server error", got)
-	}
+func TestNewAuthHandlerRequiresParserOrSecret(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("enabling auth without a parser or secret should panic")
+		}
+	}()
+	NewAuthHandler(AuthConfig{Enabled: true})
 }
 
 func TestAuthorizeCallbackDefaultsStatus(t *testing.T) {
