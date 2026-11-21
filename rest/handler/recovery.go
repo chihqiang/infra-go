@@ -41,7 +41,7 @@ func (h *RecoveryHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 				if recovered == http.ErrAbortHandler {
 					panic(recovered)
 				}
-				logger.ErrorCtx(r.Context(), "rest: recovered panic",
+				logReject(r, "rest: recovered panic",
 					logger.Any("panic", recovered),
 					logger.String("stack", string(debug.Stack())),
 				)

@@ -33,17 +33,11 @@ func WithRouteMiddleware(middleware ...chain.Middleware) RouteOption {
 }
 
 // WithRouteAuth requires a valid bearer token signed with secret. Pass
-// handler.AuthOption values for a custom realm, callback or skip paths; for
+// handler.AuthOption values for a previous secret, callback or skip paths; for
 // server-wide auth use WithAuth.
 func WithRouteAuth(secret string, opts ...handler.AuthOption) RouteOption {
 	return WithRouteMiddleware(handler.NewAuthHandler(
 		handler.AuthConfig{Secret: secret}, opts...).Handle)
-}
-
-// WithRouteSignature requires a valid HMAC signature for this route. keys may
-// hold several keys to allow rotation.
-func WithRouteSignature(keys [][]byte, opts ...handler.SignatureOption) RouteOption {
-	return WithRouteMiddleware(handler.NewSignatureHandler(keys, opts...).Handle)
 }
 
 func applyRouteOptions(route Route, opts []RouteOption) Route {

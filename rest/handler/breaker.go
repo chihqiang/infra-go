@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/chihqiang/ten-go/core/breaker"
+	"github.com/chihqiang/ten-go/core/logger"
 	"github.com/chihqiang/ten-go/rest/internal/response"
 )
 
@@ -13,12 +14,8 @@ type BreakerHandler struct {
 	breaker breaker.Breaker
 }
 
-// NewBreakerHandler creates a BreakerHandler. It panics when br is nil, since
-// no request could be routed.
+// NewBreakerHandler creates a BreakerHandler.
 func NewBreakerHandler(br breaker.Breaker) *BreakerHandler {
-	if br == nil {
-		panic("handler: BreakerHandler requires a breaker")
-	}
 	return &BreakerHandler{breaker: br}
 }
 
@@ -29,6 +26,7 @@ func (h *BreakerHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 		promise, err := h.breaker.AllowCtx(r.Context())
 		if err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
+			logReject(r, "rest: circuit breaker open", logger.Err(err))
 			return
 		}
 

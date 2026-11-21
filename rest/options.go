@@ -41,18 +41,11 @@ func WithBreaker(br breaker.Breaker) Option {
 	}
 }
 
-// WithSignature requires an HMAC signature on every request. The signature covers
-// the method, escaped path, raw query, timestamp and body; TTL defaults to five
-// minutes when omitted. keys may hold several keys to allow rotation.
-func WithSignature(keys [][]byte, opts ...resthandler.SignatureOption) Option {
-	return WithMiddleware(resthandler.NewSignatureHandler(keys, opts...).Handle)
-}
-
 // WithAuth requires a valid bearer token signed with secret on every request.
-// It panics when the secret is missing or shorter than 8 characters. Use the
-// AuthOption values (WithPrevSecret, WithAuthRealm, WithAuthSkipPaths,
-// WithUnauthorizedCallback) to customise the handler; for route or group scoped
-// auth use WithRouteAuth.
+// Use the
+// AuthOption values (WithPrevSecret, WithAuthSkipPaths,
+// WithUnauthorizedCallback, WithTokenExtractor) to customise the handler; for
+// route or group scoped auth use WithRouteAuth.
 func WithAuth(secret string, opts ...resthandler.AuthOption) Option {
 	return WithMiddleware(resthandler.NewAuthHandler(
 		resthandler.AuthConfig{Secret: secret}, opts...).Handle)

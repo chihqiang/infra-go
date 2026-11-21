@@ -153,8 +153,7 @@ auth:
 	require.Equal(t, "a-sufficiently-long-secret", cfg.Auth.Secret)
 	require.Equal(t, []string{"/health", "/public/*"}, cfg.Auth.SkipPaths)
 
-	parser, err := token.NewParser(token.Config{Secret: cfg.Auth.Secret})
-	require.NoError(t, err)
+	parser := token.NewParser(token.Config{Secret: cfg.Auth.Secret})
 	signed, err := parser.Generate(jwtlib.MapClaims{
 		"sub": "user-1",
 		"exp": time.Now().Add(time.Hour).Unix(),
@@ -247,26 +246,9 @@ func TestConfigValidateRejectsBadValues(t *testing.T) {
 	}
 }
 
-func TestConfigValidateTrustedProxies(t *testing.T) {
-	valid := DefaultConfig()
-	valid.Middlewares.Log.TrustedProxies = []string{"127.0.0.1", "10.0.0.0/8", "2001:db8::/32"}
-	if err := valid.Validate(); err != nil {
-		t.Fatalf("valid trusted proxies rejected: %v", err)
-	}
-
-	invalid := DefaultConfig()
-	invalid.Middlewares.Log.TrustedProxies = []string{"not-an-ip"}
-	if err := invalid.Validate(); err == nil {
-		t.Fatal("invalid trusted proxy should fail validation")
-	}
-}
-
-// TestConfigValidateIgnoresDisabledMiddlewareSettings makes the contract
-// explicit: only enabled middleware takes part in validation, so a disabled
-// feature can keep placeholder or inherited values.
 func TestConfigValidateIgnoresDisabledMiddlewareSettings(t *testing.T) {
 	conf := DefaultConfig()
-	conf.Middlewares.Log = resthandler.LogConfig{Enabled: false, TrustedProxies: []string{"not-an-ip"}}
+	conf.Middlewares.Log = resthandler.LogConfig{Enabled: false}
 	conf.Middlewares.MaxConns = resthandler.MaxConnsConfig{Enabled: false, Limit: -1}
 	conf.Middlewares.Timeout = resthandler.TimeoutConfig{Enabled: false, Timeout: -time.Second}
 	conf.Middlewares.MaxBytes = resthandler.MaxBytesConfig{Enabled: false, Limit: -1}

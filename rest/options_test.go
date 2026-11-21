@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -100,39 +99,8 @@ func TestWithMiddlewareAppendsAfterBuiltins(t *testing.T) {
 	}
 }
 
-func TestWithSignatureVerifiesBody(t *testing.T) {
-	key := []byte("signing-key")
-	body := []byte(`{"sku":"a"}`)
-	server, err := NewServer(Config{}, WithSignature([][]byte{key}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	server.HandleFunc(http.MethodPost, "/orders", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-	})
-
-	request := httptest.NewRequest(http.MethodPost, "/orders", bytes.NewReader(body))
-	timestamp := time.Now().Unix()
-	request.Header.Set(handler.HeaderTimestamp, strconv.FormatInt(timestamp, 10))
-	request.Header.Set(handler.HeaderSignature, handler.SignRequest(key, timestamp, request, body))
-	recorder := httptest.NewRecorder()
-	server.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusCreated {
-		t.Fatalf("signed request status = %d, want 201", recorder.Code)
-	}
-
-	unsigned := httptest.NewRecorder()
-	server.ServeHTTP(unsigned, httptest.NewRequest(http.MethodPost, "/orders", bytes.NewReader(body)))
-	if unsigned.Code != http.StatusUnauthorized {
-		t.Fatalf("unsigned request status = %d, want 401", unsigned.Code)
-	}
-}
-
 func TestWithAuthProtectsEveryRoute(t *testing.T) {
-	parser, err := token.NewParser(token.Config{Secret: "a-sufficiently-long-secret"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	parser := token.NewParser(token.Config{Secret: "a-sufficiently-long-secret"})
 	signed, err := parser.Generate(jwtlib.MapClaims{
 		"sub": "user-1",
 		"exp": time.Now().Add(time.Hour).Unix(),
@@ -154,8 +122,8 @@ func TestWithAuthProtectsEveryRoute(t *testing.T) {
 	if anonymous.Code != http.StatusUnauthorized {
 		t.Fatalf("anonymous status = %d, want 401", anonymous.Code)
 	}
-	if got := anonymous.Header().Get("WWW-Authenticate"); !strings.Contains(got, `realm="api"`) {
-		t.Fatalf("challenge = %q, want the default realm", got)
+	if got := anonymous.Header().Get("WWW-Authenticate"); got != "" {
+		t.Fatalf("WWW-Authenticate = %q, want none", got)
 	}
 
 	authorized := httptest.NewRecorder()
@@ -165,15 +133,6 @@ func TestWithAuthProtectsEveryRoute(t *testing.T) {
 	if authorized.Code != http.StatusNoContent {
 		t.Fatalf("authorized status = %d, want 204", authorized.Code)
 	}
-}
-
-func TestWithAuthRequiresSecret(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("WithAuth without a secret should panic")
-		}
-	}()
-	WithAuth("")
 }
 
 func TestWithRateLimitRejectsExcessTraffic(t *testing.T) {

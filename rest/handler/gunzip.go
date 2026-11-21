@@ -4,6 +4,8 @@ import (
 	"compress/gzip"
 	"net/http"
 	"strings"
+
+	"github.com/chihqiang/ten-go/core/logger"
 )
 
 const (
@@ -42,6 +44,7 @@ func (h *GunzipHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 		reader, err := gzip.NewReader(r.Body)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
+			logReject(r, "rest: invalid gzip request body", logger.Err(err))
 			return
 		}
 		defer func() { _ = reader.Close() }()

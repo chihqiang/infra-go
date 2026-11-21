@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/chihqiang/ten-go/core/logger"
 	"github.com/chihqiang/ten-go/rest/internal/response"
 )
 
@@ -76,7 +77,7 @@ func (h *TimeoutHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 				}
 				return
 			}
-			writeTimeout(w)
+			writeTimeout(w, r, h.config.Timeout)
 		case <-ctx.Done():
 			// The handler and the deadline can become ready at the same time. Keep a
 			// response that was written before the deadline; otherwise answer 503.
@@ -91,15 +92,18 @@ func (h *TimeoutHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 			default:
 			}
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				writeTimeout(w)
+				writeTimeout(w, r, h.config.Timeout)
 			}
 		}
 	}
 }
 
 // writeTimeout writes the 503 response used when the deadline is exceeded.
-func writeTimeout(w http.ResponseWriter) {
+func writeTimeout(w http.ResponseWriter, r *http.Request, timeout time.Duration) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusServiceUnavailable)
+	logReject(r, "rest: request timed out",
+		logger.Duration("timeout", timeout),
+	)
 	_, _ = io.WriteString(w, "Request Timeout")
 }

@@ -50,11 +50,7 @@ func (r *recordingLogger) ErrorCtx(_ context.Context, _ string, fields ...logger
 func newLogHandlerForTest(t *testing.T, config LogConfig, log logger.ILogger) func(http.HandlerFunc) http.HandlerFunc {
 	t.Helper()
 	config.Enabled = true
-	handler, err := NewLogHandler(config, log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return handler.Handle
+	return NewLogHandler(config, log).Handle
 }
 
 func TestLogRecordsLevelFromStatus(t *testing.T) {
@@ -292,23 +288,7 @@ func TestLogRecordsPanickingRequestAndRepanics(t *testing.T) {
 	}
 }
 
-func TestLogHandlerClientIPOverride(t *testing.T) {
-	log := &recordingLogger{}
-	handlerFn := newLogHandlerForTest(t, LogConfig{ClientIP: func(*http.Request) string {
-		return "203.0.113.42"
-	}}, log)(func(http.ResponseWriter, *http.Request) {})
-
-	handlerFn.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/users", nil))
-
-	if len(log.entries) != 1 {
-		t.Fatalf("entries = %d, want 1", len(log.entries))
-	}
-	if got := log.entries[0].fields["ip"]; got != "203.0.113.42" {
-		t.Fatalf("ip = %v, want the configured resolver", got)
-	}
-}
-
-func TestLogHandlerIgnoresForwardingHeadersByDefault(t *testing.T) {
+func TestLogHandlerUsesForwardingHeaders(t *testing.T) {
 	log := &recordingLogger{}
 	handlerFn := newLogHandlerForTest(t, LogConfig{}, log)(func(http.ResponseWriter, *http.Request) {})
 
@@ -320,7 +300,7 @@ func TestLogHandlerIgnoresForwardingHeadersByDefault(t *testing.T) {
 	if len(log.entries) != 1 {
 		t.Fatalf("entries = %d, want 1", len(log.entries))
 	}
-	if got := log.entries[0].fields["ip"]; got != "10.0.0.1" {
-		t.Fatalf("ip = %v, want the direct peer", got)
+	if got := log.entries[0].fields["ip"]; got != "203.0.113.9" {
+		t.Fatalf("ip = %v, want the forwarded client address", got)
 	}
 }

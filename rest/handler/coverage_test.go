@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -18,17 +17,15 @@ import (
 
 func newTestTokenParser(t *testing.T) *token.Parser {
 	t.Helper()
-	p, err := token.NewParser(token.Config{Secret: "0123456789abcdef"})
-	require.NoError(t, err)
+	p := token.NewParser(token.Config{Secret: "0123456789abcdef"})
 	return p
 }
 
-func TestAuthHandler_CallbackAndRealm(t *testing.T) {
+func TestAuthHandler_CallbackAndChallenge(t *testing.T) {
 	callbackCalled := false
 	unwrapped := false
 
 	handlerFn := NewAuthHandler(AuthConfig{Secret: "0123456789abcdef"},
-		WithAuthRealm("custom-realm"),
 		WithUnauthorizedCallback(func(w http.ResponseWriter, _ *http.Request, _ error) {
 			callbackCalled = true
 			if u, ok := w.(interface{ Unwrap() http.ResponseWriter }); ok {
@@ -46,7 +43,7 @@ func TestAuthHandler_CallbackAndRealm(t *testing.T) {
 	assert.True(t, unwrapped)
 	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
 	assert.Equal(t, "custom rejection", recorder.Body.String())
-	assert.Contains(t, recorder.Header().Get("WWW-Authenticate"), `realm="custom-realm"`)
+	assert.Empty(t, recorder.Header().Get("WWW-Authenticate"))
 }
 
 func TestRequestIDHandler_InvalidIncomingID(t *testing.T) {
@@ -121,35 +118,6 @@ func TestRateLimitHandler_LimiterErrors(t *testing.T) {
 	denyFn.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
 	assert.Equal(t, http.StatusTooManyRequests, recorder.Code)
 	assert.Empty(t, recorder.Header().Get("Retry-After"))
-}
-
-func TestSignatureSignRequestHandlesNilRequest(t *testing.T) {
-	key := []byte("key")
-	signature := SignRequest(key, 1, nil, []byte("body"))
-	require.NotEmpty(t, signature)
-	assert.Equal(t, signature, Sign(key, 1, http.MethodGet, "/", "", []byte("body")))
-	assert.Equal(t, "/", signaturePath(nil))
-}
-
-func TestSignatureHandler_InvalidTimestamp(t *testing.T) {
-	handlerFn := newSignatureHandler([][]byte{[]byte("key")}).Handle(
-		func(http.ResponseWriter, *http.Request) { t.Fatal("must not reach next") })
-
-	request := httptest.NewRequest(http.MethodPost, "/pay", strings.NewReader("body"))
-	request.Header.Set(HeaderTimestamp, "not-a-number")
-	recorder := httptest.NewRecorder()
-	handlerFn.ServeHTTP(recorder, request)
-	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
-}
-
-func TestNewLogHandler_InvalidTrustedProxies(t *testing.T) {
-	_, err := NewLogHandler(LogConfig{Enabled: true, TrustedProxies: []string{"not-an-ip"}}, nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid trusted proxy")
-
-	// A disabled handler does not parse its configuration.
-	_, err = NewLogHandler(LogConfig{Enabled: false, TrustedProxies: []string{"not-an-ip"}}, nil)
-	require.NoError(t, err)
 }
 
 func TestPatternHelpers(t *testing.T) {

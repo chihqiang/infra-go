@@ -16,17 +16,7 @@ func newParser(t *testing.T, conf Config) *Parser {
 	if conf.Secret == "" {
 		conf.Secret = testSecret
 	}
-	parser, err := NewParser(conf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return parser
-}
-
-func TestNewRejectsShortSecret(t *testing.T) {
-	if _, err := NewParser(Config{Secret: "short"}); !errors.Is(err, ErrShortSecret) {
-		t.Fatalf("error = %v, want ErrShortSecret", err)
-	}
+	return NewParser(conf)
 }
 
 func TestGenerateRejectsEmptyClaims(t *testing.T) {
@@ -113,13 +103,6 @@ func TestParseAcceptsPreviousSecret(t *testing.T) {
 	rotated := newParser(t, Config{Secret: "the-new-signing-secret", PrevSecret: testSecret})
 	if _, err := rotated.Parse(token); err != nil {
 		t.Fatalf("previous secret should still verify: %v", err)
-	}
-}
-
-func TestNewRejectsShortPreviousSecret(t *testing.T) {
-	_, err := NewParser(Config{Secret: testSecret, PrevSecret: "short"})
-	if !errors.Is(err, ErrShortPrevSecret) {
-		t.Fatalf("error = %v, want ErrShortPrevSecret", err)
 	}
 }
 

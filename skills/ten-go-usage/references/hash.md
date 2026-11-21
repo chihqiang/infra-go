@@ -128,7 +128,7 @@ decrypted, err := hash.AESGCMDecrypt(key, encrypted)
 
 ### HMAC sign/verify
 
-`HMACSign` / `HMACVerify` are used for request signing and tamper detection (e.g. `rest.WithSignature` for signed request bodies). The signature is base64-encoded and verification uses constant-time comparison (`hmac.Equal`) to prevent timing attacks:
+`HMACSign` / `HMACVerify` are used for request signing and tamper detection. The signature is base64-encoded and verification uses constant-time comparison (`hmac.Equal`) to prevent timing attacks:
 
 ```go
 // sign: returns the base64-encoded HMAC-SHA256
