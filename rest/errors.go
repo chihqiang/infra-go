@@ -6,15 +6,17 @@ import (
 	"net/http"
 )
 
-// Common request errors that map onto HTTP status codes.
+// Common request errors that map onto HTTP status codes. Each one implements
+// StatusCoder, so StatusOf resolves it through the same path as any other error
+// that chooses its own status.
 var (
-	ErrBadRequest        = errors.New("rest: bad request")
-	ErrUnauthorized      = errors.New("rest: unauthorized")
-	ErrForbidden         = errors.New("rest: forbidden")
-	ErrResourceNotFound  = errors.New("rest: resource not found")
-	ErrConflict          = errors.New("rest: conflict")
-	ErrTooManyRequests   = errors.New("rest: too many requests")
-	ErrServerUnavailable = errors.New("rest: service unavailable")
+	ErrBadRequest        = NewStatusError(http.StatusBadRequest, "rest: bad request")
+	ErrUnauthorized      = NewStatusError(http.StatusUnauthorized, "rest: unauthorized")
+	ErrForbidden         = NewStatusError(http.StatusForbidden, "rest: forbidden")
+	ErrResourceNotFound  = NewStatusError(http.StatusNotFound, "rest: resource not found")
+	ErrConflict          = NewStatusError(http.StatusConflict, "rest: conflict")
+	ErrTooManyRequests   = NewStatusError(http.StatusTooManyRequests, "rest: too many requests")
+	ErrServerUnavailable = NewStatusError(http.StatusServiceUnavailable, "rest: service unavailable")
 )
 
 // StatusCoder lets an error choose its own response status.
@@ -22,7 +24,38 @@ type StatusCoder interface {
 	StatusCode() int
 }
 
-// StatusOf resolves the HTTP status for err.
+// StatusError is an error that carries the HTTP status it maps to. Define
+// custom sentinels with NewStatusError; unlike CodeMsg it is not rendered as a
+// business error by ErrorJSON, so the envelope keeps code -1 and the error text
+// (the text is preserved for 5xx too).
+type StatusError struct {
+	status  int
+	message string
+}
+
+// NewStatusError creates a StatusError for the given HTTP status.
+func NewStatusError(status int, message string) *StatusError {
+	return &StatusError{status: status, message: message}
+}
+
+// Error returns the message the error was created with.
+func (e *StatusError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.message
+}
+
+// StatusCode returns the HTTP status the error maps to.
+func (e *StatusError) StatusCode() int {
+	if e == nil {
+		return 0
+	}
+	return e.status
+}
+
+// StatusOf resolves the HTTP status for err. Errors implementing StatusCoder
+// choose their own status; every other error is a server error.
 func StatusOf(err error) int {
 	if err == nil {
 		return http.StatusOK
@@ -35,25 +68,7 @@ func StatusOf(err error) int {
 			return status
 		}
 	}
-
-	switch {
-	case errors.Is(err, ErrBadRequest):
-		return http.StatusBadRequest
-	case errors.Is(err, ErrUnauthorized):
-		return http.StatusUnauthorized
-	case errors.Is(err, ErrForbidden):
-		return http.StatusForbidden
-	case errors.Is(err, ErrResourceNotFound):
-		return http.StatusNotFound
-	case errors.Is(err, ErrConflict):
-		return http.StatusConflict
-	case errors.Is(err, ErrTooManyRequests):
-		return http.StatusTooManyRequests
-	case errors.Is(err, ErrServerUnavailable):
-		return http.StatusServiceUnavailable
-	default:
-		return http.StatusInternalServerError
-	}
+	return http.StatusInternalServerError
 }
 
 // CodeMsg combines a business code with a message. It implements error.

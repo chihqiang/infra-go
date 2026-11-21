@@ -12,6 +12,8 @@ A database ORM package built on [GORM](https://gorm.io); supports MySQL, Postgre
 - **Table name strategy**: supports table prefixes and singular table names
 - **Convenience functions**: the `MustNew` family panics on error, plus the `Ping` / `Close` helpers
 - **Slow query threshold**: configurable slow-query threshold, with slow SQL flagged automatically
+- **Constraint error helpers**: `IsDuplicatedKey` / `IsForeignKeyViolation` detect unique and
+  foreign-key violations whether or not `Config.TranslateError` is enabled
 
 ## Installation
 
@@ -96,6 +98,7 @@ db, err := orm.New(orm.Config{
 | `SkipDefaultTransaction` | `bool` | `true` | Skip the default transaction (improves write performance by roughly 30%) |
 | `TablePrefix` | `string` | `""` | Table name prefix |
 | `SingularTable` | `bool` | `false` | Whether to use singular table names |
+| `TranslateError` | `bool` | `false` | Return `gorm.ErrDuplicatedKey` / `gorm.ErrForeignKeyViolated` for constraint violations; GORM replaces the driver error, so the original message is lost. Prefer `IsDuplicatedKey` / `IsForeignKeyViolation` when the message must be kept |
 
 ### Log levels
 
@@ -142,6 +145,10 @@ err := orm.Ping(db)
 
 // close the connection
 err := orm.Close(db)
+
+// constraint violations (see "Constraint errors")
+duplicated := orm.IsDuplicatedKey(err)
+foreignKey := orm.IsForeignKeyViolation(err)
 ```
 
 ## Database examples
@@ -276,6 +283,30 @@ db, err := orm.New(orm.Config{
     ConnMaxIdleTime: 30 * time.Minute,    // idle timeout
 })
 ```
+
+## Constraint errors
+
+`orm.IsDuplicatedKey(err)` and `orm.IsForeignKeyViolation(err)` detect unique-key and foreign-key
+violations for every driver. They match both the raw driver error (MySQL `Duplicate entry`, SQLite
+`UNIQUE constraint failed`, PostgreSQL `duplicate key value`) and GORM's sentinels:
+
+```go
+if err := db.Create(&user).Error; err != nil {
+    switch {
+    case orm.IsDuplicatedKey(err):
+        return rest.NewCodeError(409, "email already exists")
+    case orm.IsForeignKeyViolation(err):
+        return rest.ErrBadRequest
+    default:
+        return err
+    }
+}
+```
+
+`Config.TranslateError` defaults to `false`. Enabling it makes GORM return `gorm.ErrDuplicatedKey` /
+`gorm.ErrForeignKeyViolated` so `errors.Is` works, but GORM **replaces** the driver error, dropping
+the constraint and column details. Keep it off when you need those details in logs or API messages —
+the helpers handle both cases. SQLite only enforces foreign keys after `PRAGMA foreign_keys = ON`.
 
 ## Complete example
 

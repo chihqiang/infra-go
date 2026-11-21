@@ -27,7 +27,7 @@ How to use each `github.com/chihqiang/infra-go` module correctly in a business p
 | HTTP server / parameter binding / JSON responses | `rest` | `rest.NewServer` · `rest.Bind` · `rest.OkJSON` |
 | Built-in HTTP middleware | `rest/handler` | `resthandler.NewRecoveryHandler(...).Handle` · `NewTimeoutHandler` · `NewLogHandler` · `NewRateLimitHandler` … (struct + `Config` + `Handle`) |
 | Custom / third-party middleware | `rest` | `server.Use(chain.Middleware)` |
-| API authentication | `token` | `token.NewParser` + `rest.WithRouteAuth(parser)` (or `resthandler.NewAuthHandler`) |
+| API authentication | `token` | `rest.WithRouteAuth(parser)` for one route; server-wide `rest.WithAuth(handler.AuthConfig{...})` (embeds `token.Config`, so `secret` can come from YAML and the parser is built automatically) |
 | API rate limiting (limiters) | `ratelimit` | `ratelimit.NewTokenBucket` / `NewRedisTokenBucket`; HTTP middleware `resthandler.NewRateLimitHandler` |
 | Downstream protection (fail fast via breaker) | `breaker` | `breaker.NewBreaker` or `breaker.Do`; HTTP middleware `resthandler.NewBreakerHandler` |
 | Failure retries | `retry` | `retry.Do` |
@@ -48,6 +48,7 @@ How to use each `github.com/chihqiang/infra-go` module correctly in a business p
 - Single-host rate limiting → in-memory limiter; shared across instances → Redis limiter; on HTTP mount `resthandler.NewRateLimitHandler(RateLimitConfig{Enabled: true, Limiter: limiter}).Handle`
 - HTTP middleware: common capabilities live in `rest/handler` as structs with a `Config` and a `Handle(http.HandlerFunc) http.HandlerFunc` method, so they work both with `server.Use` and standalone; `rest.MiddlewaresConf` configures common server middleware, while auth, signatures, rate limits and breakers are mounted explicitly at the intended scope
 - Short-lived temporary data (cache/session/counters) → `redisx`; reliable persistence and transactions → `orm`
+- Unique-key / foreign-key violations → `orm.IsDuplicatedKey` / `orm.IsForeignKeyViolation`; leave `orm.Config.TranslateError` off when the driver message must be kept
 - APIs that must respond synchronously → `rest` (plus `ws` when needed); async consumption is acceptable → `taskq`
 - Mutual exclusion around a critical section → `redisx.Locker` (cross-instance) or `syncx` (single process)
 - Preventing cache stampede / duplicate execution within one request → `syncx.NewSingleFlight`

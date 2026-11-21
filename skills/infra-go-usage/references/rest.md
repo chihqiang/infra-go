@@ -3,29 +3,6 @@
 HTTP server toolkit: configuration, routing, middleware chain, request binding, response
 helpers, JWT based authentication and a set of ready-to-use handlers.
 
-## Module structure
-
-```text
-rest/
-├── config.go        — Config / MiddlewaresConf / DefaultConfig / Validate
-├── server.go        — Server: routing, middleware assembly, start and graceful shutdown
-├── route.go         — Route / RouteOption / RouteGroup / Routes listing
-├── options.go       — server Option: CORS, TLS, rate limit, breaker, signature
-├── response.go      — JSON/XML/HTML writers, error responses and BaseResponse envelope
-├── errors.go        — error sentinels, StatusCoder, StatusOf, CodeMsg
-├── chain/           — Middleware type and immutable middleware chain
-├── router/          — http.ServeMux wrapper, 404/405 detection, path helpers
-├── handler/         — struct handlers: Config + NewXxxHandler + Handle
-├── token/           — JWT issuing and verification (Parser)
-└── internal/        — cors, realip, pathmatch, response writers, binding, service adapters
-```
-
-- `chain` has no dependency on the rest of `rest`, so middleware can be reused anywhere.
-- `handler` only depends on `chain` + `internal`, so individual handlers can be used without a
-  `rest.Server`.
-- `internal/*` is not importable from other modules; its behaviour is exposed through `handler`
-  and `rest` options.
-
 ## Features
 
 - **Routing**: Go 1.22 method-aware patterns (`GET /users/{id}`), nested groups, group middleware
@@ -208,10 +185,41 @@ Middlewares: rest.MiddlewaresConf{
 ```
 
 `Auth`, `Signature`, `RateLimit` and `Breaker` are intentionally not part of
-`MiddlewaresConf`. Use `WithRouteAuth` / `WithRouteSignature` or group middleware to scope auth
-and signatures. Rate limiting and breakers can be explicitly mounted server-wide with
-`WithRateLimit` / `WithBreaker`, or scoped with their handlers via `Group.Use` /
-`WithRouteMiddleware`.
+`MiddlewaresConf`. Auth and signatures can be scaled from a single route up to the whole server:
+`WithRouteAuth` / `WithRouteSignature` protect one route, group middleware covers a subtree, and
+`WithAuth` / `WithSignature` opt in server-wide. Rate limiting and breakers can be explicitly
+mounted server-wide with `WithRateLimit` / `WithBreaker`, or scoped with their handlers via
+`Group.Use` / `WithRouteMiddleware`.
+
+`handler.AuthConfig` embeds `token.Config`, so the secret can be loaded from the config file and
+`WithAuth` builds the parser itself — `Parser` (`json:"-"`) never has to be serialised:
+
+```go
+type Config struct {
+    rest.Config
+    Auth resthandler.AuthConfig `json:"auth"`
+}
+
+var cfg Config
+conf.MustLoad("config.yaml", &cfg, conf.UseEnv())
+server, _ := rest.NewServer(cfg.Config, rest.WithAuth(cfg.Auth))
+```
+
+```yaml
+auth:
+  enabled: true
+  secret: ${JWT_SECRET}   # flattened from token.Config
+  expire: 24h
+  realm: api
+  skipPaths: ["/health", "/public/*"]   # exact, trailing-* prefix or glob
+```
+
+The embedded `token.Config` is ignored when `Parser` is set explicitly; route-level auth with a
+custom realm still uses `WithRouteMiddleware(handler.NewAuthHandler(cfg).Handle)`.
+
+`skipPaths` (and the access-log/trace equivalents) are matched against the cleaned request path:
+`.`/`..` segments and duplicate slashes are removed first, matching ServeMux routing. A request
+such as `/public/../private` therefore cannot widen a `/public/*` rule.
 
 Tags are consumed by `core/conf` and `core/mapping`, so the same struct works for YAML/JSON files
 and environment expansion. Every config field carries an explicit key and `logger`, `middlewares`
@@ -351,6 +359,10 @@ server, _ := rest.NewServer(conf,
 | `WithCORS(origins ...string)` | Allow the given origins (all origins when empty, no credentials). Entries with a scheme match exactly; a scheme-less host also allows its subdomains |
 | `WithCORSHeaders(headers ...string)` | Append allowed request headers; it only configures them, CORS still has to be enabled with `WithCORS` / `WithCustomCORS` |
 | `WithCustomCORS(headerFn, notAllowedFn, origins...)` | Customise headers and the rejected-request body |
+| `WithAuth(cfg handler.AuthConfig)` | Require a valid bearer token on every request; `Enabled` is implied, the parser is built from the embedded `token.Config` when `Parser` is nil, and invalid config panics like `NewAuthHandler`. `Realm` / `Callback` customise rejections |
+| `WithSignature(cfg handler.SignatureConfig)` | Require an HMAC signature on every request |
+| `WithRateLimit(limiter ratelimit.Limiter)` | Apply a rate limiter to every request |
+| `WithBreaker(br breaker.Breaker)` | Wrap the server with a circuit breaker |
 
 A real preflight (`OPTIONS` with both `Origin` and `Access-Control-Request-Method`) is answered
 with 204 before reaching a route. Plain `OPTIONS` requests still reach the route handler, so custom
@@ -411,7 +423,8 @@ Use `rest.WriteJSON`/`rest.WriteXML` when a raw, unwrapped body is needed. `rest
 context for call-site symmetry, but the writers never log, so log returned errors yourself.
 
 `rest.ErrorJSON` and `rest.ErrorXML` hide details for 5xx (the body keeps `code`/`msg` with the HTTP status text) and
-echo the message for 4xx.
+echo the message for 4xx. A `StatusError` is an explicit choice, so its message is kept
+for 5xx too.
 
 Middleware-generated failures (auth, rate/concurrency limits, timeout, breaker, signature, body
 limit, recovery and gunzip) only set the HTTP status and protocol headers
@@ -421,17 +434,24 @@ handler convention. Use `rest.ErrorJSON` or `rest.ErrorXML` in the business hand
 Status resolution order in `StatusOf`:
 
 1. `StatusCoder` (`StatusCode() int`) implemented by the error chain; values outside 100–999 are
-   ignored
+   ignored. The sentinels (`ErrBadRequest`, `ErrUnauthorized`, `ErrForbidden`, `ErrResourceNotFound`,
+   `ErrConflict`, `ErrTooManyRequests`, `ErrServerUnavailable`), `CodeMsg` and `StatusError`
+   implement it
 2. `CodeMsg`: a code in the HTTP 4xx/5xx range is used as-is, any other business code becomes 400
    so the message is preserved
-3. Sentinels: `ErrBadRequest`, `ErrUnauthorized`, `ErrForbidden`, `ErrResourceNotFound`, `ErrConflict`,
-   `ErrTooManyRequests`, `ErrServerUnavailable`
-4. Anything else → 500
+3. Anything else → 500
 
 Decode failures are wrapped in an internal error that implements `StatusCoder`, so `rest.ErrorJSON` maps
 them to 400, unsupported content types to 415 and oversized bodies to 413 automatically.
 
-Business errors are created with `rest.NewCodeError(code, msg)`.
+Business errors are created with `rest.NewCodeError(code, msg)`; `ErrorJSON` keeps their `code` and
+`msg` in the envelope. Use `rest.NewStatusError(status, msg)` for a custom HTTP status that should
+stay an ordinary error (envelope keeps `code: -1` plus the message). Its message is preserved for
+5xx as well; only unexpected errors have their detail replaced by `http.StatusText`:
+
+```go
+var ErrPaymentRequired = rest.NewStatusError(http.StatusPaymentRequired, "payment required")
+```
 
 ## Binding
 
@@ -574,7 +594,7 @@ server.Use(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
 | `NewRateLimitHandler(RateLimitConfig)` / `NewRateLimitPerSecondHandler(rate, burst)` | 429 via `core/ratelimit` |
 | `NewBreakerHandler(BreakerConfig)` | Circuit breaker; 5xx responses count as failures → 503 when open |
 | `NewSignatureHandler(SignatureConfig)` | HMAC check over `METHOD / escaped-path / raw-query / timestamp / body` with key rotation and a timestamp TTL (zero uses the 5-minute default, negative disables it); the timestamp is checked before the body is read, and `MaxBody` caps the body read for verification (zero is unlimited) |
-| `NewAuthHandler(AuthConfig)` | Bearer token check; RFC 6750 challenge (`invalid_request` → 400, `invalid_token` → 401), missing parser → 500, optional `Callback` |
+| `NewAuthHandler(AuthConfig)` | Bearer token check; RFC 6750 challenge (`invalid_request` → 400, `invalid_token` → 401), optional `Callback`. Builds the parser from the embedded `token.Config` when enabled with a secret; enabling without a parser or secret, or with an invalid token config, panics at construction. `SkipPaths` (matched against the cleaned path) lets health and public routes bypass auth |
 
 Default authorization failures write 400/401/500 with an RFC 6750 `WWW-Authenticate` challenge
 and no body. A missing or unsupported scheme (`Basic ...`, `Bearer2 ...`) gets a bare 401 challenge;

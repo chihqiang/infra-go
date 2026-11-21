@@ -46,6 +46,70 @@ func TestAuthorizeStoresClaims(t *testing.T) {
 	}
 }
 
+func TestNewAuthHandlerBuildsParserFromTokenConfig(t *testing.T) {
+	parser := newTokenParser(t)
+	signed, err := parser.Generate("user-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	config := AuthConfig{Enabled: true}
+	config.Secret = "a-sufficiently-long-secret"
+	handlerFn := NewAuthHandler(config).Handle(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set(AuthorizationHeader, "Bearer "+signed)
+	recorder := httptest.NewRecorder()
+	handlerFn.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", recorder.Code)
+	}
+}
+
+func TestNewAuthHandlerPanicsOnInvalidTokenConfig(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("invalid token config should panic")
+		}
+	}()
+	NewAuthHandler(AuthConfig{Enabled: true, Config: token.Config{Secret: "short"}})
+}
+
+func TestAuthHandlerSkipsConfiguredPaths(t *testing.T) {
+	parser := newTokenParser(t)
+	handlerFn := NewAuthHandler(AuthConfig{
+		Enabled:   true,
+		Parser:    parser,
+		SkipPaths: []string{"/health", "/public/*"},
+	}).Handle(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	for _, path := range []string{"/health", "/public/info"} {
+		recorder := httptest.NewRecorder()
+		handlerFn.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != http.StatusNoContent {
+			t.Errorf("%s: status = %d, want 204", path, recorder.Code)
+		}
+	}
+
+	protected := httptest.NewRecorder()
+	handlerFn.ServeHTTP(protected, httptest.NewRequest(http.MethodGet, "/private", nil))
+	if protected.Code != http.StatusUnauthorized {
+		t.Fatalf("protected status = %d, want 401", protected.Code)
+	}
+
+	// Dot segments are cleaned before matching, so they cannot widen a rule.
+	bypass := httptest.NewRecorder()
+	handlerFn.ServeHTTP(bypass, httptest.NewRequest(http.MethodGet, "/public/../private", nil))
+	if bypass.Code != http.StatusUnauthorized {
+		t.Fatalf("dot-segment bypass status = %d, want 401", bypass.Code)
+	}
+}
+
 func TestAuthorizeRejectsBadHeaders(t *testing.T) {
 	parser := newTokenParser(t)
 	called := false
@@ -188,18 +252,13 @@ func TestAuthorizeUsesCallback(t *testing.T) {
 	}
 }
 
-func TestAuthorizeWithoutParserReturnsServerError(t *testing.T) {
-	handlerFn := NewAuthHandler(AuthConfig{Enabled: true}).Handle(func(http.ResponseWriter, *http.Request) {})
-
-	recorder := httptest.NewRecorder()
-	handlerFn.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
-
-	if recorder.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500", recorder.Code)
-	}
-	if got := recorder.Header().Get("WWW-Authenticate"); got != "" {
-		t.Fatalf("challenge = %q, want none for a server error", got)
-	}
+func TestNewAuthHandlerRequiresParserOrSecret(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("enabling auth without a parser or secret should panic")
+		}
+	}()
+	NewAuthHandler(AuthConfig{Enabled: true})
 }
 
 func TestAuthorizeCallbackDefaultsStatus(t *testing.T) {

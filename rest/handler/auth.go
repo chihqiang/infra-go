@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/chihqiang/infra-go/rest/internal/pathmatch"
 	"github.com/chihqiang/infra-go/rest/token"
 )
 
@@ -33,24 +34,46 @@ var (
 type UnauthorizedCallback func(w http.ResponseWriter, r *http.Request, err error)
 
 // AuthConfig configures AuthHandler.
+//
+// token.Config is embedded so configuration files can set the secret directly
+// (core/conf and core/mapping flatten embedded structs). When Parser is nil and
+// the embedded config carries a secret, NewAuthHandler builds the parser.
 type AuthConfig struct {
 	Enabled bool `json:",optional"`
-	// Parser verifies bearer tokens; it is required when Enabled is true.
+	token.Config
+	// Parser verifies bearer tokens; it takes precedence over token.Config.
 	Parser *token.Parser `json:"-"`
 	// Realm is the WWW-Authenticate realm; it defaults to "api".
 	Realm string `json:",optional"`
+	// SkipPaths lists request paths that bypass authentication. Rules support an
+	// exact path, a trailing "*" prefix and glob patterns.
+	SkipPaths []string `json:",optional"`
 	// Callback optionally customises the rejection response.
 	Callback UnauthorizedCallback `json:"-"`
 }
 
 // AuthHandler rejects requests without a valid bearer token.
 type AuthHandler struct {
-	config AuthConfig
+	config    AuthConfig
+	skipPaths *pathmatch.Matcher
 }
 
-// NewAuthHandler creates an AuthHandler.
+// NewAuthHandler creates an AuthHandler. An enabled config requires a Parser or
+// a secret: the parser is built from the embedded token.Config, so the secret
+// can come from a configuration file. Enabling without either, or with an
+// invalid token config, panics at startup.
 func NewAuthHandler(config AuthConfig) *AuthHandler {
-	return &AuthHandler{config: config}
+	if config.Enabled && config.Parser == nil {
+		if config.Secret == "" {
+			panic("handler: AuthHandler requires a token parser or secret")
+		}
+		parser, err := token.NewParser(config.Config)
+		if err != nil {
+			panic("handler: invalid auth token config: " + err.Error())
+		}
+		config.Parser = parser
+	}
+	return &AuthHandler{config: config, skipPaths: pathmatch.New(config.SkipPaths)}
 }
 
 // Handle wraps next with bearer-token authorization and stores verified claims
@@ -61,12 +84,17 @@ func (h *AuthHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
+		if h.skipPaths.Match(r.URL.Path) {
+			next(w, r)
+			return
+		}
+
 		if h.config.Parser == nil {
 			h.reject(w, r, ErrAuthUnavailable)
 			return
 		}
 
-		value, err := bearerToken(r)
+		value, err := BearerToken(r)
 		if err != nil {
 			h.reject(w, r, err)
 			return
@@ -82,7 +110,10 @@ func (h *AuthHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func bearerToken(r *http.Request) (string, error) {
+// BearerToken extracts the bearer credentials from r following RFC 6750. It
+// returns ErrMalformedAuthorization for a malformed Bearer request and
+// token.ErrMissingToken when the request carries no bearer credentials.
+func BearerToken(r *http.Request) (string, error) {
 	if len(r.Header.Values(AuthorizationHeader)) > 1 {
 		return "", ErrMalformedAuthorization
 	}
@@ -117,7 +148,6 @@ func bearerToken(r *http.Request) (string, error) {
 func (h *AuthHandler) reject(w http.ResponseWriter, r *http.Request, err error) {
 	status := http.StatusUnauthorized
 	errorCode, description := "", ""
-
 	switch {
 	case errors.Is(err, ErrAuthUnavailable):
 		// A missing parser is a server bug; do not disguise it as a 401.
@@ -125,14 +155,21 @@ func (h *AuthHandler) reject(w http.ResponseWriter, r *http.Request, err error) 
 	case errors.Is(err, ErrMalformedAuthorization):
 		status = http.StatusBadRequest
 		errorCode, description = "invalid_request", "malformed authorization header"
-	case errors.Is(err, token.ErrMissingToken):
-		// No error attribute: the client did not present bearer credentials.
 	case errors.Is(err, token.ErrInvalidToken):
 		errorCode, description = "invalid_token", "the access token is invalid or expired"
 	}
 
 	if status != http.StatusInternalServerError {
-		setBearerChallenge(w, h.realm(), errorCode, description)
+		// code and description are fixed literals here, so no quoted-string
+		// escaping is required.
+		challenge := `Bearer realm="` + h.realm() + `"`
+		if errorCode != "" {
+			challenge += `, error="` + errorCode + `"`
+		}
+		if description != "" {
+			challenge += `, error_description="` + description + `"`
+		}
+		w.Header().Set("WWW-Authenticate", challenge)
 	}
 
 	if h.config.Callback != nil {
@@ -150,19 +187,6 @@ func (h *AuthHandler) realm() string {
 		return h.config.Realm
 	}
 	return authRealm
-}
-
-// setBearerChallenge writes the RFC 6750 challenge. code and description are
-// fixed literals here, so no quoted-string escaping is required.
-func setBearerChallenge(w http.ResponseWriter, realm, code, description string) {
-	challenge := `Bearer realm="` + realm + `"`
-	if code != "" {
-		challenge += `, error="` + code + `"`
-	}
-	if description != "" {
-		challenge += `, error_description="` + description + `"`
-	}
-	w.Header().Set("WWW-Authenticate", challenge)
 }
 
 // unauthorizedWriter applies the default unauthorized status once, even when

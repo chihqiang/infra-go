@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+
 )
 
 type codedError struct{}
@@ -43,6 +44,25 @@ func TestStatusOf(t *testing.T) {
 		if got := StatusOf(test.err); got != test.want {
 			t.Errorf("%s: status = %d, want %d", test.name, got, test.want)
 		}
+	}
+}
+
+func TestNewStatusErrorCarriesStatus(t *testing.T) {
+	err := NewStatusError(http.StatusPaymentRequired, "rest: payment required")
+
+	if err.Error() != "rest: payment required" {
+		t.Fatalf("Error() = %q", err.Error())
+	}
+	if got := StatusOf(fmt.Errorf("pay: %w", err)); got != http.StatusPaymentRequired {
+		t.Fatalf("wrapped status = %d, want %d", got, http.StatusPaymentRequired)
+	}
+	if got := StatusOf((*StatusError)(nil)); got != http.StatusInternalServerError {
+		t.Fatalf("typed nil status = %d, want 500", got)
+	}
+
+	var codeMsg *CodeMsg
+	if errors.As(err, &codeMsg) {
+		t.Fatal("StatusError must not be rendered as a business CodeMsg")
 	}
 }
 

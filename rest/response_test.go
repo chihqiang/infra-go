@@ -297,6 +297,19 @@ func TestError_CodeMsg5xxKeepsBusinessMessage(t *testing.T) {
 	assert.Equal(t, "maintenance window", body.Msg)
 }
 
+// TestError_StatusError5xxKeepsMessage covers explicitly chosen 5xx statuses:
+// they are intentional, so the message is not replaced by the status text.
+func TestError_StatusError5xxKeepsMessage(t *testing.T) {
+	w := httptest.NewRecorder()
+	require.NoError(t, ErrorJSON(w, NewStatusError(http.StatusServiceUnavailable, "maintenance window")))
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	var body BaseResponse[any]
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, BusinessCodeError, body.Code)
+	assert.Equal(t, "maintenance window", body.Msg)
+}
+
 // TestError_Unknown5xxStillHidden keeps internal error details out of the response.
 func TestError_Unknown5xxStillHidden(t *testing.T) {
 	w := httptest.NewRecorder()

@@ -71,3 +71,19 @@ func TestNilMatcherMatchesNothing(t *testing.T) {
 		t.Fatal("nil matcher should be empty")
 	}
 }
+
+// TestMatcherCleansDotSegments is a regression test: skipping auth on the raw
+// path let "/hooks/../api/apps" match "/hooks*" before ServeMux cleaned it.
+func TestMatcherCleansDotSegments(t *testing.T) {
+	matcher := New([]string{"/hooks*"})
+
+	if matcher.Match("/hooks/../api/apps") {
+		t.Fatal("dot segments must not widen a prefix rule")
+	}
+	if !matcher.Match("/hooks/./callback") {
+		t.Fatal("a cleaned path under the prefix should still match")
+	}
+	if !matcher.Match("//hooks//callback") {
+		t.Fatal("duplicate slashes should be cleaned before matching")
+	}
+}

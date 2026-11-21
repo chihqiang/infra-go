@@ -96,6 +96,12 @@ type Config struct {
 	TablePrefix string `json:",optional"`
 	// SingularTable reports whether singular table names are used; defaults to false.
 	SingularTable bool `json:",optional"`
+	// TranslateError maps driver constraint errors onto gorm.ErrDuplicatedKey and
+	// gorm.ErrForeignKeyViolated so callers can use errors.Is instead of matching
+	// driver-specific messages. It defaults to false because GORM replaces the
+	// original error with the sentinel, which drops the driver detail; use
+	// IsDuplicatedKey / IsForeignKeyViolation when the message must be kept.
+	TranslateError bool `json:",optional"`
 }
 
 // fillDefault fills in the default values and then overrides them with the non-zero fields

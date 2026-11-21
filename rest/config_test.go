@@ -1,11 +1,14 @@
 package rest
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/chihqiang/infra-go/core/conf"
 	resthandler "github.com/chihqiang/infra-go/rest/handler"
+	"github.com/chihqiang/infra-go/rest/token"
 	"github.com/stretchr/testify/require"
 )
 
@@ -130,6 +133,50 @@ middlewares:
 
 	require.True(t, cfg.Middlewares.Recovery.Enabled)
 	require.True(t, cfg.Middlewares.Log.Enabled)
+}
+
+// TestAuthConfigFromYAMLBuildsParser pins the configuration story: the secret
+// lives in the config file because the embedded token.Config is flattened, and
+// WithAuth builds the parser, so Parser is never part of the serialised config.
+func TestAuthConfigFromYAMLBuildsParser(t *testing.T) {
+	type appConfig struct {
+		Auth resthandler.AuthConfig `json:"auth"`
+	}
+
+	var cfg appConfig
+	require.NoError(t, conf.LoadFromYAMLBytes([]byte(`
+auth:
+  enabled: true
+  secret: a-sufficiently-long-secret
+  expire: 1h
+  skipPaths: ["/health", "/public/*"]
+`), &cfg))
+	require.True(t, cfg.Auth.Enabled)
+	require.Equal(t, "a-sufficiently-long-secret", cfg.Auth.Secret)
+	require.Equal(t, time.Hour, cfg.Auth.Expire)
+	require.Equal(t, []string{"/health", "/public/*"}, cfg.Auth.SkipPaths)
+	require.Nil(t, cfg.Auth.Parser)
+
+	parser, err := token.NewParser(token.Config{Secret: cfg.Auth.Secret})
+	require.NoError(t, err)
+	signed, err := parser.Generate("user-1", nil)
+	require.NoError(t, err)
+
+	server, err := NewServer(Config{}, WithAuth(cfg.Auth))
+	require.NoError(t, err)
+	server.HandleFunc(http.MethodGet, "/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	anonymous := httptest.NewRecorder()
+	server.ServeHTTP(anonymous, httptest.NewRequest(http.MethodGet, "/", nil))
+	require.Equal(t, http.StatusUnauthorized, anonymous.Code)
+
+	authorized := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set(resthandler.AuthorizationHeader, "Bearer "+signed)
+	server.ServeHTTP(authorized, request)
+	require.Equal(t, http.StatusNoContent, authorized.Code)
 }
 
 // TestConfigLoadFromYAMLTLSFiles pins that certFile/keyFile still bind without
