@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -19,11 +18,9 @@ import (
 
 	"github.com/chihqiang/infra-go/core/breaker"
 	"github.com/chihqiang/infra-go/core/logger"
-	"github.com/chihqiang/infra-go/core/ratelimit"
 	"github.com/chihqiang/infra-go/core/service"
 	"github.com/chihqiang/infra-go/core/trace"
 	resthandler "github.com/chihqiang/infra-go/rest/handler"
-	"github.com/chihqiang/infra-go/rest/token"
 )
 
 func TestServerServeAndStop(t *testing.T) {
@@ -649,101 +646,9 @@ func TestNewServerLeavesPartialConfigLiteral(t *testing.T) {
 	}
 }
 
-func TestServerAuthMiddlewareFromConfig(t *testing.T) {
-	parser, err := token.NewParser(token.Config{Secret: "a-sufficiently-long-secret"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	signed, err := parser.Generate("user-1", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	server, err := NewServer(Config{Middlewares: MiddlewaresConf{
-		Auth: resthandler.AuthConfig{Enabled: true, Parser: parser},
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	server.HandleFunc(http.MethodGet, "/", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	})
-
-	recorder := httptest.NewRecorder()
-	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
-	if recorder.Code != http.StatusUnauthorized {
-		t.Fatalf("unauthenticated status = %d, want 401", recorder.Code)
-	}
-
-	request := httptest.NewRequest(http.MethodGet, "/", nil)
-	request.Header.Set(resthandler.AuthorizationHeader, "Bearer "+signed)
-	recorder = httptest.NewRecorder()
-	server.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusNoContent {
-		t.Fatalf("authenticated status = %d, want 204", recorder.Code)
-	}
-}
-
-func TestServerRateLimitFromConfig(t *testing.T) {
-	server, err := NewServer(Config{Middlewares: MiddlewaresConf{
-		RateLimit: resthandler.RateLimitConfig{
-			Enabled: true,
-			Limiter: ratelimit.NewTokenBucket(1, 1),
-		},
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	server.HandleFunc(http.MethodGet, "/", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	})
-
-	first := httptest.NewRecorder()
-	server.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/", nil))
-	if first.Code != http.StatusNoContent {
-		t.Fatalf("first status = %d, want 204", first.Code)
-	}
-
-	second := httptest.NewRecorder()
-	server.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/", nil))
-	if second.Code != http.StatusTooManyRequests {
-		t.Fatalf("second status = %d, want 429", second.Code)
-	}
-}
-
-func TestServerSignatureFromConfig(t *testing.T) {
-	key := []byte("signing-key")
-	body := []byte(`{"amount":10}`)
-	server, err := NewServer(Config{Middlewares: MiddlewaresConf{
-		Signature: resthandler.SignatureConfig{Enabled: true, Keys: [][]byte{key}},
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	server.HandleFunc(http.MethodPost, "/pay", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	})
-
-	request := httptest.NewRequest(http.MethodPost, "/pay", bytes.NewReader(body))
-	timestamp := time.Now().Unix()
-	request.Header.Set(resthandler.HeaderTimestamp, fmt.Sprint(timestamp))
-	request.Header.Set(resthandler.HeaderSignature, resthandler.SignRequest(key, timestamp, request, body))
-
-	recorder := httptest.NewRecorder()
-	server.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204", recorder.Code)
-	}
-}
-
-func TestServerBreakerFromConfig(t *testing.T) {
+func TestWithBreakerObservesSuccessfulResponse(t *testing.T) {
 	promise := &recordingPromise{}
-	server, err := NewServer(Config{Middlewares: MiddlewaresConf{
-		Breaker: resthandler.BreakerConfig{
-			Enabled: true,
-			Breaker: &recordingBreaker{promise: promise},
-		},
-	}})
+	server, err := NewServer(Config{}, WithBreaker(&recordingBreaker{promise: promise}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -757,7 +662,7 @@ func TestServerBreakerFromConfig(t *testing.T) {
 		t.Fatalf("status = %d, want 204", recorder.Code)
 	}
 	if !promise.accepted {
-		t.Fatal("configured breaker did not accept a successful response")
+		t.Fatal("breaker option did not accept a successful response")
 	}
 }
 

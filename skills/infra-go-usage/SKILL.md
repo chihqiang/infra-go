@@ -46,7 +46,7 @@ How to use each `github.com/chihqiang/infra-go` module correctly in a business p
 **Branching logic (decision points)**:
 
 - Single-host rate limiting → in-memory limiter; shared across instances → Redis limiter; on HTTP mount `resthandler.NewRateLimitHandler(RateLimitConfig{Enabled: true, Limiter: limiter}).Handle`
-- HTTP middleware: common capabilities live in `rest/handler` as structs with a `Config` and a `Handle(http.HandlerFunc) http.HandlerFunc` method, so they work both with `server.Use` and standalone; server-wide defaults are configured through one config struct per handler inside `rest.MiddlewaresConf`
+- HTTP middleware: common capabilities live in `rest/handler` as structs with a `Config` and a `Handle(http.HandlerFunc) http.HandlerFunc` method, so they work both with `server.Use` and standalone; `rest.MiddlewaresConf` configures common server middleware, while auth, signatures, rate limits and breakers are mounted explicitly at the intended scope
 - Short-lived temporary data (cache/session/counters) → `redisx`; reliable persistence and transactions → `orm`
 - APIs that must respond synchronously → `rest` (plus `ws` when needed); async consumption is acceptable → `taskq`
 - Mutual exclusion around a critical section → `redisx.Locker` (cross-instance) or `syncx` (single process)
@@ -239,7 +239,7 @@ sg.Start() // blocking; returns once everything has exited; Stop is guaranteed t
 - [ ] Configuration is loaded through `conf`, with defaults and environment variable support; sensitive values come from environment variables
 - [ ] All components are initialized in dependency order; connection-holding components have `Close / Stop / Sync`
 - [ ] HTTP routes decode with `rest.Bind` and answer through `rest.OkJSON` / `rest.ErrorJSON`
-- [ ] Auth / rate limiting / tracing / request ID / recovery are enabled via `rest.MiddlewaresConf` or mounted from `rest/handler`
+- [ ] Tracing / request ID / recovery are enabled via `rest.MiddlewaresConf`; auth, signatures, rate limits and breakers are mounted explicitly at the intended scope
 - [ ] Custom middleware is written as `chain.Middleware` and mounted with `server.Use`
 - [ ] Multiple services are started and stopped together with `service.NewServiceGroup`, with graceful shutdown
 - [ ] Error messages and comments are English, matching the project style

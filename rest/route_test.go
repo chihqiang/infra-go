@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/chihqiang/infra-go/rest/chain"
 	"github.com/chihqiang/infra-go/rest/handler"
@@ -171,6 +173,47 @@ func TestWithRouteAuthProtectsGroupRoute(t *testing.T) {
 	server.ServeHTTP(authorized, request)
 	if authorized.Code != http.StatusOK || authorized.Body.String() != "user-1" {
 		t.Fatalf("authorized response = %d %q", authorized.Code, authorized.Body.String())
+	}
+}
+
+func TestWithRouteSignatureProtectsOnlySelectedRoute(t *testing.T) {
+	key := []byte("signing-key")
+	body := []byte(`{"amount":10}`)
+	server, err := NewServer(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.AddRoute(Route{
+		Method: http.MethodPost,
+		Path:   "/signed",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}),
+	}, WithRouteSignature(handler.SignatureConfig{Keys: [][]byte{key}}))
+	server.HandleFunc(http.MethodPost, "/open", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	unsigned := httptest.NewRecorder()
+	server.ServeHTTP(unsigned, httptest.NewRequest(http.MethodPost, "/signed", bytes.NewReader(body)))
+	if unsigned.Code != http.StatusUnauthorized {
+		t.Fatalf("unsigned route status = %d, want 401", unsigned.Code)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/signed", bytes.NewReader(body))
+	timestamp := time.Now().Unix()
+	request.Header.Set(handler.HeaderTimestamp, strconv.FormatInt(timestamp, 10))
+	request.Header.Set(handler.HeaderSignature, handler.SignRequest(key, timestamp, request, body))
+	signed := httptest.NewRecorder()
+	server.ServeHTTP(signed, request)
+	if signed.Code != http.StatusNoContent {
+		t.Fatalf("signed route status = %d, want 204", signed.Code)
+	}
+
+	open := httptest.NewRecorder()
+	server.ServeHTTP(open, httptest.NewRequest(http.MethodPost, "/open", bytes.NewReader(body)))
+	if open.Code != http.StatusNoContent {
+		t.Fatalf("unprotected route status = %d, want 204", open.Code)
 	}
 }
 

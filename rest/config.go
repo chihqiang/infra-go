@@ -100,13 +100,9 @@ type MiddlewaresConf struct {
 	Trace     resthandler.TraceConfig     `json:",optional"`
 	Log       resthandler.LogConfig       `json:",optional"`
 	MaxConns  resthandler.MaxConnsConfig  `json:",optional"`
-	Auth      resthandler.AuthConfig      `json:",optional"`
-	RateLimit resthandler.RateLimitConfig `json:",optional"`
-	Breaker   resthandler.BreakerConfig   `json:",optional"`
 	Timeout   resthandler.TimeoutConfig   `json:",optional"`
 	Gunzip    resthandler.GunzipConfig    `json:",optional"`
 	MaxBytes  resthandler.MaxBytesConfig  `json:",optional"`
-	Signature resthandler.SignatureConfig `json:",optional"`
 }
 
 // DefaultConfig returns the standard HTTP server configuration.
@@ -172,23 +168,6 @@ func (c Config) Validate() error {
 	if c.Middlewares.Log.Enabled {
 		if _, err := realip.ParseTrustedProxies(c.Middlewares.Log.TrustedProxies); err != nil {
 			return fmt.Errorf("rest: %w", err)
-		}
-	}
-	if c.Middlewares.Auth.Enabled && c.Middlewares.Auth.Parser == nil {
-		return errors.New("rest: auth middleware requires a token parser")
-	}
-	if c.Middlewares.RateLimit.Enabled && c.Middlewares.RateLimit.Limiter == nil {
-		return errors.New("rest: rate limit middleware requires a limiter")
-	}
-	if c.Middlewares.Breaker.Enabled && c.Middlewares.Breaker.Breaker == nil {
-		return errors.New("rest: breaker middleware requires a breaker")
-	}
-	if c.Middlewares.Signature.Enabled {
-		if len(c.Middlewares.Signature.Keys) == 0 {
-			return errors.New("rest: signature middleware requires at least one key")
-		}
-		if c.Middlewares.Signature.MaxBody < 0 {
-			return fmt.Errorf("rest: signature max body must not be negative: %d", c.Middlewares.Signature.MaxBody)
 		}
 	}
 	if c.Health.Enabled {
