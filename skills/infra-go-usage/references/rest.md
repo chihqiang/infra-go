@@ -208,10 +208,11 @@ Middlewares: rest.MiddlewaresConf{
 ```
 
 `Auth`, `Signature`, `RateLimit` and `Breaker` are intentionally not part of
-`MiddlewaresConf`. Use `WithRouteAuth` / `WithRouteSignature` or group middleware to scope auth
-and signatures. Rate limiting and breakers can be explicitly mounted server-wide with
-`WithRateLimit` / `WithBreaker`, or scoped with their handlers via `Group.Use` /
-`WithRouteMiddleware`.
+`MiddlewaresConf`. Auth and signatures can be scaled from a single route up to the whole server:
+`WithRouteAuth` / `WithRouteSignature` protect one route, group middleware covers a subtree, and
+`WithAuth` / `WithSignature` opt in server-wide. Rate limiting and breakers can be explicitly
+mounted server-wide with `WithRateLimit` / `WithBreaker`, or scoped with their handlers via
+`Group.Use` / `WithRouteMiddleware`.
 
 Tags are consumed by `core/conf` and `core/mapping`, so the same struct works for YAML/JSON files
 and environment expansion. Every config field carries an explicit key and `logger`, `middlewares`
@@ -351,6 +352,10 @@ server, _ := rest.NewServer(conf,
 | `WithCORS(origins ...string)` | Allow the given origins (all origins when empty, no credentials). Entries with a scheme match exactly; a scheme-less host also allows its subdomains |
 | `WithCORSHeaders(headers ...string)` | Append allowed request headers; it only configures them, CORS still has to be enabled with `WithCORS` / `WithCustomCORS` |
 | `WithCustomCORS(headerFn, notAllowedFn, origins...)` | Customise headers and the rejected-request body |
+| `WithAuth(cfg handler.AuthConfig)` | Require a valid bearer token on every request; `Enabled` is implied, `Parser` is required, and `Realm` / `Callback` customise rejections |
+| `WithSignature(cfg handler.SignatureConfig)` | Require an HMAC signature on every request |
+| `WithRateLimit(limiter ratelimit.Limiter)` | Apply a rate limiter to every request |
+| `WithBreaker(br breaker.Breaker)` | Wrap the server with a circuit breaker |
 
 A real preflight (`OPTIONS` with both `Origin` and `Access-Control-Request-Method`) is answered
 with 204 before reaching a route. Plain `OPTIONS` requests still reach the route handler, so custom

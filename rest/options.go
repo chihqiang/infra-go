@@ -52,6 +52,18 @@ func WithSignature(cfg resthandler.SignatureConfig) Option {
 	return WithMiddleware(resthandler.NewSignatureHandler(cfg).Handle)
 }
 
+// WithAuth requires a valid bearer token on every request. cfg carries the
+// parser and the rejection behaviour (realm, callback); Enabled is set
+// automatically and cfg.Parser is required. For route or group scoped auth use
+// WithRouteAuth or mount handler.NewAuthHandler yourself.
+func WithAuth(cfg resthandler.AuthConfig) Option {
+	if cfg.Parser == nil {
+		panic("rest: WithAuth requires a token parser")
+	}
+	cfg.Enabled = true
+	return WithMiddleware(resthandler.NewAuthHandler(cfg).Handle)
+}
+
 // WithTLSConfig applies cfg to the underlying http.Server. It takes effect when
 // both CertFile and KeyFile are configured.
 func WithTLSConfig(cfg *tls.Config) Option {

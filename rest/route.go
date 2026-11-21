@@ -35,7 +35,8 @@ func WithRouteMiddleware(middleware ...chain.Middleware) RouteOption {
 
 // WithRouteAuth requires a valid bearer token verified by parser. For a custom
 // realm or rejection callback, use WithRouteMiddleware with
-// handler.NewAuthHandler and an explicit handler.AuthConfig.
+// handler.NewAuthHandler and an explicit handler.AuthConfig. For server-wide
+// auth use WithAuth.
 func WithRouteAuth(parser *token.Parser) RouteOption {
 	return WithRouteMiddleware(handler.NewAuthHandler(handler.AuthConfig{
 		Enabled: true,

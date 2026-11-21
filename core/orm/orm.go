@@ -307,6 +307,7 @@ func buildGormConfig(c Config) gorm.Config {
 			TablePrefix:   c.TablePrefix,
 			SingularTable: c.SingularTable,
 		},
-		Logger: buildGormLogger(c),
+		Logger:         buildGormLogger(c),
+		TranslateError: c.TranslateError,
 	}
 }

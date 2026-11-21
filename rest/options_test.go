@@ -13,6 +13,7 @@ import (
 
 	"github.com/chihqiang/infra-go/core/ratelimit"
 	"github.com/chihqiang/infra-go/rest/handler"
+	"github.com/chihqiang/infra-go/rest/token"
 )
 
 func TestWithCORSAppliesHeadersAndPreflight(t *testing.T) {
@@ -123,6 +124,54 @@ func TestWithSignatureVerifiesBody(t *testing.T) {
 	if unsigned.Code != http.StatusUnauthorized {
 		t.Fatalf("unsigned request status = %d, want 401", unsigned.Code)
 	}
+}
+
+func TestWithAuthProtectsEveryRoute(t *testing.T) {
+	parser, err := token.NewParser(token.Config{Secret: "a-sufficiently-long-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, err := parser.Generate("user-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server, err := NewServer(Config{}, WithAuth(handler.AuthConfig{
+		Parser: parser,
+		Realm:  "custom-realm",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.HandleFunc(http.MethodGet, "/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	anonymous := httptest.NewRecorder()
+	server.ServeHTTP(anonymous, httptest.NewRequest(http.MethodGet, "/", nil))
+	if anonymous.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous status = %d, want 401", anonymous.Code)
+	}
+	if got := anonymous.Header().Get("WWW-Authenticate"); !strings.Contains(got, `realm="custom-realm"`) {
+		t.Fatalf("challenge = %q, want custom realm", got)
+	}
+
+	authorized := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set(handler.AuthorizationHeader, "Bearer "+signed)
+	server.ServeHTTP(authorized, request)
+	if authorized.Code != http.StatusNoContent {
+		t.Fatalf("authorized status = %d, want 204", authorized.Code)
+	}
+}
+
+func TestWithAuthRequiresParser(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("WithAuth without a parser should panic")
+		}
+	}()
+	WithAuth(handler.AuthConfig{})
 }
 
 func TestWithRateLimitRejectsExcessTraffic(t *testing.T) {
