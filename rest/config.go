@@ -9,7 +9,6 @@ import (
 
 	"github.com/chihqiang/ten-go/core/logger"
 	resthandler "github.com/chihqiang/ten-go/rest/handler"
-	"github.com/chihqiang/ten-go/rest/internal/realip"
 )
 
 var (
@@ -164,11 +163,6 @@ func (c Config) Validate() error {
 	}
 	if c.Middlewares.MaxBytes.Enabled && c.Middlewares.MaxBytes.Limit < 0 {
 		return fmt.Errorf("rest: max body bytes must not be negative: %d", c.Middlewares.MaxBytes.Limit)
-	}
-	if c.Middlewares.Log.Enabled {
-		if _, err := realip.ParseTrustedProxies(c.Middlewares.Log.TrustedProxies); err != nil {
-			return fmt.Errorf("rest: %w", err)
-		}
 	}
 	if c.Health.Enabled {
 		path := normalizeHealthPath(c.Health.Path)

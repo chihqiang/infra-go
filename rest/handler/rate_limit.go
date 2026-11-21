@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/chihqiang/ten-go/core/logger"
 	"github.com/chihqiang/ten-go/core/ratelimit"
 )
 
@@ -40,13 +41,17 @@ func (h *RateLimitHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 		allowed, err := h.limiter.AllowContext(r.Context())
 		if err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
+			logReject(r, "rest: rate limiter unavailable", logger.Err(err))
 			return
 		}
 		if !allowed {
+			var fields []logger.Field
 			if delay, ok := retryAfter(h.limiter); ok {
 				w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(delay)))
+				fields = append(fields, logger.Duration("retry_after", delay))
 			}
 			w.WriteHeader(http.StatusTooManyRequests)
+			logReject(r, "rest: rate limit exceeded", fields...)
 			return
 		}
 		next(w, r)

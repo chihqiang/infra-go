@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 
+	"github.com/chihqiang/ten-go/core/logger"
 	"github.com/chihqiang/ten-go/core/ratelimit"
 )
 
@@ -36,6 +37,9 @@ func (h *MaxConnsHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !h.guard.Allow() {
 			w.WriteHeader(http.StatusServiceUnavailable)
+			logReject(r, "rest: too many concurrent requests",
+				logger.Int("limit", h.config.Limit),
+			)
 			return
 		}
 		defer h.guard.Release()

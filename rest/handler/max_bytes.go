@@ -4,6 +4,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+
+	"github.com/chihqiang/ten-go/core/logger"
 )
 
 // MaxBytesConfig configures MaxBytesHandler.
@@ -29,15 +31,25 @@ func (h *MaxBytesHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.ContentLength > h.config.Limit {
+		limit := h.config.Limit
+		if r.ContentLength > limit {
 			markConnectionClose(w)
 			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			logReject(r, "rest: request body too large",
+				logger.Int64("content_length", r.ContentLength),
+				logger.Int64("limit", limit),
+			)
 			return
 		}
 		if r.Body != nil {
 			r.Body = &maxBytesBody{
-				ReadCloser: http.MaxBytesReader(w, r.Body, h.config.Limit),
-				onLimit:    func() { markConnectionClose(w) },
+				ReadCloser: http.MaxBytesReader(w, r.Body, limit),
+				onLimit: func() {
+					markConnectionClose(w)
+					logReject(r, "rest: request body too large",
+						logger.Int64("limit", limit),
+					)
+				},
 			}
 		}
 		next(w, r)

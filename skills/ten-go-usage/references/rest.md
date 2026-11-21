@@ -170,10 +170,9 @@ Middlewares: rest.MiddlewaresConf{
     Recovery:  resthandler.RecoveryConfig{Enabled: true},
     RequestID: resthandler.RequestIDConfig{Enabled: true},
     Log: resthandler.LogConfig{
-        Enabled:        true,
-        ServiceName:    "api",
-        SkipPaths:      []string{"/healthz"},
-        TrustedProxies: []string{"10.0.0.0/8"},
+        Enabled:     true,
+        ServiceName: "api",
+        SkipPaths:   []string{"/healthz"},
     },
     Trace: resthandler.TraceConfig{
         Enabled:     true,
@@ -294,16 +293,15 @@ entry is commented out) is treated like an omitted section instead of failing as
 as the fallback for configs built in code that leave the path empty.
 
 `Config.Validate()` rejects an out-of-range port, half-configured TLS
-and negative server timeouts. Configured middleware settings (invalid trusted proxies and
-negative limits) are only checked while that middleware is enabled, so disabled features do not
-force their configuration to be valid.
+and negative server timeouts. Configured middleware settings (negative limits) are only checked
+while that middleware is enabled, so disabled features do not force their configuration to be
+valid.
 
-`Middlewares.Log.TrustedProxies` accepts IPs and CIDR ranges. When it is set, the access log only
-honours `X-Forwarded-For` / `X-Real-IP` if the direct peer is in the list, and walks the forwarded
-chain right-to-left; when it is empty the forwarding headers are ignored and the direct peer
-address is used. `ClientIP` returns the direct peer as well; `ClientIPFromHeaders` keeps the legacy
-trust-any-peer behaviour, and `ClientIPTrusted` / `ParseTrustedProxies` expose the proxy-aware
-logic for application code.
+The access log and middleware error logs resolve the client IP with
+`realip.FromRequest`: the first `X-Forwarded-For` entry, then `X-Real-IP`, then the direct peer,
+with ports stripped. The forwarding headers are trusted from any peer because this value is only
+used for logging; use `rest.ClientIP` (direct peer) or `rest.ClientIPTrusted` with
+`rest.ParseTrustedProxies` when application code needs a spoof-resistant address.
 
 The server's configured middleware execution order is fixed:
 
@@ -425,7 +423,9 @@ for 5xx too.
 Middleware-generated failures (auth, rate/concurrency limits, timeout, breaker, body
 limit, recovery and gunzip) only set the HTTP status and protocol headers
 (`Retry-After`, `Connection`) and write no JSON body, matching go-zero's
-handler convention. Use `rest.ErrorJSON` or `rest.ErrorXML` in the business handler when an error envelope is needed.
+handler convention. Each of them also writes an error log through `core/logger` with the
+method, path and resolved client IP. Use `rest.ErrorJSON` or `rest.ErrorXML` in
+the business handler when an error envelope is needed.
 
 Status resolution order in `StatusOf`:
 
@@ -579,7 +579,7 @@ server.Use(resthandler.NewRateLimitHandler(ratelimit.NewTokenBucket(100, 200)).H
 | `NewRecoveryHandler(RecoveryConfig)` | Recovers panics → 500, re-panics `http.ErrAbortHandler`; when the response is already committed it aborts the connection instead of hiding the truncation behind a clean 200 |
 | `NewRequestIDHandler(RequestIDConfig)` | Keeps a safe `X-Request-ID` or generates a UUID; `resthandler.RequestIDFromContext(ctx)` reads it from the request context. Importing `rest/handler` also registers a `logger` context extractor, so every `logger.XxxCtx` call carries `request_id` automatically |
 | `NewTraceHandler(TraceConfig)` | OTel server span; `ServiceName`, `IgnorePaths` |
-| `NewLogHandler(LogConfig, logger)` | Access log via `core/logger`; `ServiceName`, `SkipPaths`, `TrustedProxies`, `ClientIP` |
+| `NewLogHandler(LogConfig, logger)` | Access log via `core/logger`; `ServiceName`, `SkipPaths` |
 | `NewMaxConnsHandler(MaxConnsConfig)` | Cap in-flight requests → 503 |
 | `NewTimeoutHandler(TimeoutConfig)` | Bound handler time → 503 with `Request Timeout`, discards late writes; handler panics are re-raised on the caller goroutine so recovery middleware still handles them. The response is buffered, so streaming is refused: `Flush` returns `http.ErrHandlerTimeout` and `Hijack` returns `http.ErrNotSupported` (leave it off for SSE/WebSocket). |
 | `NewMaxBytesHandler(MaxBytesConfig)` | 413 for oversized bodies, `http.MaxBytesReader` for streaming, sets `Connection: close` |
@@ -657,10 +657,9 @@ agent configured through `Middlewares.Trace.Agent` are added automatically by `N
   reported to the breaker while the request is still logged and traced.
 - An oversized streamed body is answered with 413 and the response carries `Connection: close`, so
   the connection is not reused for another request.
-- `ClientIP` and the access-log `ip` field use the direct peer address and ignore forwarding
-  headers by default. Set `Middlewares.Log.TrustedProxies` (access log) or use `ClientIPTrusted`
-  (application code) to trust them from known proxies; `ClientIPFromHeaders` is the legacy
-  trust-any-peer helper.
+- The access-log `ip` field and middleware error logs resolve the client address from
+  `X-Forwarded-For` / `X-Real-IP` (falling back to the direct peer) and strip the port. Use
+  `rest.ClientIP` or `rest.ClientIPTrusted` when application code needs a spoof-resistant address.
 - A group root route (`Group("/api").Handle("/")`) is served for both `/api` and the exact
   trailing-slash form `/api/`; deeper paths such as `/api/unknown` still return 404.
 - `service.AsService` treats `http.ErrServerClosed` as a normal shutdown rather than an error.

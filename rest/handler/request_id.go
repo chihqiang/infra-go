@@ -55,8 +55,8 @@ func (h *RequestIDHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 		if !validRequestID(id) {
 			generated, err := uuid.NewRandom()
 			if err != nil {
-				logger.Error("rest: generate request ID", logger.Err(err))
 				w.WriteHeader(http.StatusInternalServerError)
+				logReject(r, "rest: generate request ID", logger.Err(err))
 				return
 			}
 			id = generated.String()

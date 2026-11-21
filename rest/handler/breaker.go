@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/chihqiang/ten-go/core/breaker"
+	"github.com/chihqiang/ten-go/core/logger"
 	"github.com/chihqiang/ten-go/rest/internal/response"
 )
 
@@ -25,6 +26,7 @@ func (h *BreakerHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 		promise, err := h.breaker.AllowCtx(r.Context())
 		if err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
+			logReject(r, "rest: circuit breaker open", logger.Err(err))
 			return
 		}
 

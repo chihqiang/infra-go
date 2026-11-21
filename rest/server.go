@@ -135,10 +135,7 @@ func (s *Server) buildMiddlewares(conf Config) error {
 		resthandler.NewTraceHandler(conf.Middlewares.Trace).Handle,
 	}
 
-	logHandler, err := resthandler.NewLogHandler(conf.Middlewares.Log, s.log)
-	if err != nil {
-		return err
-	}
+	logHandler := resthandler.NewLogHandler(conf.Middlewares.Log, s.log)
 	front = append(front,
 		logHandler.Handle,
 		resthandler.NewMaxConnsHandler(conf.Middlewares.MaxConns).Handle,

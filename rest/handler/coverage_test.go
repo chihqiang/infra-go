@@ -120,16 +120,6 @@ func TestRateLimitHandler_LimiterErrors(t *testing.T) {
 	assert.Empty(t, recorder.Header().Get("Retry-After"))
 }
 
-func TestNewLogHandler_InvalidTrustedProxies(t *testing.T) {
-	_, err := NewLogHandler(LogConfig{Enabled: true, TrustedProxies: []string{"not-an-ip"}}, nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid trusted proxy")
-
-	// A disabled handler does not parse its configuration.
-	_, err = NewLogHandler(LogConfig{Enabled: false, TrustedProxies: []string{"not-an-ip"}}, nil)
-	require.NoError(t, err)
-}
-
 func TestPatternHelpers(t *testing.T) {
 	assert.Equal(t, "", PatternFromContext(nil))
 	ctx := context.Background()
