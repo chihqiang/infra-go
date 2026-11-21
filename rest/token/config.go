@@ -1,10 +1,7 @@
 // Package token issues and verifies JSON Web Tokens for HTTP handlers.
 package token
 
-import (
-	"errors"
-	"time"
-)
+import "errors"
 
 const minSecretLength = 8
 
@@ -17,12 +14,11 @@ var (
 	ErrNoClaims        = errors.New("token: claims are missing")
 )
 
-// Config configures token issuing and verification.
+// Config configures token verification. Signing details (expiry and issuer)
+// belong to Generate, so they stay out of the configuration.
 type Config struct {
-	Secret     string        `json:",optional"`
-	PrevSecret string        `json:",optional"`
-	Expire     time.Duration `json:",default=24h"`
-	Issuer     string        `json:",optional"`
+	Secret     string `json:",optional"`
+	PrevSecret string `json:",optional"`
 }
 
 // Validate reports configuration problems.
@@ -34,9 +30,6 @@ func (c Config) Validate() error {
 	// same minimum length as the current one.
 	if c.PrevSecret != "" && len(c.PrevSecret) < minSecretLength {
 		return ErrShortPrevSecret
-	}
-	if c.Expire < 0 {
-		return errors.New("token: expire must not be negative")
 	}
 	return nil
 }

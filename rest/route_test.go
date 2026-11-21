@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	jwtlib "github.com/golang-jwt/jwt/v5"
+
 	"github.com/chihqiang/infra-go/rest/chain"
 	"github.com/chihqiang/infra-go/rest/handler"
 	"github.com/chihqiang/infra-go/rest/token"
@@ -143,7 +145,11 @@ func TestWithRouteAuthProtectsGroupRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signed, err := parser.Generate("user-1", nil)
+	signed, err := parser.Generate(jwtlib.MapClaims{
+		"sub": "user-1",
+		"uid": "user-1",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,8 +162,8 @@ func TestWithRouteAuthProtectsGroupRoute(t *testing.T) {
 		Method: http.MethodGet,
 		Path:   "/profile",
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			claims, _ := token.ClaimsFrom(r.Context())
-			_, _ = w.Write([]byte(claims.Subject))
+			uid, _ := token.Claim(r.Context(), "uid")
+			_, _ = w.Write([]byte(uid.(string)))
 		}),
 	}, WithRouteAuth("a-sufficiently-long-secret"))
 

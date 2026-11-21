@@ -5,6 +5,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	jwtlib "github.com/golang-jwt/jwt/v5"
 
 	"github.com/chihqiang/infra-go/rest/token"
 )
@@ -12,6 +15,20 @@ import (
 // authHandlerSecret matches the secret newTokenParser signs with, so a handler
 // built from the secret verifies those tokens.
 const authHandlerSecret = "a-sufficiently-long-secret"
+
+// signSubject mints a token for subject through parser.
+func signSubject(t *testing.T, parser *token.Parser, subject string) string {
+	t.Helper()
+
+	signed, err := parser.Generate(jwtlib.MapClaims{
+		"sub": subject,
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signed
+}
 
 func newTokenParser(t *testing.T) *token.Parser {
 	t.Helper()
@@ -25,19 +42,20 @@ func newTokenParser(t *testing.T) *token.Parser {
 
 func TestAuthorizeStoresClaims(t *testing.T) {
 	parser := newTokenParser(t)
-	signed, err := parser.Generate("user-1", map[string]any{"scope": "read"})
+	signed, err := parser.Generate(jwtlib.MapClaims{
+		"sub":   "user-1",
+		"uid":   "user-1",
+		"scope": "read",
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	handlerFn := NewAuthHandler(AuthConfig{Secret: authHandlerSecret}).Handle(func(w http.ResponseWriter, r *http.Request) {
-		claims, ok := token.ClaimsFrom(r.Context())
-		if !ok {
-			t.Error("claims missing from context")
-			return
-		}
-		scope, _ := claims.Data["scope"].(string)
-		_, _ = w.Write([]byte(claims.Subject + ":" + scope))
+		uid, _ := token.Claim(r.Context(), "uid")
+		scope, _ := token.Claim(r.Context(), "scope")
+		_, _ = w.Write([]byte(uid.(string) + ":" + scope.(string)))
 	})
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	request.Header.Set(AuthorizationHeader, "Bearer "+signed)
@@ -52,10 +70,7 @@ func TestAuthorizeStoresClaims(t *testing.T) {
 
 func TestNewAuthHandlerBuildsParserFromSecret(t *testing.T) {
 	parser := newTokenParser(t)
-	signed, err := parser.Generate("user-1", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	signed := signSubject(t, parser, "user-1")
 
 	handlerFn := NewAuthHandler(AuthConfig{Secret: authHandlerSecret}).Handle(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -208,10 +223,7 @@ func TestAuthorizeRejectsMultipleAuthorizationHeaders(t *testing.T) {
 
 func TestAuthorizeAcceptsLowercaseScheme(t *testing.T) {
 	parser := newTokenParser(t)
-	signed, err := parser.Generate("user-1", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	signed := signSubject(t, parser, "user-1")
 
 	handlerFn := NewAuthHandler(AuthConfig{Secret: authHandlerSecret}).Handle(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -251,10 +263,7 @@ func TestAuthHandlerAcceptsPreviousSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signed, err := oldParser.Generate("user-1", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	signed := signSubject(t, oldParser, "user-1")
 
 	handlerFn := NewAuthHandler(AuthConfig{Secret: authHandlerSecret},
 		WithPrevSecret("the-previous-secret")).Handle(

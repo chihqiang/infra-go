@@ -173,7 +173,7 @@ Business-specific middleware (auth, audit, permissions, context injection) imple
 
 - For common capabilities use the rest built-ins directly: `rest.WithRouteAuth` (JWT auth), `resthandler.NewRateLimitHandler` (rate limiting), `resthandler.NewTraceHandler` (tracing), `resthandler.NewRecoveryHandler`, etc.
 - To bring in a third-party standard `func(http.Handler) http.Handler` middleware, wrap it into `chain.Middleware` before calling `server.Use`.
-- Reading the current user's claims inside a handler: `token.ClaimsFrom(r.Context())`.
+- Reading the current user's custom claims inside a handler: `token.Claim(r.Context(), "uid")`.
 
 ## Mapping to infra-go modules
 

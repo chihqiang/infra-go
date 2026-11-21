@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	jwtlib "github.com/golang-jwt/jwt/v5"
+
 	"github.com/chihqiang/infra-go/core/conf"
 	resthandler "github.com/chihqiang/infra-go/rest/handler"
 	"github.com/chihqiang/infra-go/rest/token"
@@ -153,7 +155,10 @@ auth:
 
 	parser, err := token.NewParser(token.Config{Secret: cfg.Auth.Secret})
 	require.NoError(t, err)
-	signed, err := parser.Generate("user-1", nil)
+	signed, err := parser.Generate(jwtlib.MapClaims{
+		"sub": "user-1",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
 	require.NoError(t, err)
 
 	server, err := NewServer(Config{},
