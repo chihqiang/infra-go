@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	jwtlib "github.com/golang-jwt/jwt/v5"
+
 	"github.com/chihqiang/infra-go/core/ratelimit"
 	"github.com/chihqiang/infra-go/rest/handler"
 	"github.com/chihqiang/infra-go/rest/token"
@@ -131,7 +133,10 @@ func TestWithAuthProtectsEveryRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signed, err := parser.Generate("user-1", nil)
+	signed, err := parser.Generate(jwtlib.MapClaims{
+		"sub": "user-1",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

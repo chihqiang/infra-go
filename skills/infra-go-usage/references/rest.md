@@ -612,21 +612,30 @@ Set `WithUnauthorizedCallback` when the application needs a custom body or extra
 parser, err := token.NewParser(token.Config{
     Secret:     "a-long-enough-secret", // >= 8 chars
     PrevSecret: "the-previous-secret",  // optional, accepted while rotating keys
-    Expire:     24 * time.Hour,
-    Issuer:     "demo",
 })
 
-signed, err := parser.Generate("user-1", map[string]any{"role": "admin"})
-claims, err := parser.Parse(signed)      // Subject / Issuer / ExpiresAt / Data
+signed, err := parser.Generate(jwt.MapClaims{
+    "sub":  "user-1",
+    "exp":  time.Now().Add(time.Hour).Unix(), // Parse requires exp
+    "iss":  "demo",                           // optional
+    "role": "admin",                          // any custom claim
+})
+claims, err := parser.Parse(signed) // jwt.MapClaims as-is
 ```
 
-`Parse` verifies `iss` when `Issuer` is configured and requires the `exp` claim. `PrevSecret`
-must satisfy the same 8-character minimum as `Secret`.
+`Config` only holds the verification secrets; `Generate` takes the claims map and `Parse` returns
+it, so the caller owns every field. `Parse` requires `sub` and `exp` but does not verify `iss`, so
+services that must reject other issuers compare `claims["iss"]` themselves. `PrevSecret` must
+satisfy the same 8-character minimum as `Secret`.
 
-`handler.AuthHandler` stores the verified claims in the request context:
+`handler.AuthHandler` copies the **custom** claims into the request context, one value per
+claim name; standard JWT claims (`aud`, `exp`, `iat`, `iss`, `jti`, `nbf`, `sub`) are skipped:
 
 ```go
-claims, ok := token.ClaimsFrom(r.Context())
+uid, ok := token.Claim(r.Context(), "uid")
+if !ok {
+    // unauthenticated
+}
 ```
 
 ## Service integration

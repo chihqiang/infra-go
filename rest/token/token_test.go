@@ -29,55 +29,66 @@ func TestNewRejectsShortSecret(t *testing.T) {
 	}
 }
 
-func TestNewDefaultsExpireToADay(t *testing.T) {
-	parser := newParser(t, Config{})
-	if got := parser.Config().Expire; got != 24*time.Hour {
-		t.Fatalf("expire = %v, want 24h", got)
+func TestGenerateRejectsEmptyClaims(t *testing.T) {
+	if _, err := newParser(t, Config{}).Generate(nil); !errors.Is(err, ErrNoClaims) {
+		t.Fatalf("error = %v, want ErrNoClaims", err)
 	}
 }
 
 func TestGenerateAndParseRoundTrip(t *testing.T) {
-	parser := newParser(t, Config{Issuer: "infra-go", Expire: time.Hour})
+	parser := newParser(t, Config{})
 
-	token, err := parser.Generate("user-1", map[string]any{"role": "admin", "sub": "ignored"})
+	signed, err := parser.Generate(jwtlib.MapClaims{
+		"sub":  "user-1",
+		"iss":  "infra-go",
+		"exp":  time.Now().Add(time.Hour).Unix(),
+		"role": "admin",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	claims, err := parser.Parse(token)
+	claims, err := parser.Parse(signed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if claims.Subject != "user-1" {
-		t.Fatalf("subject = %q, want user-1", claims.Subject)
+	if claims["sub"] != "user-1" {
+		t.Fatalf("subject = %v, want user-1", claims["sub"])
 	}
-	if claims.Issuer != "infra-go" {
-		t.Fatalf("issuer = %q, want infra-go", claims.Issuer)
+	if claims["iss"] != "infra-go" {
+		t.Fatalf("issuer = %v, want infra-go", claims["iss"])
 	}
-	if claims.Data["role"] != "admin" {
-		t.Fatalf("custom claim role = %v", claims.Data["role"])
+	if claims["role"] != "admin" {
+		t.Fatalf("custom claim role = %v", claims["role"])
 	}
-	if _, overridden := claims.Data["sub"]; overridden {
-		t.Fatal("custom data must not override the subject claim")
+	exp, ok := claims["exp"].(float64)
+	if !ok {
+		t.Fatalf("exp = %v, want a number", claims["exp"])
 	}
-	if remaining := time.Until(claims.ExpiresAt); remaining <= 0 || remaining > time.Hour {
+	if remaining := time.Until(time.Unix(int64(exp), 0)); remaining <= 0 || remaining > time.Hour {
 		t.Fatalf("expires in %v, want within an hour", remaining)
 	}
 }
 
 func TestParseRejectsExpiredAndTamperedTokens(t *testing.T) {
-	// Bypass New to mint an already-expired token.
-	expiredManager := &Parser{conf: Config{Secret: testSecret, Expire: -time.Minute}}
-	expired, err := expiredManager.Generate("user-1", nil)
+	parser := newParser(t, Config{})
+
+	expired, err := parser.Generate(jwtlib.MapClaims{
+		"sub": "user-1",
+		"exp": time.Now().Add(-time.Minute).Unix(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := newParser(t, Config{}).Parse(expired); err == nil {
+	if _, err := parser.Parse(expired); err == nil {
 		t.Fatal("expired token should fail to parse")
 	}
 
-	valid := newParser(t, Config{Expire: time.Hour})
-	token, err := valid.Generate("user-1", nil)
+	valid := newParser(t, Config{})
+	token, err := valid.Generate(jwtlib.MapClaims{
+		"sub": "user-1",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,13 +101,16 @@ func TestParseRejectsExpiredAndTamperedTokens(t *testing.T) {
 }
 
 func TestParseAcceptsPreviousSecret(t *testing.T) {
-	old := newParser(t, Config{Expire: time.Hour})
-	token, err := old.Generate("user-1", nil)
+	old := newParser(t, Config{})
+	token, err := old.Generate(jwtlib.MapClaims{
+		"sub": "user-1",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	rotated := newParser(t, Config{Secret: "the-new-signing-secret", PrevSecret: testSecret, Expire: time.Hour})
+	rotated := newParser(t, Config{Secret: "the-new-signing-secret", PrevSecret: testSecret})
 	if _, err := rotated.Parse(token); err != nil {
 		t.Fatalf("previous secret should still verify: %v", err)
 	}
@@ -109,21 +123,30 @@ func TestNewRejectsShortPreviousSecret(t *testing.T) {
 	}
 }
 
-func TestParseRejectsForeignIssuer(t *testing.T) {
-	issuerA := newParser(t, Config{Issuer: "service-a", Expire: time.Hour})
-	signed, err := issuerA.Generate("user-1", nil)
+// TestParseKeepsIssuerClaim documents the contract: the issuer is a signing
+// detail, so Parse reports it but does not reject a different iss.
+func TestParseKeepsIssuerClaim(t *testing.T) {
+	parser := newParser(t, Config{})
+	signed, err := parser.Generate(jwtlib.MapClaims{
+		"sub": "user-1",
+		"iss": "service-a",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	issuerB := newParser(t, Config{Issuer: "service-b", Expire: time.Hour})
-	if _, err := issuerB.Parse(signed); !errors.Is(err, ErrInvalidToken) {
-		t.Fatalf("error = %v, want ErrInvalidToken", err)
+	claims, err := parser.Parse(signed)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if claims["iss"] != "service-a" {
+		t.Fatalf("issuer = %v, want service-a", claims["iss"])
 	}
 }
 
 func TestParseRejectsTokenWithoutExpiry(t *testing.T) {
-	parser := newParser(t, Config{Expire: time.Hour})
+	parser := newParser(t, Config{})
 
 	raw, err := jwtlib.NewWithClaims(jwtlib.SigningMethodHS256, jwtlib.MapClaims{
 		"sub": "user-1",

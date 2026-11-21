@@ -1,24 +1,47 @@
 package token
 
-import "context"
+import (
+	"context"
 
-type claimsContextKey struct{}
+	jwtlib "github.com/golang-jwt/jwt/v5"
+)
 
-// WithClaims stores verified claims in ctx. A nil ctx is replaced by
-// context.Background() so a standalone handler cannot panic on it.
-func WithClaims(ctx context.Context, claims *Claims) context.Context {
+// standardClaims are the registered JWT claims: they describe the token itself
+// rather than the caller, so WithClaims does not copy them into the context.
+var standardClaims = map[string]struct{}{
+	"aud": {},
+	"exp": {},
+	"iat": {},
+	"iss": {},
+	"jti": {},
+	"nbf": {},
+	"sub": {},
+}
+
+type claimKey struct{ name string }
+
+// WithClaims stores every custom claim in ctx keyed by its claim name, so
+// handlers read them with Claim. Standard JWT claims are skipped. A nil ctx is
+// replaced by context.Background() so a standalone handler cannot panic on it.
+func WithClaims(ctx context.Context, claims jwtlib.MapClaims) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithValue(ctx, claimsContextKey{}, claims)
+	for name, value := range claims {
+		if _, standard := standardClaims[name]; standard {
+			continue
+		}
+		ctx = context.WithValue(ctx, claimKey{name: name}, value)
+	}
+	return ctx
 }
 
-// ClaimsFrom returns the claims stored in ctx by WithClaims (the auth handler
-// uses it). A nil ctx carries no claims.
-func ClaimsFrom(ctx context.Context) (*Claims, bool) {
+// Claim returns the custom claim stored in ctx by WithClaims. A nil ctx or an
+// absent claim reports false.
+func Claim(ctx context.Context, name string) (any, bool) {
 	if ctx == nil {
 		return nil, false
 	}
-	claims, ok := ctx.Value(claimsContextKey{}).(*Claims)
-	return claims, ok
+	value := ctx.Value(claimKey{name: name})
+	return value, value != nil
 }
