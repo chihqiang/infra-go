@@ -13,12 +13,8 @@ type BreakerHandler struct {
 	breaker breaker.Breaker
 }
 
-// NewBreakerHandler creates a BreakerHandler. It panics when br is nil, since
-// no request could be routed.
+// NewBreakerHandler creates a BreakerHandler.
 func NewBreakerHandler(br breaker.Breaker) *BreakerHandler {
-	if br == nil {
-		panic("handler: BreakerHandler requires a breaker")
-	}
 	return &BreakerHandler{breaker: br}
 }
 

@@ -585,7 +585,7 @@ server.Use(resthandler.NewRateLimitHandler(ratelimit.NewTokenBucket(100, 200)).H
 | `NewMaxBytesHandler(MaxBytesConfig)` | 413 for oversized bodies, `http.MaxBytesReader` for streaming, sets `Connection: close` |
 | `NewGunzipHandler(GunzipConfig)` | Transparently decompresses `Content-Encoding: gzip` |
 | `NewRateLimitHandler(limiter)` / `NewRateLimitPerSecondHandler(rate, burst)` | 429 via `core/ratelimit`; a nil limiter panics at construction |
-| `NewBreakerHandler(br)` | Circuit breaker; 5xx responses count as failures → 503 when open; a nil breaker panics at construction |
+| `NewBreakerHandler(br)` | Circuit breaker; 5xx responses count as failures → 503 when open |
 | `NewAuthHandler(cfg AuthConfig, opts ...AuthOption)` | Bearer token check built from `cfg.Secret`; any extraction or parse failure answers 401. `AuthConfig` is YAML-loadable (`secret`, `prevSecret`, `skipPaths`), and options override it. `AuthConfig.TokenExtractor` (option `WithTokenExtractor`) replaces `BearerToken` when the token arrives in a query parameter, cookie or custom header |
 
 Default authorization failures write a bodyless 401 and set no challenge header, matching

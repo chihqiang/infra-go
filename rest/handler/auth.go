@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/chihqiang/ten-go/core/logger"
 	"github.com/chihqiang/ten-go/rest/internal/pathmatch"
+	"github.com/chihqiang/ten-go/rest/internal/realip"
 	"github.com/chihqiang/ten-go/rest/token"
 )
 
@@ -180,6 +182,13 @@ func (h *AuthHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (h *AuthHandler) reject(w http.ResponseWriter, r *http.Request, err error) {
+	logger.WarnCtx(r.Context(), "rest: authentication failed",
+		logger.Err(err),
+		logger.String("method", r.Method),
+		logger.String("path", r.URL.Path),
+		logger.String("ip", realip.FromRequest(r)),
+	)
+
 	writer := &unauthorizedWriter{ResponseWriter: w}
 	if h.config.Callback != nil {
 		h.config.Callback(writer, r, err)
