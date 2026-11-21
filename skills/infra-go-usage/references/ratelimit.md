@@ -83,8 +83,9 @@ if chain.Allow() { /* both limiters passed */ }
 
 ## HTTP rate limiting middleware
 
-`rest/handler.NewRateLimitHandler(RateLimitConfig{Enabled: true, Limiter: limiter})` wraps any
-`Limiter` from this package. Mount it explicitly for server-wide or scoped limiting:
+`rest/handler.NewRateLimitHandler(limiter)` wraps any `Limiter` from this package; mounting the
+handler is the opt-in, and a nil limiter panics at construction. Mount it explicitly for
+server-wide or scoped limiting:
 
 ```go
 import resthandler "github.com/chihqiang/infra-go/rest/handler"
@@ -95,10 +96,9 @@ server, _ := rest.NewServer(rest.DefaultConfig(),
 
 // Or scope it to a route group:
 api := server.Group("/api")
-api.Use(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
-	Enabled: true,
-	Limiter: ratelimit.NewSlidingWindow(10, time.Minute),
-}).Handle)
+api.Use(resthandler.NewRateLimitHandler(
+	ratelimit.NewSlidingWindow(10, time.Minute),
+).Handle)
 ```
 
 Behaviour:
@@ -129,10 +129,7 @@ Retry-After: 2
 
 ```go
 limiter := ratelimit.NewTokenBucket(100, 200)
-handler := resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
-	Enabled: true,
-	Limiter: limiter,
-}).Handle(apiHandler)
+handler := resthandler.NewRateLimitHandler(limiter).Handle(apiHandler)
 http.ListenAndServe(":8080", handler)
 ```
 

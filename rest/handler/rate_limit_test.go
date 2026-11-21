@@ -30,17 +30,13 @@ func TestRateLimitRejectsAfterBurst(t *testing.T) {
 	}
 }
 
-func TestRateLimitNilLimiterPassesThrough(t *testing.T) {
-	called := false
-	handlerFn := NewRateLimitHandler(RateLimitConfig{Enabled: true, Limiter: nil}).Handle(func(http.ResponseWriter, *http.Request) {
-		called = true
-	})
-
-	handlerFn.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
-
-	if !called {
-		t.Fatal("handler was not called")
-	}
+func TestRateLimitNilLimiterPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("a nil limiter should panic at construction")
+		}
+	}()
+	NewRateLimitHandler(nil)
 }
 
 func TestMaxConnsRejectsWhenSaturated(t *testing.T) {
@@ -114,7 +110,7 @@ func (l *suggestingLimiter) AllowContext(context.Context) (bool, error) {
 func (l *suggestingLimiter) RetryAfter() time.Duration { return l.delay }
 
 func TestRateLimitHandlerSetsRetryAfterFromLimiter(t *testing.T) {
-	handlerFn := NewRateLimitHandler(RateLimitConfig{Enabled: true, Limiter: &suggestingLimiter{delay: 2500 * time.Millisecond}}).Handle(
+	handlerFn := NewRateLimitHandler(&suggestingLimiter{delay: 2500 * time.Millisecond}).Handle(
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 	)
 
@@ -136,7 +132,7 @@ func TestRateLimitHandlerSetsRetryAfterFromLimiter(t *testing.T) {
 
 func TestRateLimitHandlerOmitsRetryAfterWithoutHint(t *testing.T) {
 	slowBucket := ratelimit.NewTokenBucket(1, 1)
-	handlerFn := NewRateLimitHandler(RateLimitConfig{Enabled: true, Limiter: slowBucket}).Handle(func(w http.ResponseWriter, _ *http.Request) {})
+	handlerFn := NewRateLimitHandler(slowBucket).Handle(func(w http.ResponseWriter, _ *http.Request) {})
 
 	handlerFn.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
 	recorder := httptest.NewRecorder()

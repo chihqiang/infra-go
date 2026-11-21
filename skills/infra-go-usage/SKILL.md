@@ -45,7 +45,7 @@ How to use each `github.com/chihqiang/infra-go` module correctly in a business p
 
 **Branching logic (decision points)**:
 
-- Single-host rate limiting → in-memory limiter; shared across instances → Redis limiter; on HTTP mount `resthandler.NewRateLimitHandler(RateLimitConfig{Enabled: true, Limiter: limiter}).Handle`
+- Single-host rate limiting → in-memory limiter; shared across instances → Redis limiter; on HTTP mount `resthandler.NewRateLimitHandler(limiter).Handle`
 - HTTP middleware: common capabilities live in `rest/handler` as structs with a `Config` and a `Handle(http.HandlerFunc) http.HandlerFunc` method, so they work both with `server.Use` and standalone; `rest.MiddlewaresConf` configures common server middleware, while auth, signatures, rate limits and breakers are mounted explicitly at the intended scope
 - Short-lived temporary data (cache/session/counters) → `redisx`; reliable persistence and transactions → `orm`
 - Unique-key / foreign-key violations → `orm.IsDuplicatedKey` / `orm.IsForeignKeyViolation`; leave `orm.Config.TranslateError` off when the driver message must be kept
@@ -184,14 +184,8 @@ server.Use(resthandler.NewTraceHandler(resthandler.TraceConfig{
 	Enabled:     true,
 	IgnorePaths: []string{"/healthz"},
 }).Handle)
-server.Use(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
-	Enabled: true,
-	Limiter: ratelimit.NewTokenBucket(100, 200),
-}).Handle) // 429
-server.Use(resthandler.NewBreakerHandler(resthandler.BreakerConfig{
-	Enabled: true,
-	Breaker: br,
-}).Handle) // 503 when open
+server.Use(resthandler.NewRateLimitHandler(ratelimit.NewTokenBucket(100, 200)).Handle) // 429
+server.Use(resthandler.NewBreakerHandler(br).Handle)                                   // 503 when open
 
 // per-route auth
 server.Group("/admin").Use(resthandler.NewAuthHandler(

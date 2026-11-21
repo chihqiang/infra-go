@@ -25,10 +25,7 @@ func WithMiddleware(middlewares ...chain.Middleware) Option {
 // WithRateLimit installs a rate limiter after the built-in middleware, so
 // rejected requests are still traced/logged.
 func WithRateLimit(limiter ratelimit.Limiter) Option {
-	return WithMiddleware(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
-		Enabled: true,
-		Limiter: limiter,
-	}).Handle)
+	return WithMiddleware(resthandler.NewRateLimitHandler(limiter).Handle)
 }
 
 // WithBreaker wraps route handlers with the given circuit breaker. It is placed
@@ -40,7 +37,7 @@ func WithBreaker(br breaker.Breaker) Option {
 			return
 		}
 		s.outerMiddlewares = append(s.outerMiddlewares,
-			resthandler.NewBreakerHandler(resthandler.BreakerConfig{Enabled: true, Breaker: br}).Handle)
+			resthandler.NewBreakerHandler(br).Handle)
 	}
 }
 

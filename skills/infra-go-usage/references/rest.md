@@ -583,10 +583,7 @@ conf.Middlewares.Trace = resthandler.TraceConfig{
 }
 // Server.Register(group) adds the HTTP server and its auxiliary services.
 
-server.Use(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
-    Enabled: true,
-    Limiter: ratelimit.NewTokenBucket(100, 200),
-}).Handle)
+server.Use(resthandler.NewRateLimitHandler(ratelimit.NewTokenBucket(100, 200)).Handle)
 ```
 
 | Handler | Behaviour |
@@ -599,8 +596,8 @@ server.Use(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
 | `NewTimeoutHandler(TimeoutConfig)` | Bound handler time → 503 with `Request Timeout`, discards late writes; handler panics are re-raised on the caller goroutine so recovery middleware still handles them. The response is buffered, so streaming is refused: `Flush` returns `http.ErrHandlerTimeout` and `Hijack` returns `http.ErrNotSupported` (leave it off for SSE/WebSocket). |
 | `NewMaxBytesHandler(MaxBytesConfig)` | 413 for oversized bodies, `http.MaxBytesReader` for streaming, sets `Connection: close` |
 | `NewGunzipHandler(GunzipConfig)` | Transparently decompresses `Content-Encoding: gzip` |
-| `NewRateLimitHandler(RateLimitConfig)` / `NewRateLimitPerSecondHandler(rate, burst)` | 429 via `core/ratelimit` |
-| `NewBreakerHandler(BreakerConfig)` | Circuit breaker; 5xx responses count as failures → 503 when open |
+| `NewRateLimitHandler(limiter)` / `NewRateLimitPerSecondHandler(rate, burst)` | 429 via `core/ratelimit`; a nil limiter panics at construction |
+| `NewBreakerHandler(br)` | Circuit breaker; 5xx responses count as failures → 503 when open; a nil breaker panics at construction |
 | `NewSignatureHandler(keys [][]byte, opts ...SignatureOption)` | HMAC check over `METHOD / escaped-path / raw-query / timestamp / body`; several keys allow rotation. Panics without a key. `WithSignatureTTL` bounds the timestamp skew (zero uses the 5-minute default, negative disables it), `WithSignatureMaxBody` caps the body read (zero is unlimited), and the timestamp is checked before the body is read |
 | `NewAuthHandler(cfg AuthConfig, opts ...AuthOption)` | Bearer token check built from `cfg.Secret`; RFC 6750 challenge (`invalid_request` → 400, `invalid_token` → 401). Panics at construction when the secret is missing or shorter than 8 characters. `AuthConfig` is YAML-loadable (`secret`, `prevSecret`, `realm`, `skipPaths`), and options override it |
 

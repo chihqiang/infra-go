@@ -82,7 +82,7 @@ func TestRequestIDHandler_KeepsValidIncomingID(t *testing.T) {
 
 func TestRateLimitHandler_RetryAfter(t *testing.T) {
 	limiter := ratelimit.NewTokenBucket(0.001, 1) // one token, almost no refill
-	handlerFn := NewRateLimitHandler(RateLimitConfig{Enabled: true, Limiter: limiter}).Handle(
+	handlerFn := NewRateLimitHandler(limiter).Handle(
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 
 	first := httptest.NewRecorder()
@@ -108,17 +108,14 @@ func (denyingLimiter) Allow() bool                                { return false
 func (denyingLimiter) AllowContext(context.Context) (bool, error) { return false, nil }
 
 func TestRateLimitHandler_LimiterErrors(t *testing.T) {
-	handlerFn := NewRateLimitHandler(RateLimitConfig{
-		Enabled: true,
-		Limiter: failingLimiter{err: errors.New("redis down")},
-	}).Handle(func(http.ResponseWriter, *http.Request) { t.Fatal("must not reach next") })
+	handlerFn := NewRateLimitHandler(failingLimiter{err: errors.New("redis down")}).Handle(func(http.ResponseWriter, *http.Request) { t.Fatal("must not reach next") })
 
 	recorder := httptest.NewRecorder()
 	handlerFn.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
 	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 
 	// A limiter without RetryAfter must still produce 429, without the header.
-	denyFn := NewRateLimitHandler(RateLimitConfig{Enabled: true, Limiter: denyingLimiter{}}).Handle(
+	denyFn := NewRateLimitHandler(denyingLimiter{}).Handle(
 		func(http.ResponseWriter, *http.Request) { t.Fatal("must not reach next") })
 	recorder = httptest.NewRecorder()
 	denyFn.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
