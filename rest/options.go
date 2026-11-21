@@ -25,10 +25,7 @@ func WithMiddleware(middlewares ...chain.Middleware) Option {
 // WithRateLimit installs a rate limiter after the built-in middleware, so
 // rejected requests are still traced/logged.
 func WithRateLimit(limiter ratelimit.Limiter) Option {
-	return WithMiddleware(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
-		Enabled: true,
-		Limiter: limiter,
-	}).Handle)
+	return WithMiddleware(resthandler.NewRateLimitHandler(limiter).Handle)
 }
 
 // WithBreaker wraps route handlers with the given circuit breaker. It is placed
@@ -40,26 +37,25 @@ func WithBreaker(br breaker.Breaker) Option {
 			return
 		}
 		s.outerMiddlewares = append(s.outerMiddlewares,
-			resthandler.NewBreakerHandler(resthandler.BreakerConfig{Enabled: true, Breaker: br}).Handle)
+			resthandler.NewBreakerHandler(br).Handle)
 	}
 }
 
 // WithSignature requires an HMAC signature on every request. The signature covers
 // the method, escaped path, raw query, timestamp and body; TTL defaults to five
-// minutes when omitted.
-func WithSignature(cfg resthandler.SignatureConfig) Option {
-	cfg.Enabled = true
-	return WithMiddleware(resthandler.NewSignatureHandler(cfg).Handle)
+// minutes when omitted. keys may hold several keys to allow rotation.
+func WithSignature(keys [][]byte, opts ...resthandler.SignatureOption) Option {
+	return WithMiddleware(resthandler.NewSignatureHandler(keys, opts...).Handle)
 }
 
-// WithAuth requires a valid bearer token on every request. cfg carries the
-// parser or the token secret and the rejection behaviour (realm, callback);
-// Enabled is set automatically and NewAuthHandler validates the rest, building
-// the parser from the embedded token.Config when cfg.Parser is nil. For route or
-// group scoped auth use WithRouteAuth or mount handler.NewAuthHandler yourself.
-func WithAuth(cfg resthandler.AuthConfig) Option {
-	cfg.Enabled = true
-	return WithMiddleware(resthandler.NewAuthHandler(cfg).Handle)
+// WithAuth requires a valid bearer token signed with secret on every request.
+// It panics when the secret is missing or shorter than 8 characters. Use the
+// AuthOption values (WithPrevSecret, WithAuthRealm, WithAuthSkipPaths,
+// WithUnauthorizedCallback) to customise the handler; for route or group scoped
+// auth use WithRouteAuth.
+func WithAuth(secret string, opts ...resthandler.AuthOption) Option {
+	return WithMiddleware(resthandler.NewAuthHandler(
+		resthandler.AuthConfig{Secret: secret}, opts...).Handle)
 }
 
 // WithTLSConfig applies cfg to the underlying http.Server. It takes effect when

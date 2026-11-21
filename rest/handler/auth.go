@@ -33,16 +33,14 @@ var (
 // challenge.
 type UnauthorizedCallback func(w http.ResponseWriter, r *http.Request, err error)
 
-// AuthConfig configures AuthHandler.
-//
-// token.Config is embedded so configuration files can set the secret directly
-// (core/conf and core/mapping flatten embedded structs). When Parser is nil and
-// the embedded config carries a secret, NewAuthHandler builds the parser.
+// AuthConfig configures AuthHandler. It can be loaded from a config file:
+// core/conf and core/mapping fill the exported fields directly.
 type AuthConfig struct {
-	Enabled bool `json:",optional"`
-	token.Config
-	// Parser verifies bearer tokens; it takes precedence over token.Config.
-	Parser *token.Parser `json:"-"`
+	// Secret signs and verifies bearer tokens; it must be at least 8 characters.
+	Secret string `json:",optional"`
+	// PrevSecret also accepts tokens signed with the previous secret while keys
+	// rotate.
+	PrevSecret string `json:",optional"`
 	// Realm is the WWW-Authenticate realm; it defaults to "api".
 	Realm string `json:",optional"`
 	// SkipPaths lists request paths that bypass authentication. Rules support an
@@ -52,44 +50,84 @@ type AuthConfig struct {
 	Callback UnauthorizedCallback `json:"-"`
 }
 
+// AuthOption customises AuthConfig. Options apply after the struct is filled,
+// so they override config-file values and work with AuthConfig literals alike.
+type AuthOption func(*AuthConfig)
+
+// WithPrevSecret also accepts tokens signed with secret, for key rotation.
+func WithPrevSecret(secret string) AuthOption {
+	return func(cfg *AuthConfig) {
+		cfg.PrevSecret = secret
+	}
+}
+
+// WithAuthRealm sets the WWW-Authenticate realm; it defaults to "api".
+func WithAuthRealm(realm string) AuthOption {
+	return func(cfg *AuthConfig) {
+		cfg.Realm = realm
+	}
+}
+
+// WithAuthSkipPaths lists request paths that bypass authentication. Rules
+// support an exact path, a trailing "*" prefix and glob patterns.
+func WithAuthSkipPaths(paths ...string) AuthOption {
+	return func(cfg *AuthConfig) {
+		cfg.SkipPaths = append(cfg.SkipPaths, paths...)
+	}
+}
+
+// WithUnauthorizedCallback customises the rejection response. The middleware
+// still applies the default HTTP status when the callback does not set one.
+func WithUnauthorizedCallback(callback UnauthorizedCallback) AuthOption {
+	return func(cfg *AuthConfig) {
+		cfg.Callback = callback
+	}
+}
+
 // AuthHandler rejects requests without a valid bearer token.
 type AuthHandler struct {
 	config    AuthConfig
+	parser    *token.Parser
 	skipPaths *pathmatch.Matcher
 }
 
-// NewAuthHandler creates an AuthHandler. An enabled config requires a Parser or
-// a secret: the parser is built from the embedded token.Config, so the secret
-// can come from a configuration file. Enabling without either, or with an
-// invalid token config, panics at startup.
-func NewAuthHandler(config AuthConfig) *AuthHandler {
-	if config.Enabled && config.Parser == nil {
-		if config.Secret == "" {
-			panic("handler: AuthHandler requires a token parser or secret")
+// NewAuthHandler creates an AuthHandler from config, applying opts last. It
+// builds the token parser up front and panics when the secret is missing or
+// fails validation, so a misconfigured server fails at startup.
+func NewAuthHandler(config AuthConfig, opts ...AuthOption) *AuthHandler {
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&config)
 		}
-		parser, err := token.NewParser(config.Config)
-		if err != nil {
-			panic("handler: invalid auth token config: " + err.Error())
-		}
-		config.Parser = parser
 	}
-	return &AuthHandler{config: config, skipPaths: pathmatch.New(config.SkipPaths)}
+
+	if config.Secret == "" {
+		panic("handler: AuthHandler requires a secret")
+	}
+	parser, err := token.NewParser(token.Config{
+		Secret:     config.Secret,
+		PrevSecret: config.PrevSecret,
+	})
+	if err != nil {
+		panic("handler: invalid auth secret: " + err.Error())
+	}
+	return &AuthHandler{
+		config:    config,
+		parser:    parser,
+		skipPaths: pathmatch.New(config.SkipPaths),
+	}
 }
 
 // Handle wraps next with bearer-token authorization and stores verified claims
 // in the request context.
 func (h *AuthHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
-	if !h.config.Enabled {
-		return next
-	}
-
 	return func(w http.ResponseWriter, r *http.Request) {
 		if h.skipPaths.Match(r.URL.Path) {
 			next(w, r)
 			return
 		}
 
-		if h.config.Parser == nil {
+		if h.parser == nil {
 			h.reject(w, r, ErrAuthUnavailable)
 			return
 		}
@@ -100,7 +138,7 @@ func (h *AuthHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		claims, err := h.config.Parser.Parse(value)
+		claims, err := h.parser.Parse(value)
 		if err != nil {
 			h.reject(w, r, err)
 			return

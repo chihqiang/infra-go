@@ -16,16 +16,15 @@ func signRequest(request *http.Request, key []byte, timestamp int64, body []byte
 	request.Header.Set(HeaderSignature, SignRequest(key, timestamp, request, body))
 }
 
-func newSignatureHandler(config SignatureConfig) *SignatureHandler {
-	config.Enabled = true
-	return NewSignatureHandler(config)
+func newSignatureHandler(keys [][]byte, opts ...SignatureOption) *SignatureHandler {
+	return NewSignatureHandler(keys, opts...)
 }
 
 func TestSignatureHandlerAcceptsSignedBody(t *testing.T) {
 	key := []byte("signing-key")
 	body := []byte(`{"amount":10}`)
 	var received string
-	handlerFn := newSignatureHandler(SignatureConfig{Keys: [][]byte{key}, TTL: time.Minute}).Handle(
+	handlerFn := newSignatureHandler([][]byte{key}, WithSignatureTTL(time.Minute)).Handle(
 		func(_ http.ResponseWriter, r *http.Request) {
 			read, _ := io.ReadAll(r.Body)
 			received = string(read)
@@ -49,7 +48,7 @@ func TestSignatureHandlerRejectsBadSignature(t *testing.T) {
 	key := []byte("signing-key")
 	body := []byte(`{"amount":10}`)
 	called := false
-	handlerFn := newSignatureHandler(SignatureConfig{Keys: [][]byte{key}}).Handle(
+	handlerFn := newSignatureHandler([][]byte{key}).Handle(
 		func(http.ResponseWriter, *http.Request) { called = true },
 	)
 
@@ -69,7 +68,7 @@ func TestSignatureHandlerRejectsBadSignature(t *testing.T) {
 func TestSignatureHandlerRejectsTamperedBody(t *testing.T) {
 	key := []byte("signing-key")
 	original := []byte(`{"amount":10}`)
-	handlerFn := newSignatureHandler(SignatureConfig{Keys: [][]byte{key}}).Handle(
+	handlerFn := newSignatureHandler([][]byte{key}).Handle(
 		func(http.ResponseWriter, *http.Request) { t.Fatal("must not reach handler") },
 	)
 
@@ -88,11 +87,10 @@ func TestSignatureHandlerRejectsStaleTimestamp(t *testing.T) {
 	key := []byte("signing-key")
 	body := []byte("payload")
 	now := time.Unix(1_700_000_000, 0)
-	handlerFn := newSignatureHandler(SignatureConfig{
-		Keys: [][]byte{key},
-		TTL:  time.Minute,
-		Now:  func() time.Time { return now },
-	}).Handle(func(http.ResponseWriter, *http.Request) { t.Fatal("must not reach handler") })
+	handlerFn := newSignatureHandler([][]byte{key},
+		WithSignatureTTL(time.Minute),
+		withSignatureClock(func() time.Time { return now }),
+	).Handle(func(http.ResponseWriter, *http.Request) { t.Fatal("must not reach handler") })
 
 	request := httptest.NewRequest(http.MethodPost, "/pay", bytes.NewReader(body))
 	signRequest(request, key, now.Add(-2*time.Minute).Unix(), body)
@@ -108,7 +106,7 @@ func TestSignatureHandlerRejectsStaleTimestamp(t *testing.T) {
 func TestSignatureHandlerAcceptsRotatedKey(t *testing.T) {
 	oldKey, newKey := []byte("old-key"), []byte("new-key")
 	body := []byte("payload")
-	handlerFn := newSignatureHandler(SignatureConfig{Keys: [][]byte{newKey, oldKey}}).Handle(
+	handlerFn := newSignatureHandler([][]byte{newKey, oldKey}).Handle(
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) },
 	)
 
@@ -125,7 +123,7 @@ func TestSignatureHandlerAcceptsRotatedKey(t *testing.T) {
 func TestSignatureHandlerEnforcesBodyLimit(t *testing.T) {
 	key := []byte("signing-key")
 	body := bytes.Repeat([]byte("a"), 32)
-	handlerFn := newSignatureHandler(SignatureConfig{Keys: [][]byte{key}, MaxBody: 8}).Handle(
+	handlerFn := newSignatureHandler([][]byte{key}, WithSignatureMaxBody(8)).Handle(
 		func(http.ResponseWriter, *http.Request) { t.Fatal("must not reach handler") },
 	)
 
@@ -146,7 +144,7 @@ func TestSignatureHandlerRequiresKey(t *testing.T) {
 		}
 	}()
 
-	newSignatureHandler(SignatureConfig{})
+	newSignatureHandler(nil)
 }
 
 type failingBody struct{}
@@ -156,7 +154,7 @@ func (failingBody) Read([]byte) (int, error) { return 0, errors.New("read failed
 func (failingBody) Close() error { return nil }
 
 func TestSignatureHandlerMapsReadErrorToBadRequest(t *testing.T) {
-	handlerFn := newSignatureHandler(SignatureConfig{Keys: [][]byte{[]byte("signing-key")}}).Handle(
+	handlerFn := newSignatureHandler([][]byte{[]byte("signing-key")}).Handle(
 		func(http.ResponseWriter, *http.Request) {},
 	)
 	request := httptest.NewRequest(http.MethodPost, "/pay", nil)
@@ -184,10 +182,7 @@ func (b *trackingBody) Close() error { return nil }
 
 func TestSignatureHandlerChecksTimestampBeforeReadingBody(t *testing.T) {
 	body := &trackingBody{}
-	handlerFn := newSignatureHandler(SignatureConfig{
-		Keys: [][]byte{[]byte("signing-key")},
-		TTL:  time.Minute,
-	}).Handle(func(http.ResponseWriter, *http.Request) {})
+	handlerFn := newSignatureHandler([][]byte{[]byte("signing-key")}, WithSignatureTTL(time.Minute)).Handle(func(http.ResponseWriter, *http.Request) {})
 
 	request := httptest.NewRequest(http.MethodPost, "/pay", nil)
 	request.Body = body
@@ -211,7 +206,7 @@ func TestSignatureHandlerRejectsReplayOnAnotherPath(t *testing.T) {
 	body := []byte(`{"amount":10}`)
 	now := time.Now().Unix()
 
-	handlerFn := newSignatureHandler(SignatureConfig{Keys: [][]byte{key}, TTL: time.Minute}).Handle(
+	handlerFn := newSignatureHandler([][]byte{key}, WithSignatureTTL(time.Minute)).Handle(
 		func(http.ResponseWriter, *http.Request) { t.Fatal("replayed request reached the handler") },
 	)
 
@@ -239,10 +234,9 @@ func TestSignatureHandlerDefaultTTLRejectsStale(t *testing.T) {
 	key := []byte("signing-key")
 	body := []byte("payload")
 	now := time.Unix(1_700_000_000, 0)
-	handlerFn := newSignatureHandler(SignatureConfig{
-		Keys: [][]byte{key},
-		Now:  func() time.Time { return now },
-	}).Handle(func(http.ResponseWriter, *http.Request) { t.Fatal("stale request reached the handler") })
+	handlerFn := newSignatureHandler([][]byte{key},
+		withSignatureClock(func() time.Time { return now }),
+	).Handle(func(http.ResponseWriter, *http.Request) { t.Fatal("stale request reached the handler") })
 
 	request := httptest.NewRequest(http.MethodPost, "/pay", bytes.NewReader(body))
 	signRequest(request, key, now.Add(-10*time.Minute).Unix(), body)
@@ -259,11 +253,10 @@ func TestSignatureHandlerNegativeTTLDisablesFreshness(t *testing.T) {
 	key := []byte("signing-key")
 	body := []byte("payload")
 	now := time.Unix(1_700_000_000, 0)
-	handlerFn := newSignatureHandler(SignatureConfig{
-		Keys: [][]byte{key},
-		TTL:  -1,
-		Now:  func() time.Time { return now },
-	}).Handle(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	handlerFn := newSignatureHandler([][]byte{key},
+		WithSignatureTTL(-1),
+		withSignatureClock(func() time.Time { return now }),
+	).Handle(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 
 	request := httptest.NewRequest(http.MethodPost, "/pay", bytes.NewReader(body))
 	signRequest(request, key, now.Add(-24*time.Hour).Unix(), body)
@@ -306,11 +299,10 @@ func TestSignatureHandlerRejectsFarFutureTimestamp(t *testing.T) {
 	key := []byte("signing-key")
 	body := []byte("payload")
 	now := time.Unix(1_700_000_000, 0)
-	handlerFn := newSignatureHandler(SignatureConfig{
-		Keys: [][]byte{key},
-		TTL:  time.Minute,
-		Now:  func() time.Time { return now },
-	}).Handle(func(http.ResponseWriter, *http.Request) { t.Fatal("far-future request reached the handler") })
+	handlerFn := newSignatureHandler([][]byte{key},
+		WithSignatureTTL(time.Minute),
+		withSignatureClock(func() time.Time { return now }),
+	).Handle(func(http.ResponseWriter, *http.Request) { t.Fatal("far-future request reached the handler") })
 
 	request := httptest.NewRequest(http.MethodPost, "/pay", bytes.NewReader(body))
 	signRequest(request, key, now.AddDate(400, 0, 0).Unix(), body)

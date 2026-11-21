@@ -14,46 +14,36 @@ type retryAfterer interface {
 	RetryAfter() time.Duration
 }
 
-// RateLimitConfig configures RateLimitHandler.
-type RateLimitConfig struct {
-	Enabled bool `json:",optional"`
-	// Limiter is the rate limiter; it is required when Enabled is true.
-	Limiter ratelimit.Limiter `json:"-"`
-}
-
 // RateLimitHandler rejects requests once the limiter denies them.
 type RateLimitHandler struct {
-	config RateLimitConfig
+	limiter ratelimit.Limiter
 }
 
-// NewRateLimitHandler creates a RateLimitHandler.
-func NewRateLimitHandler(config RateLimitConfig) *RateLimitHandler {
-	return &RateLimitHandler{config: config}
+// NewRateLimitHandler creates a RateLimitHandler. It panics when limiter is nil,
+// since every request would otherwise be rejected as a limiter failure.
+func NewRateLimitHandler(limiter ratelimit.Limiter) *RateLimitHandler {
+	if limiter == nil {
+		panic("handler: RateLimitHandler requires a limiter")
+	}
+	return &RateLimitHandler{limiter: limiter}
 }
 
 // NewRateLimitPerSecondHandler creates a token-bucket limiter permitting rate
 // requests per second with bursts up to burst.
 func NewRateLimitPerSecondHandler(rate, burst float64) *RateLimitHandler {
-	return NewRateLimitHandler(RateLimitConfig{
-		Enabled: true,
-		Limiter: ratelimit.NewTokenBucket(rate, burst),
-	})
+	return NewRateLimitHandler(ratelimit.NewTokenBucket(rate, burst))
 }
 
 // Handle wraps next with rate limiting.
 func (h *RateLimitHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
-	if !h.config.Enabled || h.config.Limiter == nil {
-		return next
-	}
-
 	return func(w http.ResponseWriter, r *http.Request) {
-		allowed, err := h.config.Limiter.AllowContext(r.Context())
+		allowed, err := h.limiter.AllowContext(r.Context())
 		if err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
 		if !allowed {
-			if delay, ok := retryAfter(h.config.Limiter); ok {
+			if delay, ok := retryAfter(h.limiter); ok {
 				w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(delay)))
 			}
 			w.WriteHeader(http.StatusTooManyRequests)

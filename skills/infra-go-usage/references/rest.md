@@ -191,8 +191,8 @@ Middlewares: rest.MiddlewaresConf{
 mounted server-wide with `WithRateLimit` / `WithBreaker`, or scoped with their handlers via
 `Group.Use` / `WithRouteMiddleware`.
 
-`handler.AuthConfig` embeds `token.Config`, so the secret can be loaded from the config file and
-`WithAuth` builds the parser itself — `Parser` (`json:"-"`) never has to be serialised:
+`handler.AuthConfig` is YAML-loadable and `NewAuthHandler` builds the parser from its secret, so
+the whole section can come from the config file:
 
 ```go
 type Config struct {
@@ -202,20 +202,32 @@ type Config struct {
 
 var cfg Config
 conf.MustLoad("config.yaml", &cfg, conf.UseEnv())
-server, _ := rest.NewServer(cfg.Config, rest.WithAuth(cfg.Auth))
+server, _ := rest.NewServer(cfg.Config,
+    rest.WithMiddleware(resthandler.NewAuthHandler(cfg.Auth).Handle))
+```
+
+`WithAuth(secret, opts...)` / `WithRouteAuth(secret, opts...)` are the shorthand when only the
+secret and a few options are needed, mirroring go-zero's `Authorize(secret, opts...)`:
+
+```go
+server, _ := rest.NewServer(cfg.Config, rest.WithAuth(cfg.Auth.Secret))
 ```
 
 ```yaml
 auth:
-  enabled: true
-  secret: ${JWT_SECRET}   # flattened from token.Config
-  expire: 24h
-  realm: api
-  skipPaths: ["/health", "/public/*"]   # exact, trailing-* prefix or glob
+  secret: ${JWT_SECRET}
+  skipPaths: ["/health", "/public/*"]
 ```
 
-The embedded `token.Config` is ignored when `Parser` is set explicitly; route-level auth with a
-custom realm still uses `WithRouteMiddleware(handler.NewAuthHandler(cfg).Handle)`.
+`handler.AuthOption` values apply on top of the config, so they work with `WithAuth` and
+`NewAuthHandler` alike:
+
+| Auth option | Effect |
+|-------------|--------|
+| `WithPrevSecret(secret)` | Also accept tokens signed with the previous secret (key rotation) |
+| `WithAuthRealm(realm)` | `WWW-Authenticate` realm, default `api` |
+| `WithAuthSkipPaths(paths...)` | Paths that bypass auth (exact, trailing-`*` prefix or glob) |
+| `WithUnauthorizedCallback(fn)` | Custom rejection body/headers; the default status applies when unset |
 
 `skipPaths` (and the access-log/trace equivalents) are matched against the cleaned request path:
 `.`/`..` segments and duplicate slashes are removed first, matching ServeMux routing. A request
@@ -359,8 +371,8 @@ server, _ := rest.NewServer(conf,
 | `WithCORS(origins ...string)` | Allow the given origins (all origins when empty, no credentials). Entries with a scheme match exactly; a scheme-less host also allows its subdomains |
 | `WithCORSHeaders(headers ...string)` | Append allowed request headers; it only configures them, CORS still has to be enabled with `WithCORS` / `WithCustomCORS` |
 | `WithCustomCORS(headerFn, notAllowedFn, origins...)` | Customise headers and the rejected-request body |
-| `WithAuth(cfg handler.AuthConfig)` | Require a valid bearer token on every request; `Enabled` is implied, the parser is built from the embedded `token.Config` when `Parser` is nil, and invalid config panics like `NewAuthHandler`. `Realm` / `Callback` customise rejections |
-| `WithSignature(cfg handler.SignatureConfig)` | Require an HMAC signature on every request |
+| `WithAuth(secret string, opts ...handler.AuthOption)` | Require a bearer token signed with `secret` on every request; panics when the secret is missing or shorter than 8 characters. `AuthOption` adds a previous secret, realm, skip paths and a rejection callback |
+| `WithSignature(keys [][]byte, opts ...handler.SignatureOption)` | Require an HMAC signature on every request; several keys allow rotation, and `WithSignatureTTL` / `WithSignatureMaxBody` tune verification |
 | `WithRateLimit(limiter ratelimit.Limiter)` | Apply a rate limiter to every request |
 | `WithBreaker(br breaker.Breaker)` | Wrap the server with a circuit breaker |
 
@@ -372,28 +384,24 @@ OPTIONS semantics keep working. `Access-Control-Allow-Methods`, `Access-Control-
 ## Route options
 
 ```go
-parser, _ := token.NewParser(token.Config{Secret: "a-long-enough-secret"})
-
 server.AddRoute(rest.Route{
     Method:  http.MethodGet,
     Path:    "/profile",
     Handler: profileHandler,
-}, rest.WithRouteAuth(parser))
+}, rest.WithRouteAuth("a-long-enough-secret"))
 
 server.AddRoute(rest.Route{
     Method:  http.MethodPost,
     Path:    "/payments",
     Handler: paymentHandler,
-}, rest.WithRouteSignature(resthandler.SignatureConfig{
-    Keys: [][]byte{signingKey},
-}))
+}, rest.WithRouteSignature([][]byte{signingKey}))
 ```
 
 | Option | Effect |
 |--------|--------|
 | `WithRouteMiddleware(mw ...chain.Middleware)` | Wrap only this route handler |
-| `WithRouteAuth(parser *token.Parser)` | Require a valid bearer token; custom config via `WithRouteMiddleware(handler.NewAuthHandler(...).Handle)` |
-| `WithRouteSignature(config handler.SignatureConfig)` | Require a valid HMAC signature on this route |
+| `WithRouteAuth(secret string, opts ...handler.AuthOption)` | Require a bearer token signed with `secret`, with the same options as `WithAuth` |
+| `WithRouteSignature(keys [][]byte, opts ...handler.SignatureOption)` | Require a valid HMAC signature on this route |
 
 ## Responses
 
@@ -575,10 +583,7 @@ conf.Middlewares.Trace = resthandler.TraceConfig{
 }
 // Server.Register(group) adds the HTTP server and its auxiliary services.
 
-server.Use(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
-    Enabled: true,
-    Limiter: ratelimit.NewTokenBucket(100, 200),
-}).Handle)
+server.Use(resthandler.NewRateLimitHandler(ratelimit.NewTokenBucket(100, 200)).Handle)
 ```
 
 | Handler | Behaviour |
@@ -591,15 +596,15 @@ server.Use(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
 | `NewTimeoutHandler(TimeoutConfig)` | Bound handler time → 503 with `Request Timeout`, discards late writes; handler panics are re-raised on the caller goroutine so recovery middleware still handles them. The response is buffered, so streaming is refused: `Flush` returns `http.ErrHandlerTimeout` and `Hijack` returns `http.ErrNotSupported` (leave it off for SSE/WebSocket). |
 | `NewMaxBytesHandler(MaxBytesConfig)` | 413 for oversized bodies, `http.MaxBytesReader` for streaming, sets `Connection: close` |
 | `NewGunzipHandler(GunzipConfig)` | Transparently decompresses `Content-Encoding: gzip` |
-| `NewRateLimitHandler(RateLimitConfig)` / `NewRateLimitPerSecondHandler(rate, burst)` | 429 via `core/ratelimit` |
-| `NewBreakerHandler(BreakerConfig)` | Circuit breaker; 5xx responses count as failures → 503 when open |
-| `NewSignatureHandler(SignatureConfig)` | HMAC check over `METHOD / escaped-path / raw-query / timestamp / body` with key rotation and a timestamp TTL (zero uses the 5-minute default, negative disables it); the timestamp is checked before the body is read, and `MaxBody` caps the body read for verification (zero is unlimited) |
-| `NewAuthHandler(AuthConfig)` | Bearer token check; RFC 6750 challenge (`invalid_request` → 400, `invalid_token` → 401), optional `Callback`. Builds the parser from the embedded `token.Config` when enabled with a secret; enabling without a parser or secret, or with an invalid token config, panics at construction. `SkipPaths` (matched against the cleaned path) lets health and public routes bypass auth |
+| `NewRateLimitHandler(limiter)` / `NewRateLimitPerSecondHandler(rate, burst)` | 429 via `core/ratelimit`; a nil limiter panics at construction |
+| `NewBreakerHandler(br)` | Circuit breaker; 5xx responses count as failures → 503 when open; a nil breaker panics at construction |
+| `NewSignatureHandler(keys [][]byte, opts ...SignatureOption)` | HMAC check over `METHOD / escaped-path / raw-query / timestamp / body`; several keys allow rotation. Panics without a key. `WithSignatureTTL` bounds the timestamp skew (zero uses the 5-minute default, negative disables it), `WithSignatureMaxBody` caps the body read (zero is unlimited), and the timestamp is checked before the body is read |
+| `NewAuthHandler(cfg AuthConfig, opts ...AuthOption)` | Bearer token check built from `cfg.Secret`; RFC 6750 challenge (`invalid_request` → 400, `invalid_token` → 401). Panics at construction when the secret is missing or shorter than 8 characters. `AuthConfig` is YAML-loadable (`secret`, `prevSecret`, `realm`, `skipPaths`), and options override it |
 
 Default authorization failures write 400/401/500 with an RFC 6750 `WWW-Authenticate` challenge
 and no body. A missing or unsupported scheme (`Basic ...`, `Bearer2 ...`) gets a bare 401 challenge;
 only a header that starts with `Bearer` but has no valid credentials is a 400 `invalid_request`.
-Set `AuthConfig.Callback` when the application needs a custom body or extra reporting.
+Set `WithUnauthorizedCallback` when the application needs a custom body or extra reporting.
 
 ## token package
 

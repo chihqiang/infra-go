@@ -10,7 +10,6 @@ import (
 	"github.com/chihqiang/infra-go/rest/chain"
 	"github.com/chihqiang/infra-go/rest/handler"
 	"github.com/chihqiang/infra-go/rest/router"
-	"github.com/chihqiang/infra-go/rest/token"
 )
 
 // Route describes an HTTP endpoint.
@@ -33,21 +32,18 @@ func WithRouteMiddleware(middleware ...chain.Middleware) RouteOption {
 	}
 }
 
-// WithRouteAuth requires a valid bearer token verified by parser. For a custom
-// realm or rejection callback, use WithRouteMiddleware with
-// handler.NewAuthHandler and an explicit handler.AuthConfig. For server-wide
-// auth use WithAuth.
-func WithRouteAuth(parser *token.Parser) RouteOption {
-	return WithRouteMiddleware(handler.NewAuthHandler(handler.AuthConfig{
-		Enabled: true,
-		Parser:  parser,
-	}).Handle)
+// WithRouteAuth requires a valid bearer token signed with secret. Pass
+// handler.AuthOption values for a custom realm, callback or skip paths; for
+// server-wide auth use WithAuth.
+func WithRouteAuth(secret string, opts ...handler.AuthOption) RouteOption {
+	return WithRouteMiddleware(handler.NewAuthHandler(
+		handler.AuthConfig{Secret: secret}, opts...).Handle)
 }
 
-// WithRouteSignature requires a valid HMAC signature for this route.
-func WithRouteSignature(config handler.SignatureConfig) RouteOption {
-	config.Enabled = true
-	return WithRouteMiddleware(handler.NewSignatureHandler(config).Handle)
+// WithRouteSignature requires a valid HMAC signature for this route. keys may
+// hold several keys to allow rotation.
+func WithRouteSignature(keys [][]byte, opts ...handler.SignatureOption) RouteOption {
+	return WithRouteMiddleware(handler.NewSignatureHandler(keys, opts...).Handle)
 }
 
 func applyRouteOptions(route Route, opts []RouteOption) Route {

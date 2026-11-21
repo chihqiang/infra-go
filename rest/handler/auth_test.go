@@ -9,6 +9,10 @@ import (
 	"github.com/chihqiang/infra-go/rest/token"
 )
 
+// authHandlerSecret matches the secret newTokenParser signs with, so a handler
+// built from the secret verifies those tokens.
+const authHandlerSecret = "a-sufficiently-long-secret"
+
 func newTokenParser(t *testing.T) *token.Parser {
 	t.Helper()
 
@@ -26,7 +30,7 @@ func TestAuthorizeStoresClaims(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handlerFn := NewAuthHandler(AuthConfig{Enabled: true, Parser: parser}).Handle(func(w http.ResponseWriter, r *http.Request) {
+	handlerFn := NewAuthHandler(AuthConfig{Secret: authHandlerSecret}).Handle(func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := token.ClaimsFrom(r.Context())
 		if !ok {
 			t.Error("claims missing from context")
@@ -46,16 +50,14 @@ func TestAuthorizeStoresClaims(t *testing.T) {
 	}
 }
 
-func TestNewAuthHandlerBuildsParserFromTokenConfig(t *testing.T) {
+func TestNewAuthHandlerBuildsParserFromSecret(t *testing.T) {
 	parser := newTokenParser(t)
 	signed, err := parser.Generate("user-1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	config := AuthConfig{Enabled: true}
-	config.Secret = "a-sufficiently-long-secret"
-	handlerFn := NewAuthHandler(config).Handle(func(w http.ResponseWriter, _ *http.Request) {
+	handlerFn := NewAuthHandler(AuthConfig{Secret: authHandlerSecret}).Handle(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -69,22 +71,19 @@ func TestNewAuthHandlerBuildsParserFromTokenConfig(t *testing.T) {
 	}
 }
 
-func TestNewAuthHandlerPanicsOnInvalidTokenConfig(t *testing.T) {
+func TestNewAuthHandlerPanicsOnShortSecret(t *testing.T) {
 	defer func() {
 		if recover() == nil {
-			t.Fatal("invalid token config should panic")
+			t.Fatal("a secret shorter than 8 characters should panic")
 		}
 	}()
-	NewAuthHandler(AuthConfig{Enabled: true, Config: token.Config{Secret: "short"}})
+	NewAuthHandler(AuthConfig{Secret: "short"})
 }
 
 func TestAuthHandlerSkipsConfiguredPaths(t *testing.T) {
-	parser := newTokenParser(t)
-	handlerFn := NewAuthHandler(AuthConfig{
-		Enabled:   true,
-		Parser:    parser,
-		SkipPaths: []string{"/health", "/public/*"},
-	}).Handle(func(w http.ResponseWriter, _ *http.Request) {
+	handlerFn := NewAuthHandler(AuthConfig{Secret: authHandlerSecret},
+		WithAuthSkipPaths("/health", "/public/*"),
+	).Handle(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -111,9 +110,8 @@ func TestAuthHandlerSkipsConfiguredPaths(t *testing.T) {
 }
 
 func TestAuthorizeRejectsBadHeaders(t *testing.T) {
-	parser := newTokenParser(t)
 	called := false
-	handlerFn := NewAuthHandler(AuthConfig{Enabled: true, Parser: parser}).Handle(func(http.ResponseWriter, *http.Request) {
+	handlerFn := NewAuthHandler(AuthConfig{Secret: authHandlerSecret}).Handle(func(http.ResponseWriter, *http.Request) {
 		called = true
 	})
 
@@ -192,8 +190,7 @@ func TestAuthorizeRejectsBadHeaders(t *testing.T) {
 }
 
 func TestAuthorizeRejectsMultipleAuthorizationHeaders(t *testing.T) {
-	parser := newTokenParser(t)
-	handlerFn := NewAuthHandler(AuthConfig{Enabled: true, Parser: parser}).Handle(func(http.ResponseWriter, *http.Request) {})
+	handlerFn := NewAuthHandler(AuthConfig{Secret: authHandlerSecret}).Handle(func(http.ResponseWriter, *http.Request) {})
 
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	request.Header.Add(AuthorizationHeader, "Bearer first")
@@ -216,7 +213,7 @@ func TestAuthorizeAcceptsLowercaseScheme(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handlerFn := NewAuthHandler(AuthConfig{Enabled: true, Parser: parser}).Handle(func(w http.ResponseWriter, _ *http.Request) {
+	handlerFn := NewAuthHandler(AuthConfig{Secret: authHandlerSecret}).Handle(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -231,15 +228,12 @@ func TestAuthorizeAcceptsLowercaseScheme(t *testing.T) {
 }
 
 func TestAuthorizeUsesCallback(t *testing.T) {
-	parser := newTokenParser(t)
-	handlerFn := NewAuthHandler(AuthConfig{
-		Enabled: true,
-		Parser:  parser,
-		Callback: func(w http.ResponseWriter, r *http.Request, err error) {
+	handlerFn := NewAuthHandler(AuthConfig{Secret: authHandlerSecret}, WithUnauthorizedCallback(
+		func(w http.ResponseWriter, r *http.Request, err error) {
 			w.Header().Set("X-Reason", err.Error())
 			w.WriteHeader(http.StatusForbidden)
 		},
-	}).Handle(func(http.ResponseWriter, *http.Request) {})
+	)).Handle(func(http.ResponseWriter, *http.Request) {})
 
 	recorder := httptest.NewRecorder()
 	handlerFn.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -252,24 +246,47 @@ func TestAuthorizeUsesCallback(t *testing.T) {
 	}
 }
 
-func TestNewAuthHandlerRequiresParserOrSecret(t *testing.T) {
+func TestAuthHandlerAcceptsPreviousSecret(t *testing.T) {
+	oldParser, err := token.NewParser(token.Config{Secret: "the-previous-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, err := oldParser.Generate("user-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handlerFn := NewAuthHandler(AuthConfig{Secret: authHandlerSecret},
+		WithPrevSecret("the-previous-secret")).Handle(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set(AuthorizationHeader, "Bearer "+signed)
+	recorder := httptest.NewRecorder()
+	handlerFn.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 for a token signed with the previous secret", recorder.Code)
+	}
+}
+
+func TestNewAuthHandlerRequiresSecret(t *testing.T) {
 	defer func() {
 		if recover() == nil {
-			t.Fatal("enabling auth without a parser or secret should panic")
+			t.Fatal("auth without a secret should panic")
 		}
 	}()
-	NewAuthHandler(AuthConfig{Enabled: true})
+	NewAuthHandler(AuthConfig{})
 }
 
 func TestAuthorizeCallbackDefaultsStatus(t *testing.T) {
-	parser := newTokenParser(t)
-	handlerFn := NewAuthHandler(AuthConfig{
-		Enabled: true,
-		Parser:  parser,
-		Callback: func(w http.ResponseWriter, _ *http.Request, err error) {
+	handlerFn := NewAuthHandler(AuthConfig{Secret: authHandlerSecret}, WithUnauthorizedCallback(
+		func(w http.ResponseWriter, _ *http.Request, err error) {
 			w.Header().Set("X-Reason", err.Error())
 		},
-	}).Handle(func(http.ResponseWriter, *http.Request) {})
+	)).Handle(func(http.ResponseWriter, *http.Request) {})
 
 	recorder := httptest.NewRecorder()
 	handlerFn.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))

@@ -135,10 +135,9 @@ middlewares:
 	require.True(t, cfg.Middlewares.Log.Enabled)
 }
 
-// TestAuthConfigFromYAMLBuildsParser pins the configuration story: the secret
-// lives in the config file because the embedded token.Config is flattened, and
-// WithAuth builds the parser, so Parser is never part of the serialised config.
-func TestAuthConfigFromYAMLBuildsParser(t *testing.T) {
+// TestAuthSecretFromYAML drives auth from the config file: AuthConfig is
+// YAML-loadable, and NewAuthHandler builds the parser from the loaded secret.
+func TestAuthSecretFromYAML(t *testing.T) {
 	type appConfig struct {
 		Auth resthandler.AuthConfig `json:"auth"`
 	}
@@ -146,31 +145,34 @@ func TestAuthConfigFromYAMLBuildsParser(t *testing.T) {
 	var cfg appConfig
 	require.NoError(t, conf.LoadFromYAMLBytes([]byte(`
 auth:
-  enabled: true
   secret: a-sufficiently-long-secret
-  expire: 1h
   skipPaths: ["/health", "/public/*"]
 `), &cfg))
-	require.True(t, cfg.Auth.Enabled)
 	require.Equal(t, "a-sufficiently-long-secret", cfg.Auth.Secret)
-	require.Equal(t, time.Hour, cfg.Auth.Expire)
 	require.Equal(t, []string{"/health", "/public/*"}, cfg.Auth.SkipPaths)
-	require.Nil(t, cfg.Auth.Parser)
 
 	parser, err := token.NewParser(token.Config{Secret: cfg.Auth.Secret})
 	require.NoError(t, err)
 	signed, err := parser.Generate("user-1", nil)
 	require.NoError(t, err)
 
-	server, err := NewServer(Config{}, WithAuth(cfg.Auth))
+	server, err := NewServer(Config{},
+		WithMiddleware(resthandler.NewAuthHandler(cfg.Auth).Handle))
 	require.NoError(t, err)
 	server.HandleFunc(http.MethodGet, "/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	server.HandleFunc(http.MethodGet, "/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
 	anonymous := httptest.NewRecorder()
 	server.ServeHTTP(anonymous, httptest.NewRequest(http.MethodGet, "/", nil))
 	require.Equal(t, http.StatusUnauthorized, anonymous.Code)
+
+	skipped := httptest.NewRecorder()
+	server.ServeHTTP(skipped, httptest.NewRequest(http.MethodGet, "/health", nil))
+	require.Equal(t, http.StatusNoContent, skipped.Code)
 
 	authorized := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/", nil)

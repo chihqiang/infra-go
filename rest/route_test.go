@@ -159,7 +159,7 @@ func TestWithRouteAuthProtectsGroupRoute(t *testing.T) {
 			claims, _ := token.ClaimsFrom(r.Context())
 			_, _ = w.Write([]byte(claims.Subject))
 		}),
-	}, WithRouteAuth(parser))
+	}, WithRouteAuth("a-sufficiently-long-secret"))
 
 	anonymous := httptest.NewRecorder()
 	server.ServeHTTP(anonymous, httptest.NewRequest(http.MethodGet, "/api/profile", nil))
@@ -189,7 +189,7 @@ func TestWithRouteSignatureProtectsOnlySelectedRoute(t *testing.T) {
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 		}),
-	}, WithRouteSignature(handler.SignatureConfig{Keys: [][]byte{key}}))
+	}, WithRouteSignature([][]byte{key}))
 	server.HandleFunc(http.MethodPost, "/open", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
