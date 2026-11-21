@@ -217,6 +217,10 @@ auth:
 The embedded `token.Config` is ignored when `Parser` is set explicitly; route-level auth with a
 custom realm still uses `WithRouteMiddleware(handler.NewAuthHandler(cfg).Handle)`.
 
+`skipPaths` (and the access-log/trace equivalents) are matched against the cleaned request path:
+`.`/`..` segments and duplicate slashes are removed first, matching ServeMux routing. A request
+such as `/public/../private` therefore cannot widen a `/public/*` rule.
+
 Tags are consumed by `core/conf` and `core/mapping`, so the same struct works for YAML/JSON files
 and environment expansion. Every config field carries an explicit key and `logger`, `middlewares`
 and `health` are all `optional`: leave a section out and it keeps its zero value. The nested
@@ -590,7 +594,7 @@ server.Use(resthandler.NewRateLimitHandler(resthandler.RateLimitConfig{
 | `NewRateLimitHandler(RateLimitConfig)` / `NewRateLimitPerSecondHandler(rate, burst)` | 429 via `core/ratelimit` |
 | `NewBreakerHandler(BreakerConfig)` | Circuit breaker; 5xx responses count as failures → 503 when open |
 | `NewSignatureHandler(SignatureConfig)` | HMAC check over `METHOD / escaped-path / raw-query / timestamp / body` with key rotation and a timestamp TTL (zero uses the 5-minute default, negative disables it); the timestamp is checked before the body is read, and `MaxBody` caps the body read for verification (zero is unlimited) |
-| `NewAuthHandler(AuthConfig)` | Bearer token check; RFC 6750 challenge (`invalid_request` → 400, `invalid_token` → 401), missing parser → 500, optional `Callback`. Builds the parser from the embedded `token.Config` when enabled with a secret; `SkipPaths` lets health and public routes bypass auth |
+| `NewAuthHandler(AuthConfig)` | Bearer token check; RFC 6750 challenge (`invalid_request` → 400, `invalid_token` → 401), missing parser → 500, optional `Callback`. Builds the parser from the embedded `token.Config` when enabled with a secret; `SkipPaths` (matched against the cleaned path) lets health and public routes bypass auth |
 
 Default authorization failures write 400/401/500 with an RFC 6750 `WWW-Authenticate` challenge
 and no body. A missing or unsupported scheme (`Basic ...`, `Bearer2 ...`) gets a bare 401 challenge;

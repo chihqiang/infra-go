@@ -101,6 +101,13 @@ func TestAuthHandlerSkipsConfiguredPaths(t *testing.T) {
 	if protected.Code != http.StatusUnauthorized {
 		t.Fatalf("protected status = %d, want 401", protected.Code)
 	}
+
+	// Dot segments are cleaned before matching, so they cannot widen a rule.
+	bypass := httptest.NewRecorder()
+	handlerFn.ServeHTTP(bypass, httptest.NewRequest(http.MethodGet, "/public/../private", nil))
+	if bypass.Code != http.StatusUnauthorized {
+		t.Fatalf("dot-segment bypass status = %d, want 401", bypass.Code)
+	}
 }
 
 func TestAuthorizeRejectsBadHeaders(t *testing.T) {

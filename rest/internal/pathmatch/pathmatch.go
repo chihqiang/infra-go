@@ -7,6 +7,8 @@ import (
 )
 
 // Matcher reports whether a request path hits any of the configured rules.
+// Dot segments are removed before matching, mirroring the path cleaning that
+// http.ServeMux performs, so "/hooks/../admin" cannot match "/hooks*".
 //
 // Supported rule forms:
 //   - exact: "/health" matches that path only
@@ -37,6 +39,12 @@ func (m *Matcher) Match(requestPath string) bool {
 	if m == nil {
 		return false
 	}
+	if requestPath == "" {
+		requestPath = "/"
+	}
+	// ServeMux redirects and routes the cleaned path, so match that instead of
+	// the raw value; otherwise ".." segments could widen a prefix rule.
+	requestPath = path.Clean(requestPath)
 
 	for _, pattern := range m.patterns {
 		if matchPattern(pattern, requestPath) {
