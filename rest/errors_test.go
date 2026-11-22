@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
-
 )
 
 type codedError struct{}

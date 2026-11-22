@@ -228,8 +228,8 @@ func TestLocal_PathTraversalRejected(t *testing.T) {
 		"a/../../ten-go-secret.txt", // walks back in the middle
 		"/../../ten-go-secret.txt",  // leading slash plus walk-back
 		"//../ten-go-secret.txt",    // a double slash prefix must not bypass the check
-		"..",                          // points at the parent directory itself
-		"../",                         // parent directory (with a trailing slash)
+		"..",                        // points at the parent directory itself
+		"../",                       // parent directory (with a trailing slash)
 	}
 	for _, p := range escapes {
 		t.Run(p, func(t *testing.T) {
