@@ -176,8 +176,8 @@ Middlewares: rest.MiddlewaresConf{
     },
     Trace: resthandler.TraceConfig{
         Enabled:     true,
-        ServiceName: "api",
         IgnorePaths: []string{"/health*"},
+        Config:      trace.Config{Name: "api", Endpoint: "localhost:4317"},
     },
     MaxBytes: resthandler.MaxBytesConfig{Enabled: true, Limit: 1 << 20},
 },
@@ -542,9 +542,8 @@ Every handler is a struct with its own `Config` and a `Handle` method. Construct
 ```go
 type TraceConfig struct {
     Enabled     bool
-    ServiceName string
     IgnorePaths []string
-    Agent       trace.Config
+    trace.Config // embedded: name, endpoint, batcher, sampler, ...
 }
 
 type TraceHandler struct{ /* ... */ }
@@ -553,8 +552,9 @@ func NewTraceHandler(config TraceConfig) *TraceHandler
 func (h *TraceHandler) Handle(next http.HandlerFunc) http.HandlerFunc
 ```
 
-The `Enabled` field makes a handler a no-op when false. `TraceConfig.Agent` configures the
-tracing exporter; `Server.Register` adds the internal trace agent service to the
+The `Enabled` field makes a handler a no-op when false. `TraceConfig` embeds `trace.Config`, so
+the exporter keys (`endpoint`, `batcher`, `sampler`, `name`, ...) sit next to `enabled` in the
+config file; `Server.Register` adds the internal trace agent service to the
 `core/service.ServiceGroup`, so the group owns starting and stopping it. An agent already
 started by the application is reused and left running. The endpoint includes the port, for
 example `localhost:4317`. All handlers can be used without a `rest.Server`:
@@ -562,13 +562,19 @@ example `localhost:4317`. All handlers can be used without a `rest.Server`:
 ```go
 conf.Middlewares.Trace = resthandler.TraceConfig{
     Enabled:     true,
-    ServiceName: "api",
     IgnorePaths: []string{"/health*"},
-    Agent: trace.Config{
+    Config: trace.Config{
+        Name:     "api",
         Batcher:  trace.BatcherOTLPGRPC,
         Endpoint: "localhost:4317", // Jaeger OTLP gRPC; HTTP uses localhost:4318
     },
 }
+// or, from a config file:
+// middlewares:
+//   trace:
+//     enabled: true
+//     endpoint: localhost:4317
+//     batcher: otlpgrpc
 // Server.Register(group) adds the HTTP server and its auxiliary services.
 
 server.Use(resthandler.NewRateLimitHandler(ratelimit.NewTokenBucket(100, 200)).Handle)
@@ -578,7 +584,7 @@ server.Use(resthandler.NewRateLimitHandler(ratelimit.NewTokenBucket(100, 200)).H
 |---------|-----------|
 | `NewRecoveryHandler(RecoveryConfig)` | Recovers panics → 500, re-panics `http.ErrAbortHandler`; when the response is already committed it aborts the connection instead of hiding the truncation behind a clean 200 |
 | `NewRequestIDHandler(RequestIDConfig)` | Keeps a safe `X-Request-ID` or generates a UUID; `resthandler.RequestIDFromContext(ctx)` reads it from the request context. Importing `rest/handler` also registers a `logger` context extractor, so every `logger.XxxCtx` call carries `request_id` automatically |
-| `NewTraceHandler(TraceConfig)` | OTel server span; `ServiceName`, `IgnorePaths` |
+| `NewTraceHandler(TraceConfig)` | OTel server span; `Name` (service.name attribute), `IgnorePaths` |
 | `NewLogHandler(LogConfig, logger)` | Access log via `core/logger`; `ServiceName`, `SkipPaths` |
 | `NewMaxConnsHandler(MaxConnsConfig)` | Cap in-flight requests → 503 |
 | `NewTimeoutHandler(TimeoutConfig)` | Bound handler time → 503 with `Request Timeout`, discards late writes; handler panics are re-raised on the caller goroutine so recovery middleware still handles them. The response is buffered, so streaming is refused: `Flush` returns `http.ErrHandlerTimeout` and `Hijack` returns `http.ErrNotSupported` (leave it off for SSE/WebSocket). |
@@ -640,7 +646,7 @@ sg.Start()
 
 `server.Register` adds every auxiliary service first and the HTTP server last, so the
 ServiceGroup stops the HTTP server before flushing the logger. The logger sync and the trace
-agent configured through `Middlewares.Trace.Agent` are added automatically by `NewServer`.
+agent configured through `Middlewares.Trace` (the embedded `trace.Config`) are added automatically by `NewServer`.
 
 ## Notes
 

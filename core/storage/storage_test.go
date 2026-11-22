@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/chihqiang/ten-go/core/conf"
 )
 
 // --- Storage interface ---
@@ -644,4 +646,32 @@ func TestStorages_ExistsUnknownStorage(t *testing.T) {
 	_, err := storages.Exists(context.Background(), "unknown", "path")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `unknown storage "unknown"`)
+}
+
+// TestConfigLoadIgnoresOtherDriverSections pins the optional nested configs: a
+// config file may keep sections for drivers it does not select, and only the
+// selected driver is validated (by its constructor, not by config loading).
+func TestConfigLoadIgnoresOtherDriverSections(t *testing.T) {
+	const yamlConfig = `
+driver: local
+local:
+  root_dir: /tmp/storage-test
+oss:
+  endpoint: oss-cn-hangzhou.aliyuncs.com
+cos:
+  bucket_url: https://bucket.cos.ap-beijing.myqcloud.com
+kodo:
+  bucket: assets
+`
+	var cfg Config
+	require.NoError(t, conf.LoadFromYAMLBytes([]byte(yamlConfig), &cfg))
+	require.Equal(t, DriverLocal, cfg.Driver)
+	require.NotNil(t, cfg.Local)
+	require.Equal(t, "/tmp/storage-test", cfg.Local.RootDir)
+
+	// A partially filled section for the selected driver is reported by the
+	// constructor, so a misconfiguration still fails at startup.
+	_, err := New(Config{Driver: DriverOSS, OSS: cfg.OSS})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "access key ID is required")
 }

@@ -102,12 +102,8 @@ func NewServer(conf Config, opts ...Option) (*Server, error) {
 		logger.SetGlobal(ownedLogger)
 		server.AddService(restservice.NewLoggerSync(ownedLogger))
 	}
-	if conf.Middlewares.Trace.Enabled && conf.Middlewares.Trace.Agent.Endpoint != "" {
-		agent := conf.Middlewares.Trace.Agent
-		if agent.Name == "" {
-			agent.Name = conf.Middlewares.Trace.ServiceName
-		}
-		server.AddService(restservice.NewTraceAgent(agent))
+	if conf.Middlewares.Trace.Enabled && conf.Middlewares.Trace.Endpoint != "" {
+		server.AddService(restservice.NewTraceAgent(conf.Middlewares.Trace.Config))
 	}
 	server.httpServer = &http.Server{
 		Addr:           net.JoinHostPort(conf.Host, strconv.Itoa(conf.Port)),

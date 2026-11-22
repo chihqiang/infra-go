@@ -121,7 +121,7 @@ func Register(server *rest.Server, svcCtx *svc.ServiceContext) {
     server.Use(resthandler.NewTraceHandler(resthandler.TraceConfig{
         Enabled:     true,
         IgnorePaths: []string{"/healthz"},
-        ServiceName: "my-service",
+        Config:      trace.Config{Name: "my-service"},
     }).Handle)
 
     v1 := server.Group("/api/v1")

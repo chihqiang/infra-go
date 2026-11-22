@@ -144,6 +144,11 @@ type Config struct {
 }
 ```
 
+Every driver section and its fields are optional (`json:",optional"`), so a config file may keep
+sections for drivers it does not select. Only the selected driver is validated, by the
+constructor (`NewLocal` / `NewOSS` / `NewCOS` / `NewKODO`), which reports a missing required
+value such as `root_dir` or `access_key_id` when `storage.New` runs.
+
 ### Local filesystem
 
 Writes files straight into a local disk directory; suited to development/single-node setups or as
