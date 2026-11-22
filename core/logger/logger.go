@@ -90,9 +90,10 @@ func extractContextFields(ctx context.Context) []Field {
 	return fields
 }
 
-// Config is the log configuration, following go-zero's LogConf layout.
+// Config is the log configuration.
 type Config struct {
-	// ServiceName is the service name; volume mode uses it to build the log directory.
+	// ServiceName is the service name; it is emitted as the "app" field and volume
+	// mode uses it to build the log directory.
 	ServiceName string `json:",optional"`
 	// Mode selects console, file or volume output; default is console.
 	Mode string `json:",default=console,options=[console,file,volume]"`
@@ -109,7 +110,7 @@ type Config struct {
 	MaxContentLength uint32 `json:",optional"`
 	// Compress reports whether rotated log files are gzip-compressed.
 	Compress bool `json:",optional"`
-	// Stat enables statistics in go-zero's logx; kept for configuration compatibility.
+	// Stat enables logging statistics; kept for configuration compatibility.
 	Stat bool `json:",default=true"`
 	// KeepDays is how many days backups are kept; zero keeps them forever.
 	KeepDays int `json:",optional"`

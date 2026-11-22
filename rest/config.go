@@ -4,11 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 	"time"
 
 	"github.com/chihqiang/ten-go/core/logger"
 	resthandler "github.com/chihqiang/ten-go/rest/handler"
+	"github.com/chihqiang/ten-go/rest/internal/healthpath"
 )
 
 var (
@@ -32,6 +32,11 @@ type Config struct {
 	IdleTimeout     time.Duration `json:",default=120s"`
 	ShutdownTimeout time.Duration `json:",default=10s"`
 	MaxHeaderBytes  int           `json:",default=1048576"`
+	// Name names the service in one place. It fills Logger.ServiceName (the "app"
+	// field and the volume log directory) and the trace agent and span name
+	// (trace.Config.Name) when those sections leave them unset, so each
+	// middleware does not have to repeat it.
+	Name string `json:",optional"`
 	// Logger configures the server-owned logger when any field is set. NewServer
 	// builds it, installs it on the server (used by the access-log middleware)
 	// and also sets it as the global logger so package-level logger calls in
@@ -43,33 +48,6 @@ type Config struct {
 	// default so applications that already register their own health route are
 	// unaffected.
 	Health HealthConfig `json:",optional"`
-}
-
-// defaultHealthPath is used when HealthConfig.Path is empty.
-const defaultHealthPath = "/health"
-
-// normalizeHealthPath trims the configured path and makes it absolute, so a
-// config value such as "healthz" still registers "/healthz".
-func normalizeHealthPath(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return defaultHealthPath
-	}
-	if !strings.HasPrefix(path, "/") {
-		return "/" + path
-	}
-	return path
-}
-
-// validHealthPath rejects paths that would make the health route surprising:
-//   - "/" (and a trailing slash) makes the ServeMux pattern a subtree that matches
-//     every request and shadows the 404 handler;
-//   - whitespace, query, fragment and wildcard characters are not a static path.
-func validHealthPath(path string) bool {
-	if path == "" || path == "/" || strings.HasSuffix(path, "/") {
-		return false
-	}
-	return !strings.ContainsAny(path, " \t\r\n?#{}")
 }
 
 // HealthConfig configures the built-in health endpoint.
@@ -139,6 +117,36 @@ func (c Config) loggerConfigured() bool {
 	return !reflect.ValueOf(c.Logger).IsZero()
 }
 
+// WithName propagates Config.Name to the components that carry a service name:
+// Logger.ServiceName (the "app" field and the volume log directory) and
+// trace.Config.Name. An explicit value in a component section always wins, and
+// a section that is not in use is left untouched, so setting Name never enables
+// the logger or tracing on its own.
+func (c Config) WithName() Config {
+	if c.Name == "" {
+		return c
+	}
+	if c.loggerConfigured() && c.Logger.ServiceName == "" {
+		c.Logger.ServiceName = c.Name
+	}
+	if c.Middlewares.Trace.Enabled && c.Middlewares.Trace.Name == "" {
+		c.Middlewares.Trace.Name = c.Name
+	}
+	return c
+}
+
+// Setup normalizes and validates the configuration in one step: it applies
+// DefaultConfig to a zero Config, propagates Config.Name and validates the
+// result. NewServer calls it before building anything; exported so callers
+// that inspect or reuse a Config see exactly the values the server will use.
+func (c Config) Setup() (Config, error) {
+	c = c.withDefaults()
+	if err := c.Validate(); err != nil {
+		return Config{}, err
+	}
+	return c.WithName(), nil
+}
+
 // Validate checks configuration values that cannot be inferred from defaults.
 // Middleware-specific values are only checked when that middleware is enabled,
 // so disabled middleware keeps its settings out of validation.
@@ -165,8 +173,8 @@ func (c Config) Validate() error {
 		return fmt.Errorf("rest: max body bytes must not be negative: %d", c.Middlewares.MaxBytes.Limit)
 	}
 	if c.Health.Enabled {
-		path := normalizeHealthPath(c.Health.Path)
-		if !validHealthPath(path) {
+		path := healthpath.Normalize(c.Health.Path)
+		if !healthpath.Valid(path) {
 			return fmt.Errorf("%w: %q", ErrInvalidHealthPath, path)
 		}
 	}

@@ -9,6 +9,8 @@ import (
 	jwtlib "github.com/golang-jwt/jwt/v5"
 
 	"github.com/chihqiang/ten-go/core/conf"
+	"github.com/chihqiang/ten-go/core/logger"
+	"github.com/chihqiang/ten-go/core/trace"
 	resthandler "github.com/chihqiang/ten-go/rest/handler"
 	"github.com/chihqiang/ten-go/rest/token"
 	"github.com/stretchr/testify/require"
@@ -282,4 +284,39 @@ middlewares:
 	require.Equal(t, "localhost:4317", trace.Endpoint)
 	require.Equal(t, "otlphttp", string(trace.Batcher))
 	require.Equal(t, 0.25, trace.Sampler)
+}
+
+// TestNamePropagatesToLoggerAndTrace pins the single-name contract: Config.Name
+// fills the logger service name and the trace name when those sections leave
+// them unset, and an explicit value still wins.
+func TestNamePropagatesToLoggerAndTrace(t *testing.T) {
+	conf := Config{
+		Name:   "api",
+		Logger: logger.Config{Mode: "console"},
+		Middlewares: MiddlewaresConf{
+			Trace: resthandler.TraceConfig{Enabled: true, IgnorePaths: []string{"/health*"}},
+		},
+	}
+	got, err := conf.Setup()
+	require.NoError(t, err)
+	require.Equal(t, "api", got.Logger.ServiceName)
+	require.Equal(t, "api", got.Middlewares.Trace.Name)
+
+	explicit, err := Config{
+		Name:   "api",
+		Logger: logger.Config{ServiceName: "logger-name"},
+		Middlewares: MiddlewaresConf{
+			Trace: resthandler.TraceConfig{Enabled: true, Config: trace.Config{Name: "trace-name"}},
+		},
+	}.Setup()
+	require.NoError(t, err)
+	require.Equal(t, "logger-name", explicit.Logger.ServiceName)
+	require.Equal(t, "trace-name", explicit.Middlewares.Trace.Name)
+
+	// Setting Name must not turn on sections that are not configured.
+	bare, err := Config{Name: "api"}.Setup()
+	require.NoError(t, err)
+	require.Empty(t, bare.Logger.ServiceName)
+	require.False(t, bare.loggerConfigured())
+	require.Empty(t, bare.Middlewares.Trace.Name)
 }

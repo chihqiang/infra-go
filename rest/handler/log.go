@@ -9,11 +9,12 @@ import (
 	"github.com/chihqiang/ten-go/rest/internal/response"
 )
 
-// LogConfig configures LogHandler.
+// LogConfig configures LogHandler. The service name in the access log comes
+// from the logger's own config (the "app" field), so it is defined once for the
+// whole service instead of per middleware.
 type LogConfig struct {
-	Enabled     bool     `json:",default=true"`
-	ServiceName string   `json:",optional"`
-	SkipPaths   []string `json:",optional"`
+	Enabled   bool     `json:",default=true"`
+	SkipPaths []string `json:",optional"`
 }
 
 // LogHandler writes one access-log line per request.
@@ -68,9 +69,6 @@ func (h *LogHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 				logger.Int("status", status),
 				logger.Duration("duration", time.Since(start)),
 				logger.String("ip", clientIP(r)),
-			}
-			if h.config.ServiceName != "" {
-				fields = append(fields, logger.String("service", h.config.ServiceName))
 			}
 			if pattern := PatternFromContext(r.Context()); pattern != "" {
 				fields = append(fields, logger.String("pattern", pattern))

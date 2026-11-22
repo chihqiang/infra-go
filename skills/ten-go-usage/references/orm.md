@@ -234,7 +234,7 @@ import (
 func main() {
     // initialize the global logger
     l := logger.New(logger.Config{
-        Level:   "info",
+        Level:       "info",
         ServiceName: "myapp",
     })
     logger.SetGlobal(l)
@@ -333,7 +333,7 @@ type User struct {
 func main() {
     // initialize logging
     logInstance := logger.New(logger.Config{
-        Level:   "info",
+        Level:       "info",
         ServiceName: "demo",
     })
     logger.SetGlobal(logInstance)

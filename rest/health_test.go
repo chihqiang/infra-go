@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/chihqiang/ten-go/rest/internal/healthpath"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,7 +25,7 @@ func TestHealthEndpointDisabledByDefault(t *testing.T) {
 	assert.False(t, DefaultConfig().Health.Enabled)
 	assert.Empty(t, DefaultConfig().Health.Path, "a disabled health endpoint must not get a default path")
 
-	recorder := serveHealth(t, srv, http.MethodGet, defaultHealthPath)
+	recorder := serveHealth(t, srv, http.MethodGet, healthpath.Default)
 	assert.Equal(t, http.StatusNotFound, recorder.Code)
 }
 
@@ -32,7 +33,7 @@ func TestHealthEndpointEnabled(t *testing.T) {
 	srv, err := NewServer(Config{Health: HealthConfig{Enabled: true}})
 	require.NoError(t, err)
 
-	recorder := serveHealth(t, srv, http.MethodGet, defaultHealthPath)
+	recorder := serveHealth(t, srv, http.MethodGet, healthpath.Default)
 	require.Equal(t, http.StatusOK, recorder.Code)
 	assert.Equal(t, JSONContentType, recorder.Header().Get("Content-Type"))
 
@@ -42,7 +43,7 @@ func TestHealthEndpointEnabled(t *testing.T) {
 	assert.Equal(t, "ok", body.Data["status"])
 
 	// The GET pattern also serves HEAD.
-	assert.Equal(t, http.StatusOK, serveHealth(t, srv, http.MethodHead, defaultHealthPath).Code)
+	assert.Equal(t, http.StatusOK, serveHealth(t, srv, http.MethodHead, healthpath.Default).Code)
 }
 
 func TestHealthEndpointCustomPath(t *testing.T) {

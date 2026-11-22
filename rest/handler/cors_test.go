@@ -1,4 +1,4 @@
-package cors
+package handler
 
 import (
 	"net/http"
@@ -6,16 +6,16 @@ import (
 	"testing"
 )
 
-func TestMiddlewareAllowsAnyOriginByDefault(t *testing.T) {
+func TestCORSHandlerAllowsAnyOriginByDefault(t *testing.T) {
 	called := false
-	handler := Middleware(nil)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	handlerFn := NewCORSHandler(CORSConfig{}).Handle(func(http.ResponseWriter, *http.Request) {
 		called = true
-	}))
+	})
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	request.Header.Set("Origin", "https://example.com")
 	recorder := httptest.NewRecorder()
 
-	handler.ServeHTTP(recorder, request)
+	handlerFn.ServeHTTP(recorder, request)
 
 	if !called {
 		t.Fatal("next handler was not called")
@@ -28,13 +28,14 @@ func TestMiddlewareAllowsAnyOriginByDefault(t *testing.T) {
 	}
 }
 
-func TestMiddlewareRestrictsConfiguredOrigins(t *testing.T) {
-	handler := Middleware(nil, "https://example.com")(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+func TestCORSHandlerRestrictsConfiguredOrigins(t *testing.T) {
+	handlerFn := NewCORSHandler(CORSConfig{Origins: []string{"https://example.com"}}).Handle(
+		func(http.ResponseWriter, *http.Request) {})
 
 	allowed := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	request.Header.Set("Origin", "https://example.com")
-	handler.ServeHTTP(allowed, request)
+	handlerFn.ServeHTTP(allowed, request)
 	if got := allowed.Header().Get("Access-Control-Allow-Origin"); got != "https://example.com" {
 		t.Fatalf("allow origin = %q, want the request origin", got)
 	}
@@ -45,23 +46,23 @@ func TestMiddlewareRestrictsConfiguredOrigins(t *testing.T) {
 	rejected := httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodGet, "/", nil)
 	request.Header.Set("Origin", "https://evil.example")
-	handler.ServeHTTP(rejected, request)
+	handlerFn.ServeHTTP(rejected, request)
 	if got := rejected.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Fatalf("allow origin = %q, want empty", got)
 	}
 }
 
-func TestMiddlewareAnswersPreflightWithoutCallingNext(t *testing.T) {
+func TestCORSHandlerAnswersPreflightWithoutCallingNext(t *testing.T) {
 	called := false
-	handler := Middleware(nil)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	handlerFn := NewCORSHandler(CORSConfig{}).Handle(func(http.ResponseWriter, *http.Request) {
 		called = true
-	}))
+	})
 	request := httptest.NewRequest(http.MethodOptions, "/users", nil)
 	request.Header.Set("Origin", "https://example.com")
 	request.Header.Set("Access-Control-Request-Method", http.MethodPost)
 	recorder := httptest.NewRecorder()
 
-	handler.ServeHTTP(recorder, request)
+	handlerFn.ServeHTTP(recorder, request)
 
 	if called {
 		t.Fatal("preflight request reached the next handler")
@@ -71,18 +72,18 @@ func TestMiddlewareAnswersPreflightWithoutCallingNext(t *testing.T) {
 	}
 }
 
-func TestMiddlewarePassesPlainOptionsToNext(t *testing.T) {
+func TestCORSHandlerPassesPlainOptionsToNext(t *testing.T) {
 	called := false
-	handler := Middleware(nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handlerFn := NewCORSHandler(CORSConfig{}).Handle(func(w http.ResponseWriter, _ *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
-	}))
+	})
 
 	// An OPTIONS request without Origin/Request-Method is not a preflight and
 	// must reach the route handler.
 	request := httptest.NewRequest(http.MethodOptions, "/users", nil)
 	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, request)
+	handlerFn.ServeHTTP(recorder, request)
 
 	if !called {
 		t.Fatal("plain OPTIONS request did not reach the next handler")
@@ -92,38 +93,23 @@ func TestMiddlewarePassesPlainOptionsToNext(t *testing.T) {
 	}
 }
 
-func TestNotAllowedHandlerWritesSingleStatus(t *testing.T) {
-	handler := NotAllowedHandler(func(w http.ResponseWriter) {
-		_, _ = w.Write([]byte("denied"))
-	}, "https://example.com")
-	request := httptest.NewRequest(http.MethodPost, "/missing", nil)
-	request.Header.Set("Origin", "https://example.com")
+func TestCORSHandlerAddsConfiguredHeadersOnPreflight(t *testing.T) {
+	handlerFn := NewCORSHandler(CORSConfig{Headers: []string{"X-Token", "X-Trace"}}).Handle(
+		func(http.ResponseWriter, *http.Request) {})
+
+	preflight := httptest.NewRequest(http.MethodOptions, "/users", nil)
+	preflight.Header.Set("Origin", "https://example.com")
+	preflight.Header.Set("Access-Control-Request-Method", http.MethodPost)
 	recorder := httptest.NewRecorder()
+	handlerFn.ServeHTTP(recorder, preflight)
 
-	handler.ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
-	}
-	if recorder.Body.String() != "denied" {
-		t.Fatalf("body = %q, want denied", recorder.Body.String())
-	}
-	if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "https://example.com" {
-		t.Fatalf("allow origin = %q", got)
+	if got := recorder.Header().Get("Access-Control-Allow-Headers"); got !=
+		allowHeaders+", X-Token, X-Trace" {
+		t.Fatalf("allow headers = %q", got)
 	}
 }
 
-func TestAddAllowHeaders(t *testing.T) {
-	header := make(http.Header)
-	AddAllowHeaders(header, "X-Token", "X-Trace")
-	AddAllowHeaders(header)
-
-	if got := header.Values("Access-Control-Allow-Headers"); len(got) != 1 || got[0] != "X-Token, X-Trace" {
-		t.Fatalf("allow headers = %v", got)
-	}
-}
-
-func TestMatchesOrigin(t *testing.T) {
+func TestCORSHandlerMatchesOrigin(t *testing.T) {
 	tests := []struct {
 		allowed string
 		origin  string
@@ -140,20 +126,21 @@ func TestMatchesOrigin(t *testing.T) {
 		{allowed: "", origin: "https://example.com", want: false},
 	}
 	for _, test := range tests {
-		if got := matchesOrigin(test.allowed, test.origin); got != test.want {
+		if got := NewCORSHandler(CORSConfig{}).matchesOrigin(test.allowed, test.origin); got != test.want {
 			t.Errorf("matchesOrigin(%q, %q) = %v, want %v",
 				test.allowed, test.origin, got, test.want)
 		}
 	}
 }
 
-func TestMiddlewareKeepsPreflightHeadersOffActualResponses(t *testing.T) {
-	handler := Middleware(nil, "https://example.com")(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+func TestCORSHandlerKeepsPreflightHeadersOffActualResponses(t *testing.T) {
+	handlerFn := NewCORSHandler(CORSConfig{Origins: []string{"https://example.com"}}).Handle(
+		func(http.ResponseWriter, *http.Request) {})
 
 	request := httptest.NewRequest(http.MethodGet, "/users", nil)
 	request.Header.Set("Origin", "https://example.com")
 	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, request)
+	handlerFn.ServeHTTP(recorder, request)
 
 	if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "https://example.com" {
 		t.Fatalf("allow origin = %q", got)
@@ -172,7 +159,7 @@ func TestMiddlewareKeepsPreflightHeadersOffActualResponses(t *testing.T) {
 	preflight.Header.Set("Origin", "https://example.com")
 	preflight.Header.Set("Access-Control-Request-Method", http.MethodGet)
 	preflightRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(preflightRecorder, preflight)
+	handlerFn.ServeHTTP(preflightRecorder, preflight)
 
 	for _, name := range []string{
 		"Access-Control-Allow-Methods",
@@ -182,5 +169,31 @@ func TestMiddlewareKeepsPreflightHeadersOffActualResponses(t *testing.T) {
 		if got := preflightRecorder.Header().Get(name); got == "" {
 			t.Fatalf("%s is missing on a preflight response", name)
 		}
+	}
+}
+
+func TestCORSHandlerIsPreflight(t *testing.T) {
+	preflight := httptest.NewRequest(http.MethodOptions, "/", nil)
+	preflight.Header.Set("Origin", "https://example.com")
+	preflight.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	if !NewCORSHandler(CORSConfig{}).isPreflight(preflight) {
+		t.Fatal("a full preflight request should be detected")
+	}
+
+	noMethod := httptest.NewRequest(http.MethodOptions, "/", nil)
+	noMethod.Header.Set("Origin", "https://example.com")
+	if NewCORSHandler(CORSConfig{}).isPreflight(noMethod) {
+		t.Fatal("OPTIONS without a request method is not a preflight")
+	}
+
+	notOptions := httptest.NewRequest(http.MethodGet, "/", nil)
+	notOptions.Header.Set("Origin", "https://example.com")
+	notOptions.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	if NewCORSHandler(CORSConfig{}).isPreflight(notOptions) {
+		t.Fatal("a non-OPTIONS request is not a preflight")
+	}
+
+	if NewCORSHandler(CORSConfig{}).isPreflight(httptest.NewRequest(http.MethodOptions, "/", nil)) {
+		t.Fatal("a bare OPTIONS request is not a preflight")
 	}
 }

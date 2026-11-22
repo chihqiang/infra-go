@@ -100,7 +100,7 @@ type Config struct {
 | `Level` | `info` | `debug`, `info`, `error` or `severe` (`warn` is also accepted); `severe` keeps only fatal entries |
 | `MaxContentLength` | `0` | Truncate messages to this many bytes; zero means no limit |
 | `Compress` | `false` | Gzip rotated backups |
-| `Stat` | `true` | Kept for go-zero `LogConf` compatibility |
+| `Stat` | `true` | Kept for configuration compatibility |
 | `KeepDays` | `0` | Delete backups older than this many days; zero keeps forever |
 | `StackCooldownMillis` | `100` | Minimum interval between stack traces for error-level entries |
 | `MaxBackups` | `0` | Maximum number of backups kept; zero keeps all |
@@ -229,8 +229,8 @@ Replacing the global Logger:
 
 ```go
 l := logger.New(logger.Config{
-    Level:    "debug",
-    Encoding: "plain",
+    Level:       "debug",
+    Encoding:    "plain",
     ServiceName: "my-app",
 })
 logger.SetGlobal(l)
