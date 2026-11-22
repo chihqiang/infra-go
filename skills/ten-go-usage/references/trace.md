@@ -194,15 +194,15 @@ server.Use(resthandler.NewTraceHandler(resthandler.TraceConfig{Enabled: true}).H
 server.Use(resthandler.NewTraceHandler(resthandler.TraceConfig{ // skip probes, tag the service
     Enabled:     true,
     IgnorePaths: []string{"/health*", "/metrics/*"},
-    ServiceName: "my-service",
+    Config:      trace.Config{Name: "my-service"},
 }).Handle)
 
-// or let rest configure and start the agent
+// or let rest configure and start the agent; trace.Config is embedded, so its
+// keys (name, endpoint, batcher, ...) are written next to enabled/ignorePaths
 conf.Middlewares.Trace = resthandler.TraceConfig{
     Enabled:     true,
-    ServiceName: "my-service",
     IgnorePaths: []string{"/health*"},
-    Agent: trace.Config{
+    Config: trace.Config{
         Name:     "my-service",
         Batcher:  trace.BatcherOTLPGRPC,
         Endpoint: "localhost:4317", // Jaeger OTLP gRPC; HTTP uses localhost:4318

@@ -676,7 +676,7 @@ func TestServerRegisterAddsTraceAgentToServiceGroup(t *testing.T) {
 		Middlewares: MiddlewaresConf{
 			Trace: resthandler.TraceConfig{
 				Enabled: true,
-				Agent: trace.Config{
+				Config: trace.Config{
 					Name:     "test-service",
 					Batcher:  trace.BatcherFile,
 					Endpoint: filepath.Join(t.TempDir(), "traces.json"),

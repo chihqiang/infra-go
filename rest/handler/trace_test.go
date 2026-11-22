@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/chihqiang/ten-go/core/trace"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -29,7 +30,10 @@ func captureSpans(t *testing.T, run func()) tracetest.SpanStubs {
 }
 
 func TestTraceHandlerRecordsStatus(t *testing.T) {
-	handlerFn := NewTraceHandler(TraceConfig{Enabled: true, ServiceName: "demo"}).Handle(func(w http.ResponseWriter, _ *http.Request) {
+	handlerFn := NewTraceHandler(TraceConfig{
+		Enabled: true,
+		Config:  trace.Config{Name: "demo"},
+	}).Handle(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 

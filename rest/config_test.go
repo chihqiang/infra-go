@@ -257,3 +257,29 @@ func TestConfigValidateIgnoresDisabledMiddlewareSettings(t *testing.T) {
 		t.Fatalf("disabled middleware settings must not be validated: %v", err)
 	}
 }
+
+// TestConfigLoadTraceFlattensEmbeddedAgent pins the embedded trace.Config: the
+// agent keys live next to enabled/serviceName, not under a nested section.
+func TestConfigLoadTraceFlattensEmbeddedAgent(t *testing.T) {
+	const yamlConfig = `
+middlewares:
+  trace:
+    enabled: true
+    ignorePaths: ["/health*"]
+    name: api
+    endpoint: localhost:4317
+    batcher: otlphttp
+    sampler: 0.25
+`
+
+	var cfg Config
+	require.NoError(t, conf.LoadFromYAMLBytes([]byte(yamlConfig), &cfg))
+
+	trace := cfg.Middlewares.Trace
+	require.True(t, trace.Enabled)
+	require.Equal(t, []string{"/health*"}, trace.IgnorePaths)
+	require.Equal(t, "api", trace.Name)
+	require.Equal(t, "localhost:4317", trace.Endpoint)
+	require.Equal(t, "otlphttp", string(trace.Batcher))
+	require.Equal(t, 0.25, trace.Sampler)
+}

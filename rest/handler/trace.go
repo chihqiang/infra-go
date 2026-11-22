@@ -13,16 +13,18 @@ import (
 )
 
 // TraceConfig configures the HTTP tracing middleware. It controls both the
-// request instrumentation and, through Agent, the shared tracing agent.
+// request instrumentation and, through the embedded trace.Config, the shared
+// tracing agent.
 type TraceConfig struct {
 	Enabled     bool     `json:",optional"`
-	ServiceName string   `json:",optional"`
 	IgnorePaths []string `json:",optional"`
-	// Agent configures core/trace. When Endpoint is set, Server.Register adds the
-	// internal trace agent service to the core/service.ServiceGroup, which starts
-	// and stops it. When the application already started an agent, the existing
-	// one is reused.
-	Agent trace.Config `json:",optional"`
+	// trace.Config supplies the agent and service settings (name, endpoint,
+	// batcher, sampler, ...). They are embedded, so the keys sit next to
+	// enabled and ignorePaths instead of under a separate section. When
+	// endpoint is set, Server.Register adds the internal trace agent service to
+	// the core/service.ServiceGroup, which starts and stops it. When the
+	// application already started an agent, the existing one is reused.
+	trace.Config
 }
 
 // TraceHandler starts a server span per request.
@@ -55,7 +57,7 @@ func (h *TraceHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 		ctx, _ := trace.ExtractHeader(r.Context(), r.Header)
 		ctx, span := otel.Tracer(trace.TraceName).Start(ctx, spanName,
 			oteltrace.WithSpanKind(oteltrace.SpanKindServer),
-			oteltrace.WithAttributes(requestAttributes(r, h.config.ServiceName)...),
+			oteltrace.WithAttributes(requestAttributes(r, h.config.Name)...),
 		)
 
 		recorder := response.NewStatusWriter(w)
