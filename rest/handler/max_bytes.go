@@ -33,7 +33,7 @@ func (h *MaxBytesHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		limit := h.config.Limit
 		if r.ContentLength > limit {
-			markConnectionClose(w)
+			h.markConnectionClose(w)
 			w.WriteHeader(http.StatusRequestEntityTooLarge)
 			logReject(r, "rest: request body too large",
 				logger.Int64("content_length", r.ContentLength),
@@ -45,7 +45,7 @@ func (h *MaxBytesHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 			r.Body = &maxBytesBody{
 				ReadCloser: http.MaxBytesReader(w, r.Body, limit),
 				onLimit: func() {
-					markConnectionClose(w)
+					h.markConnectionClose(w)
 					logReject(r, "rest: request body too large",
 						logger.Int64("limit", limit),
 					)
@@ -77,7 +77,7 @@ func (b *maxBytesBody) Read(p []byte) (int, error) {
 
 // markConnectionClose asks net/http to close the keep-alive connection after the
 // reply: WriteHeader sets closeAfterReply when the response carries this header.
-func markConnectionClose(w http.ResponseWriter) {
+func (h *MaxBytesHandler) markConnectionClose(w http.ResponseWriter) {
 	if w.Header().Get("Connection") == "" {
 		w.Header().Set("Connection", "close")
 	}

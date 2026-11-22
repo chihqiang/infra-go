@@ -36,7 +36,7 @@ func (h *GunzipHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !isGzipEncoding(r.Header.Get(headerContentEncoding)) {
+		if !h.isGzipEncoding(r.Header.Get(headerContentEncoding)) {
 			next(w, r)
 			return
 		}
@@ -59,7 +59,7 @@ func (h *GunzipHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // isGzipEncoding reports whether the Content-Encoding header contains gzip.
-func isGzipEncoding(value string) bool {
+func (h *GunzipHandler) isGzipEncoding(value string) bool {
 	for _, part := range strings.Split(value, ",") {
 		switch strings.ToLower(strings.TrimSpace(part)) {
 		case encodingGzip, "x-gzip":
