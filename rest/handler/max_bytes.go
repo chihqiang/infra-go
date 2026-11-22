@@ -11,7 +11,7 @@ import (
 // MaxBytesConfig configures MaxBytesHandler.
 type MaxBytesConfig struct {
 	Enabled bool  `json:",default=true"`
-	Limit   int64 `json:",default=1048576"`
+	Limit   int64 `json:",default=5242880"`
 }
 
 // MaxBytesHandler limits the amount of request body data that can be read.

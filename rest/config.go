@@ -19,7 +19,7 @@ var (
 
 // defaultShutdownTimeout is used when Config.ShutdownTimeout is zero, so Stop
 // remains graceful instead of forcing connections closed immediately.
-const defaultShutdownTimeout = 10 * time.Second
+const defaultShutdownTimeout = 30 * time.Second
 
 // Config configures an HTTP server.
 type Config struct {
@@ -27,11 +27,11 @@ type Config struct {
 	Port            int           `json:",default=8080,range=[0:65535]"`
 	CertFile        string        `json:",optional"`
 	KeyFile         string        `json:",optional"`
-	ReadTimeout     time.Duration `json:",default=10s"`
-	WriteTimeout    time.Duration `json:",default=10s"`
-	IdleTimeout     time.Duration `json:",default=120s"`
-	ShutdownTimeout time.Duration `json:",default=10s"`
-	MaxHeaderBytes  int           `json:",default=1048576"`
+	ReadTimeout     time.Duration `json:",default=30s"`
+	WriteTimeout    time.Duration `json:",default=30s"`
+	IdleTimeout     time.Duration `json:",default=60s"`
+	ShutdownTimeout time.Duration `json:",default=30s"`
+	MaxHeaderBytes  int           `json:",default=5242880"`
 	// Name names the service in one place. It fills Logger.ServiceName (the "app"
 	// field and the volume log directory) and the trace agent and span name
 	// (trace.Config.Name) when those sections leave them unset, so each
@@ -87,16 +87,16 @@ func DefaultConfig() Config {
 	return Config{
 		Host:            "0.0.0.0",
 		Port:            8080,
-		ReadTimeout:     10 * time.Second,
-		WriteTimeout:    10 * time.Second,
-		IdleTimeout:     120 * time.Second,
+		ReadTimeout:     30 * time.Second,
+		WriteTimeout:    30 * time.Second,
+		IdleTimeout:     60 * time.Second,
 		ShutdownTimeout: defaultShutdownTimeout,
-		MaxHeaderBytes:  1 << 20,
+		MaxHeaderBytes:  5 << 20,
 		Middlewares: MiddlewaresConf{
 			Recovery:  resthandler.RecoveryConfig{Enabled: true},
 			RequestID: resthandler.RequestIDConfig{Enabled: true},
 			Log:       resthandler.LogConfig{Enabled: true},
-			MaxBytes:  resthandler.MaxBytesConfig{Enabled: true, Limit: 1 << 20},
+			MaxBytes:  resthandler.MaxBytesConfig{Enabled: true, Limit: 5 << 20},
 		},
 	}
 }
