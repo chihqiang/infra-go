@@ -9,7 +9,6 @@ import (
 	"github.com/chihqiang/ten-go/core/ratelimit"
 	"github.com/chihqiang/ten-go/rest/chain"
 	resthandler "github.com/chihqiang/ten-go/rest/handler"
-	"github.com/chihqiang/ten-go/rest/internal/cors"
 )
 
 // Option customizes a Server during construction.
@@ -51,6 +50,23 @@ func WithAuth(secret string, opts ...resthandler.AuthOption) Option {
 		resthandler.AuthConfig{Secret: secret}, opts...).Handle)
 }
 
+// WithNotFoundHandler sets the handler used when no route matches a request.
+// It is the option form of SetNotFoundHandler, for callers that build the
+// server in one expression.
+func WithNotFoundHandler(handler http.Handler) Option {
+	return func(s *Server) {
+		s.SetNotFoundHandler(handler)
+	}
+}
+
+// WithNotAllowedHandler sets the handler used when a route path matches but the
+// method does not. It is the option form of SetNotAllowedHandler.
+func WithNotAllowedHandler(handler http.Handler) Option {
+	return func(s *Server) {
+		s.SetNotAllowedHandler(handler)
+	}
+}
+
 // WithTLSConfig applies cfg to the underlying http.Server. It takes effect when
 // both CertFile and KeyFile are configured.
 func WithTLSConfig(cfg *tls.Config) Option {
@@ -75,68 +91,24 @@ func WithLogger(l logger.ILogger) Option {
 	}
 }
 
-type corsSetting struct {
-	origins      []string
-	headers      []string
-	headerFn     func(http.Header)
-	notAllowedFn func(http.ResponseWriter)
-}
-
-// WithCORS enables CORS for the given origins, or all origins when none are given.
+// WithCORS enables CORS for the given origins, or all origins when none are
+// given. The handler is mounted at the front of the middleware chain, so
+// preflight requests are answered before the built-in middleware runs.
 func WithCORS(origins ...string) Option {
 	return func(s *Server) {
-		setting := s.cors
-		if setting == nil {
-			setting = &corsSetting{}
-		}
-		setting.origins = append([]string(nil), origins...)
-		setting.headers = append(setting.headers, s.pendingCorsHeaders...)
-		s.pendingCorsHeaders = nil
-		s.cors = setting
+		s.frontMiddlewares = append(s.frontMiddlewares, resthandler.NewCORSHandler(
+			resthandler.CORSConfig{Origins: append([]string(nil), origins...)}).Handle)
 	}
 }
 
-// WithCORSHeaders adds extra allowed request headers to CORS responses. It only
-// configures headers: CORS still has to be enabled with WithCORS or
-// WithCustomCORS.
+// WithCORSHeaders adds extra allowed request headers to preflight responses.
+// It only configures headers: CORS still has to be enabled with WithCORS. The
+// middleware runs before the CORS handler, which merges the values, so the
+// option order does not matter.
 func WithCORSHeaders(headers ...string) Option {
 	return func(s *Server) {
-		if s.cors == nil {
-			s.pendingCorsHeaders = append(s.pendingCorsHeaders, headers...)
-			return
-		}
-		s.cors.headers = append(s.cors.headers, headers...)
-	}
-}
-
-// WithCustomCORS enables CORS with custom header and rejection callbacks.
-func WithCustomCORS(headerFn func(http.Header), notAllowedFn func(http.ResponseWriter), origins ...string) Option {
-	return func(s *Server) {
-		s.cors = &corsSetting{
-			origins:      append([]string(nil), origins...),
-			headers:      append([]string(nil), s.pendingCorsHeaders...),
-			headerFn:     headerFn,
-			notAllowedFn: notAllowedFn,
-		}
-		s.pendingCorsHeaders = nil
-	}
-}
-
-func (c *corsSetting) headersFn() func(http.Header, *http.Request) {
-	if c == nil {
-		return nil
-	}
-	if len(c.headers) == 0 && c.headerFn == nil {
-		return nil
-	}
-
-	return func(header http.Header, r *http.Request) {
-		if c.headerFn != nil {
-			c.headerFn(header)
-		}
-		// Extra allowed request headers only belong on a preflight response.
-		if len(c.headers) > 0 && cors.IsPreflight(r) {
-			cors.AddAllowHeaders(header, c.headers...)
-		}
+		s.frontMiddlewares = append([]chain.Middleware{
+			resthandler.NewCORSHandler(resthandler.CORSConfig{Headers: headers}).AppendHeaders,
+		}, s.frontMiddlewares...)
 	}
 }

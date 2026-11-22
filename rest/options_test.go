@@ -35,8 +35,8 @@ func TestWithCORSAppliesHeadersAndPreflight(t *testing.T) {
 	if got := preflight.Header().Get("Access-Control-Allow-Origin"); got != "https://example.com" {
 		t.Fatalf("allow origin = %q", got)
 	}
-	if got := preflight.Header().Values("Access-Control-Allow-Headers"); len(got) != 2 || got[1] != "X-Token" {
-		t.Fatalf("allow headers = %v, want extra X-Token value", got)
+	if got := preflight.Header().Get("Access-Control-Allow-Headers"); !strings.HasSuffix(got, "X-Token") {
+		t.Fatalf("allow headers = %q, want it to end with the extra X-Token value", got)
 	}
 }
 
@@ -56,26 +56,6 @@ func TestWithCORSHeadersOnNotFound(t *testing.T) {
 	}
 	if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "https://example.com" {
 		t.Fatalf("allow origin = %q, want CORS headers on 404", got)
-	}
-}
-
-func TestWithCustomCORSNotAllowedHandler(t *testing.T) {
-	server, err := NewServer(Config{}, WithCustomCORS(
-		func(http.Header) {},
-		func(w http.ResponseWriter) { _, _ = w.Write([]byte("blocked")) },
-		"https://example.com",
-	))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/missing", nil)
-	request.Header.Set("Origin", "https://example.com")
-	server.ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusNotFound || recorder.Body.String() != "blocked" {
-		t.Fatalf("response = %d %q, want 404 blocked", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -154,32 +134,6 @@ func TestWithRateLimitRejectsExcessTraffic(t *testing.T) {
 	server.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/limited", nil))
 	if second.Code != http.StatusTooManyRequests {
 		t.Fatalf("second status = %d, want 429", second.Code)
-	}
-}
-
-func TestCustomCorsOverridesUnmatchedResponse(t *testing.T) {
-	server, err := NewServer(Config{}, WithCustomCORS(
-		func(http.Header) {},
-		func(w http.ResponseWriter) { _, _ = w.Write([]byte("blocked")) },
-		"https://example.com",
-	))
-	if err != nil {
-		t.Fatal(err)
-	}
-	server.SetNotFoundHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "custom", http.StatusNotFound)
-	}))
-
-	request := httptest.NewRequest(http.MethodGet, "/missing", nil)
-	request.Header.Set("Origin", "https://example.com")
-	recorder := httptest.NewRecorder()
-	server.ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusNotFound || recorder.Body.String() != "blocked" {
-		t.Fatalf("response = %d %q, want the CORS rejection response", recorder.Code, recorder.Body.String())
-	}
-	if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "https://example.com" {
-		t.Fatalf("allow origin = %q", got)
 	}
 }
 
@@ -294,5 +248,44 @@ func TestWithMiddlewareRunsAfterBuiltins(t *testing.T) {
 	}
 	if seenEncoding != "" {
 		t.Fatalf("option middleware saw Content-Encoding %q, so it ran before Gunzip", seenEncoding)
+	}
+}
+
+func TestWithNotFoundHandler(t *testing.T) {
+	server, err := NewServer(Config{}, WithNotFoundHandler(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusTeapot)
+			_, _ = w.Write([]byte("custom 404"))
+		})))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/missing", nil))
+
+	if recorder.Code != http.StatusTeapot || recorder.Body.String() != "custom 404" {
+		t.Fatalf("response = %d %q, want the custom not-found handler", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestWithNotAllowedHandler(t *testing.T) {
+	server, err := NewServer(Config{}, WithNotAllowedHandler(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			_, _ = w.Write([]byte("custom 405"))
+		})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.HandleFunc(http.MethodGet, "/users", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/users", nil))
+
+	if recorder.Code != http.StatusMethodNotAllowed || recorder.Body.String() != "custom 405" {
+		t.Fatalf("response = %d %q, want the custom method-not-allowed handler", recorder.Code, recorder.Body.String())
 	}
 }

@@ -122,11 +122,12 @@ defer client.Close()
 parser := token.NewParser(token.Config{Secret: cfg.JWTSecret})
 
 // 5. Distributed tracing (optional). With rest, configure the agent on the
-// trace middleware (trace.Config is embedded, so its keys sit next to enabled)
-// and NewServer starts/stops it:
+// trace middleware (trace.Config is embedded, so its keys sit next to enabled).
+// Name is set once on rest.Config and fills the logger and trace name:
+// conf.Name = "my-service"
 // conf.Middlewares.Trace = resthandler.TraceConfig{
 //     Enabled: true,
-//     Config:  trace.Config{Name: "my-service", Endpoint: cfg.OtelEndpoint},
+//     Config:  trace.Config{Endpoint: cfg.OtelEndpoint},
 // }
 // For non-rest programs use trace.StartAgent(...) + defer trace.StopAgent().
 ```

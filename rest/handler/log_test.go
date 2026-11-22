@@ -143,9 +143,9 @@ func readLogContent(t *testing.T, dir string) string {
 	return builder.String()
 }
 
-func TestLogHandlerSkipsPathsAndAddsService(t *testing.T) {
+func TestLogHandlerSkipsPaths(t *testing.T) {
 	log := &recordingLogger{}
-	logFn := newLogHandlerForTest(t, LogConfig{SkipPaths: []string{"/healthz"}, ServiceName: "demo"}, log)(
+	logFn := newLogHandlerForTest(t, LogConfig{SkipPaths: []string{"/healthz"}}, log)(
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) },
 	)
 
@@ -157,9 +157,6 @@ func TestLogHandlerSkipsPathsAndAddsService(t *testing.T) {
 	logFn.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/users", nil))
 	if len(log.entries) != 1 {
 		t.Fatalf("entries = %d, want 1", len(log.entries))
-	}
-	if log.entries[0].fields["service"] != "demo" {
-		t.Fatalf("service field = %v, want demo", log.entries[0].fields["service"])
 	}
 }
 
