@@ -616,7 +616,7 @@ func TestNewServerUsesDefaultConfigForZeroValue(t *testing.T) {
 	if got := server.httpServer.Addr; got != "0.0.0.0:8080" {
 		t.Fatalf("addr = %q, want 0.0.0.0:8080", got)
 	}
-	if server.httpServer.ReadTimeout != 10*time.Second || server.httpServer.MaxHeaderBytes != 1<<20 {
+	if server.httpServer.ReadTimeout != 30*time.Second || server.httpServer.MaxHeaderBytes != 5<<20 {
 		t.Fatalf("timeouts/limits not defaulted: %+v", server.httpServer)
 	}
 

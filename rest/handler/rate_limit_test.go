@@ -147,10 +147,11 @@ func TestRateLimitHandlerOmitsRetryAfterWithoutHint(t *testing.T) {
 }
 
 func TestRetryAfterSecondsNeverZero(t *testing.T) {
-	if got := retryAfterSeconds(150 * time.Millisecond); got != 1 {
+	handler := NewRateLimitPerSecondHandler(1, 1)
+	if got := handler.retryAfterSeconds(150 * time.Millisecond); got != 1 {
 		t.Fatalf("retryAfterSeconds(150ms) = %d, want 1", got)
 	}
-	if got := retryAfterSeconds(2500 * time.Millisecond); got != 3 {
+	if got := handler.retryAfterSeconds(2500 * time.Millisecond); got != 3 {
 		t.Fatalf("retryAfterSeconds(2.5s) = %d, want 3", got)
 	}
 }

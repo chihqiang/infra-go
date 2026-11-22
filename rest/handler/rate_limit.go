@@ -46,8 +46,8 @@ func (h *RateLimitHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 		}
 		if !allowed {
 			var fields []logger.Field
-			if delay, ok := retryAfter(h.limiter); ok {
-				w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(delay)))
+			if delay, ok := h.retryAfter(); ok {
+				w.Header().Set("Retry-After", strconv.Itoa(h.retryAfterSeconds(delay)))
 				fields = append(fields, logger.Duration("retry_after", delay))
 			}
 			w.WriteHeader(http.StatusTooManyRequests)
@@ -58,8 +58,10 @@ func (h *RateLimitHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func retryAfter(limiter ratelimit.Limiter) (time.Duration, bool) {
-	suggester, ok := limiter.(retryAfterer)
+// retryAfter reports the delay suggested by the limiter, when it implements
+// retryAfterer and suggests a positive delay.
+func (h *RateLimitHandler) retryAfter() (time.Duration, bool) {
+	suggester, ok := h.limiter.(retryAfterer)
 	if !ok {
 		return 0, false
 	}
@@ -71,7 +73,7 @@ func retryAfter(limiter ratelimit.Limiter) (time.Duration, bool) {
 }
 
 // retryAfterSeconds rounds up to whole seconds so small delays never become 0.
-func retryAfterSeconds(delay time.Duration) int {
+func (h *RateLimitHandler) retryAfterSeconds(delay time.Duration) int {
 	seconds := int(math.Ceil(delay.Seconds()))
 	if seconds < 1 {
 		return 1

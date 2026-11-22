@@ -3,10 +3,8 @@ package logger
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,19 +15,167 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/chihqiang/ten-go/core/mapping"
 )
+
+// FieldType identifies the value carried by a Field.
+type FieldType uint8
 
 const (
-	// JSONEncoding outputs JSON.
-	JSONEncoding = "json"
-	// ConsoleEncoding outputs a plain, human-readable line. It is the value used by
-	// Encoding="plain" in Config.
-	ConsoleEncoding = "plain"
-
-	defaultTimeFormat = "2006-01-02T15:04:05.000Z07:00"
+	// StringType is a string field.
+	StringType FieldType = iota
+	// Int64Type is an integer field.
+	Int64Type
+	// Float64Type is a floating-point field.
+	Float64Type
+	// BoolType is a boolean field.
+	BoolType
+	// DurationType is a time.Duration field, stored in nanoseconds.
+	DurationType
+	// TimeType is a time.Time field.
+	TimeType
+	// ErrorType is an error field.
+	ErrorType
+	// AnyType is a field holding an arbitrary value.
+	AnyType
 )
+
+// Field is a log field, used to pass key-value pairs into structured logging.
+type Field struct {
+	Key       string
+	Type      FieldType
+	String    string
+	Integer   int64
+	Interface any
+}
+
+// --- Field constructors ---
+
+// String creates a log field of type string.
+func String(key, val string) Field {
+	return Field{Key: key, Type: StringType, String: val}
+}
+
+// Int creates a log field of type int.
+func Int(key string, val int) Field {
+	return Field{Key: key, Type: Int64Type, Integer: int64(val)}
+}
+
+// Int64 creates a log field of type int64.
+func Int64(key string, val int64) Field {
+	return Field{Key: key, Type: Int64Type, Integer: val}
+}
+
+// Float64 creates a log field of type float64.
+func Float64(key string, val float64) Field {
+	return Field{Key: key, Type: Float64Type, Interface: val}
+}
+
+// Bool creates a log field of type bool.
+func Bool(key string, val bool) Field {
+	integer := int64(0)
+	if val {
+		integer = 1
+	}
+	return Field{Key: key, Type: BoolType, Integer: integer}
+}
+
+// Duration creates a log field of type time.Duration.
+func Duration(key string, val time.Duration) Field {
+	return Field{Key: key, Type: DurationType, Integer: int64(val)}
+}
+
+// Time creates a log field of type time.Time.
+func Time(key string, val time.Time) Field {
+	return Field{Key: key, Type: TimeType, Interface: val}
+}
+
+// Any creates a log field holding a value of any type.
+func Any(key string, val any) Field {
+	return Field{Key: key, Type: AnyType, Interface: val}
+}
+
+// Err creates a log field of type error, with the fixed key name "error".
+func Err(err error) Field {
+	return Field{Key: "error", Type: ErrorType, Interface: err}
+}
+
+// Level is the log level type.
+type Level int8
+
+// Supported log levels.
+const (
+	DebugLevel  Level = -1
+	InfoLevel   Level = 0
+	WarnLevel   Level = 1
+	ErrorLevel  Level = 2
+	DPanicLevel Level = 3
+	PanicLevel  Level = 4
+	FatalLevel  Level = 5
+)
+
+// String returns the upper-case name of the level.
+func (l Level) String() string {
+	switch l {
+	case DebugLevel:
+		return "DEBUG"
+	case InfoLevel:
+		return "INFO"
+	case WarnLevel:
+		return "WARN"
+	case ErrorLevel:
+		return "ERROR"
+	case DPanicLevel:
+		return "DPANIC"
+	case PanicLevel:
+		return "PANIC"
+	case FatalLevel:
+		return "FATAL"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+// ILogger defines the core logger interface.
+// Every implementation must provide the basic log methods and level checking.
+type ILogger interface {
+	Debug(msg string, fields ...Field)
+	Info(msg string, fields ...Field)
+	Warn(msg string, fields ...Field)
+	Error(msg string, fields ...Field)
+	Panic(msg string, fields ...Field)
+	Fatal(msg string, fields ...Field)
+
+	Debugf(format string, args ...any)
+	Infof(format string, args ...any)
+	Warnf(format string, args ...any)
+	Errorf(format string, args ...any)
+	Panicf(format string, args ...any)
+	Fatalf(format string, args ...any)
+
+	DebugCtx(ctx context.Context, msg string, fields ...Field)
+	InfoCtx(ctx context.Context, msg string, fields ...Field)
+	WarnCtx(ctx context.Context, msg string, fields ...Field)
+	ErrorCtx(ctx context.Context, msg string, fields ...Field)
+	PanicCtx(ctx context.Context, msg string, fields ...Field)
+	FatalCtx(ctx context.Context, msg string, fields ...Field)
+
+	DebugfCtx(ctx context.Context, format string, args ...any)
+	InfofCtx(ctx context.Context, format string, args ...any)
+	WarnfCtx(ctx context.Context, format string, args ...any)
+	ErrorfCtx(ctx context.Context, format string, args ...any)
+	PanicfCtx(ctx context.Context, format string, args ...any)
+	FatalfCtx(ctx context.Context, format string, args ...any)
+
+	// Sync flushes buffered entries and fsyncs file outputs. It keeps the
+	// logger usable, so call it when logs must be on disk before another
+	// operation continues.
+	Sync() error
+
+	// Close flushes buffered entries, stops the background flusher and closes
+	// the files the logger owns. It is idempotent, and writes after Close are
+	// dropped. Implementations that own no resources return nil.
+	Close() error
+}
 
 // ContextExtractor is a function that extracts log fields from a context.
 type ContextExtractor func(ctx context.Context) []Field
@@ -90,115 +236,41 @@ func extractContextFields(ctx context.Context) []Field {
 	return fields
 }
 
-// Config is the log configuration.
-type Config struct {
-	// ServiceName is the service name; it is emitted as the "app" field and volume
-	// mode uses it to build the log directory.
-	ServiceName string `json:",optional"`
-	// Mode selects console, file or volume output; default is console.
-	Mode string `json:",default=console,options=[console,file,volume]"`
-	// Encoding selects json or plain output; default is json.
-	Encoding string `json:",default=json,options=[json,plain]"`
-	// TimeFormat is the timestamp layout; an empty value uses ISO8601.
-	TimeFormat string `json:",optional"`
-	// Path is the log directory for file and volume modes; default is "logs".
-	Path string `json:",default=logs"`
-	// Level is one of debug, info, error or severe; default is info. "severe" keeps only
-	// fatal entries, which are the ones written to severe.log.
-	Level string `json:",default=info,options=[debug,info,error,severe]"`
-	// MaxContentLength truncates the message to this many bytes; zero means no limit.
-	MaxContentLength uint32 `json:",optional"`
-	// Compress reports whether rotated log files are gzip-compressed.
-	Compress bool `json:",optional"`
-	// Stat enables logging statistics; kept for configuration compatibility.
-	Stat bool `json:",default=true"`
-	// KeepDays is how many days backups are kept; zero keeps them forever.
-	KeepDays int `json:",optional"`
-	// StackCooldownMillis limits how often stack traces are attached; default 100ms.
-	StackCooldownMillis int `json:",default=100"`
-	// MaxBackups is the maximum number of backups kept; zero keeps all.
-	MaxBackups int `json:",default=0"`
-	// MaxSize is the maximum file size in MB for size rotation; zero means no limit.
-	MaxSize int `json:",default=0"`
-	// Rotation selects daily or size rotation; default is daily.
-	Rotation string `json:",default=daily,options=[daily,size]"`
-}
-
 // Logger is the default implementation of the ILogger interface.
 type Logger struct {
-	mu          sync.Mutex
-	config      Config
-	level       Level
-	timeFormat  string
-	access      io.Writer
-	errorWriter io.Writer
-	severe      io.Writer
-	closers     []io.Closer
-	lastStack   time.Time
-	closed      bool
+	config Config
+	level  Level
+	enc    encoder
+	out    sinks
+
+	lastStack atomic.Int64
+	closed    atomic.Bool
+
+	flushStop chan struct{}
+	flushDone chan struct{}
 }
 
 // New creates and returns an ILogger from the configuration.
 func New(cfg Config) ILogger {
-	c := fillDefault(cfg)
+	c := cfg.withDefaults()
 
+	timeFormat := c.TimeFormat
+	if timeFormat == "" {
+		timeFormat = defaultTimeFormat
+	}
 	l := &Logger{
-		config:     c,
-		level:      parseLevel(c.Level),
-		timeFormat: c.TimeFormat,
+		config: c,
+		level:  parseLevel(c.Level),
+		enc:    newEncoder(c.Encoding, timeFormat),
+		out:    newSinks(c),
 	}
-	if l.timeFormat == "" {
-		l.timeFormat = defaultTimeFormat
-	}
-	l.setupWriters(c)
+	l.startFlusher()
 	return l
 }
 
 // Default returns a Logger that uses the default configuration.
 func Default() ILogger {
 	return New(Config{})
-}
-
-func (l *Logger) setupWriters(c Config) {
-	switch c.Mode {
-	case "file":
-		l.setupFileWriters(c, c.Path)
-	case "volume":
-		if c.ServiceName == "" {
-			fmt.Fprintln(os.Stderr, "logger: volume mode requires ServiceName; using file mode")
-			l.setupFileWriters(c, c.Path)
-			return
-		}
-		host, _ := os.Hostname()
-		l.setupFileWriters(c, filepath.Join(c.Path, c.ServiceName, host))
-	default:
-		l.access = os.Stdout
-		l.errorWriter = os.Stderr
-		l.severe = os.Stderr
-	}
-}
-
-func (l *Logger) setupFileWriters(c Config, dir string) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		fmt.Fprintf(os.Stderr, "logger: failed to create log directory %q: %v\n", dir, err)
-		l.access = os.Stderr
-		l.errorWriter = os.Stderr
-		l.severe = os.Stderr
-		return
-	}
-
-	open := func(name string) io.Writer {
-		writer, err := newRotatingWriter(filepath.Join(dir, name), c)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "logger: failed to open %q: %v\n", name, err)
-			return os.Stderr
-		}
-		l.closers = append(l.closers, writer)
-		return writer
-	}
-	l.access = open("access.log")
-	l.errorWriter = open("error.log")
-	l.severe = open("severe.log")
 }
 
 // Debug logs one structured entry at Debug level.
@@ -364,34 +436,42 @@ func (l *Logger) enabled(level Level) bool {
 }
 
 func (l *Logger) log(level Level, msg string, fields []Field) {
-	if !l.enabled(level) {
+	if !l.enabled(level) || l.closed.Load() {
 		return
 	}
 	if l.config.MaxContentLength > 0 && uint32(len(msg)) > l.config.MaxContentLength {
 		msg = msg[:l.config.MaxContentLength]
 	}
 
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.closed {
-		return
+	// Encode outside any lock: caller lookup and JSON/plain building are the
+	// expensive part and are safe to run in parallel. The buffer is pooled
+	// because each entry is copied into the sink's buffer before Write returns.
+	e := entry{
+		level:  level,
+		now:    time.Now(),
+		caller: callerInfo(),
+		app:    l.config.ServiceName,
+		msg:    msg,
+		fields: fields,
+	}
+	if level >= ErrorLevel {
+		e.stack = l.stackFor(e.now)
 	}
 
-	now := time.Now()
-	entry := l.encode(level, now, msg, fields)
+	buf := encodeBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	l.enc.encodeInto(buf, e)
 
-	writer := l.access
-	switch {
-	case level >= FatalLevel:
-		writer = l.severe
-	case level >= ErrorLevel:
-		writer = l.errorWriter
-	}
-	if writer == nil {
-		writer = os.Stderr
-	}
-	if _, err := writer.Write(entry); err != nil {
+	writer := l.out.pick(level)
+	_, err := writer.Write(buf.Bytes())
+	encodeBufPool.Put(buf)
+	if err != nil && !errors.Is(err, errSinkClosed) {
 		_, _ = fmt.Fprintf(os.Stderr, "logger: write log: %v\n", err)
+	}
+	// Panic and fatal entries must reach the sink before the process panics or
+	// exits, so they bypass batching.
+	if level >= PanicLevel {
+		_ = writer.Flush()
 	}
 }
 
@@ -418,161 +498,34 @@ func callerInfo() string {
 	}
 }
 
-func (l *Logger) encode(level Level, now time.Time, msg string, fields []Field) []byte {
-	caller := callerInfo()
+// encodeBufPool reuses the per-entry encoding buffer. Entries are copied into
+// the sink before the buffer is returned, so pooling is safe.
+var encodeBufPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 
-	stack := ""
-	if level >= ErrorLevel {
-		cooldown := time.Duration(l.config.StackCooldownMillis) * time.Millisecond
-		if cooldown <= 0 || l.lastStack.IsZero() || now.Sub(l.lastStack) >= cooldown {
-			stack = string(debug.Stack())
-			l.lastStack = now
-		}
+// stackFor returns the current stack trace at most once per configured
+// cooldown, so concurrent errors do not all dump a stack.
+func (l *Logger) stackFor(now time.Time) string {
+	cooldown := int64(time.Duration(l.config.StackCooldownMillis) * time.Millisecond)
+	last := l.lastStack.Load()
+	if cooldown > 0 && last != 0 && now.UnixNano()-last < cooldown {
+		return ""
 	}
-
-	if l.config.Encoding == ConsoleEncoding {
-		return l.encodePlain(level, now, caller, msg, fields, stack)
+	if cooldown > 0 && !l.lastStack.CompareAndSwap(last, now.UnixNano()) {
+		return ""
 	}
-	return l.encodeJSON(level, now, caller, msg, fields, stack)
+	return string(debug.Stack())
 }
 
-func (l *Logger) encodeJSON(level Level, now time.Time, caller, msg string, fields []Field, stack string) []byte {
-	var buf bytes.Buffer
-	buf.WriteByte('{')
-	first := true
-	writePair := func(key string, value []byte) {
-		if !first {
-			buf.WriteByte(',')
-		}
-		first = false
-		buf.WriteString(jsonString(key))
-		buf.WriteByte(':')
-		buf.Write(value)
-	}
-	writeStringPair := func(key, value string) {
-		writePair(key, []byte(jsonString(value)))
-	}
-
-	writeStringPair("level", level.String())
-	writeStringPair("time", now.Format(l.timeFormat))
-	if caller != "" {
-		writeStringPair("caller", caller)
-	}
-	if l.config.ServiceName != "" {
-		writeStringPair("app", l.config.ServiceName)
-	}
-	writeStringPair("msg", msg)
-	for _, field := range fields {
-		writePair(field.Key, l.fieldJSON(field))
-	}
-	if stack != "" {
-		writeStringPair("stacktrace", stack)
-	}
-	buf.WriteString("}\n")
-	return buf.Bytes()
-}
-
-func (l *Logger) encodePlain(level Level, now time.Time, caller, msg string, fields []Field, stack string) []byte {
-	var buf bytes.Buffer
-	buf.WriteString(now.Format(l.timeFormat))
-	buf.WriteByte(' ')
-	buf.WriteString(level.String())
-	if caller != "" {
-		buf.WriteByte(' ')
-		buf.WriteString(caller)
-	}
-	if l.config.ServiceName != "" {
-		buf.WriteString(" app=")
-		buf.WriteString(l.config.ServiceName)
-	}
-	buf.WriteByte(' ')
-	buf.WriteString(msg)
-	for _, field := range fields {
-		buf.WriteByte(' ')
-		buf.WriteString(field.Key)
-		buf.WriteByte('=')
-		buf.WriteString(fieldText(field, l.timeFormat))
-	}
-	if stack != "" {
-		buf.WriteString(" stacktrace=")
-		buf.WriteString(stack)
-	}
-	buf.WriteByte('\n')
-	return buf.Bytes()
-}
-
-func (l *Logger) fieldJSON(field Field) []byte {
-	switch field.Type {
-	case StringType:
-		return []byte(jsonString(field.String))
-	case Int64Type:
-		return []byte(strconv.FormatInt(field.Integer, 10))
-	case Float64Type:
-		return marshalJSON(field.Interface)
-	case BoolType:
-		if field.Integer != 0 {
-			return []byte("true")
-		}
-		return []byte("false")
-	case DurationType:
-		millis := int64(time.Duration(field.Integer) / time.Millisecond)
-		return []byte(strconv.FormatInt(millis, 10))
-	case TimeType:
-		if t, ok := field.Interface.(time.Time); ok {
-			return []byte(jsonString(t.Format(l.timeFormat)))
-		}
-		return marshalJSON(field.Interface)
-	case ErrorType:
-		if field.Interface == nil {
-			return []byte("null")
-		}
-		if err, ok := field.Interface.(error); ok {
-			return []byte(jsonString(err.Error()))
-		}
-		return marshalJSON(field.Interface)
-	default:
-		return marshalJSON(field.Interface)
-	}
-}
-
-func fieldText(field Field, timeFormat string) string {
-	switch field.Type {
-	case StringType:
-		return field.String
-	case Int64Type:
-		return strconv.FormatInt(field.Integer, 10)
-	case Float64Type:
-		return fmt.Sprint(field.Interface)
-	case BoolType:
-		return strconv.FormatBool(field.Integer != 0)
-	case DurationType:
-		return time.Duration(field.Integer).String()
-	case TimeType:
-		if t, ok := field.Interface.(time.Time); ok {
-			return t.Format(timeFormat)
-		}
-		return fmt.Sprint(field.Interface)
-	case ErrorType:
-		if field.Interface == nil {
-			return "<nil>"
-		}
-		if err, ok := field.Interface.(error); ok {
-			return err.Error()
-		}
-		return fmt.Sprint(field.Interface)
-	default:
-		return fmt.Sprint(field.Interface)
-	}
-}
-
-// Sync flushes the active outputs.
+// Sync flushes the buffered entries and fsyncs the file outputs.
 func (l *Logger) Sync() error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	var errs []error
-	for _, w := range []io.Writer{l.access, l.errorWriter, l.severe} {
-		if syncer, ok := w.(interface{ Sync() error }); ok {
+	for _, sink := range l.out.all() {
+		if err := sink.Flush(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, closer := range l.out.closers {
+		if syncer, ok := closer.(interface{ Sync() error }); ok {
 			if err := syncer.Sync(); err != nil {
 				errs = append(errs, err)
 			}
@@ -581,71 +534,54 @@ func (l *Logger) Sync() error {
 	return errors.Join(errs...)
 }
 
-// Close shuts the logger down, flushing and closing file outputs.
+// Close shuts the logger down, flushing buffers and closing file outputs.
 func (l *Logger) Close() error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.closed {
+	if !l.closed.CompareAndSwap(false, true) {
 		return nil
 	}
-	l.closed = true
+	l.stopFlusher()
 
 	var errs []error
-	for _, w := range []io.Writer{l.access, l.errorWriter, l.severe} {
-		if syncer, ok := w.(interface{ Sync() error }); ok {
-			errs = append(errs, syncer.Sync())
+	for _, sink := range l.out.all() {
+		if err := sink.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	for _, c := range l.closers {
-		errs = append(errs, c.Close())
+	for _, closer := range l.out.closers {
+		if err := closer.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	return errors.Join(errs...)
 }
 
-// --- Internal functions ---
-
-func fillDefault(cfg Config) Config {
-	var c Config
-	mapping.MustFillAndOverride(&c, cfg)
-	if c.TimeFormat == "" {
-		c.TimeFormat = defaultTimeFormat
-	}
-	return c
+// startFlusher bounds how long an entry stays buffered when traffic is low.
+func (l *Logger) startFlusher() {
+	l.flushStop = make(chan struct{})
+	l.flushDone = make(chan struct{})
+	go func() {
+		defer close(l.flushDone)
+		ticker := time.NewTicker(flushInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				for _, sink := range l.out.all() {
+					_ = sink.Flush()
+				}
+			case <-l.flushStop:
+				return
+			}
+		}
+	}()
 }
 
-func parseLevel(level string) Level {
-	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "debug":
-		return DebugLevel
-	case "warn", "warning":
-		return WarnLevel
-	case "error":
-		return ErrorLevel
-	case "severe":
-		return FatalLevel
-	case "dpanic":
-		return DPanicLevel
-	case "panic":
-		return PanicLevel
-	case "fatal":
-		return FatalLevel
-	default:
-		return InfoLevel
+// stopFlusher stops the background flush loop and waits for it to exit.
+func (l *Logger) stopFlusher() {
+	if l.flushStop == nil {
+		return
 	}
-}
-
-func jsonString(s string) string {
-	data, err := json.Marshal(s)
-	if err != nil {
-		return `""`
-	}
-	return string(data)
-}
-
-func marshalJSON(v any) []byte {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return []byte(jsonString(fmt.Sprint(v)))
-	}
-	return data
+	close(l.flushStop)
+	<-l.flushDone
+	l.flushStop = nil
 }

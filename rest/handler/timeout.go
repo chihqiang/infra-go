@@ -77,7 +77,7 @@ func (h *TimeoutHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 				}
 				return
 			}
-			writeTimeout(w, r, h.config.Timeout)
+			h.writeTimeout(w, r)
 		case <-ctx.Done():
 			// The handler and the deadline can become ready at the same time. Keep a
 			// response that was written before the deadline; otherwise answer 503.
@@ -92,18 +92,18 @@ func (h *TimeoutHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 			default:
 			}
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				writeTimeout(w, r, h.config.Timeout)
+				h.writeTimeout(w, r)
 			}
 		}
 	}
 }
 
 // writeTimeout writes the 503 response used when the deadline is exceeded.
-func writeTimeout(w http.ResponseWriter, r *http.Request, timeout time.Duration) {
+func (h *TimeoutHandler) writeTimeout(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusServiceUnavailable)
 	logReject(r, "rest: request timed out",
-		logger.Duration("timeout", timeout),
+		logger.Duration("timeout", h.config.Timeout),
 	)
 	_, _ = io.WriteString(w, "Request Timeout")
 }

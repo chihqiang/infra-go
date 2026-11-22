@@ -536,6 +536,10 @@ func TestGlobal_StructuredWrappers(t *testing.T) {
 	assert.PanicsWithValue(t, "ctx panic", func() { PanicCtx(ctx, "ctx panic") })
 	assert.PanicsWithValue(t, "ctx panic 1", func() { PanicfCtx(ctx, "ctx panic %d", 1) })
 
+	// Buffered sinks reach the file on Sync (or Close); panic entries flush
+	// themselves, the rest still sit in the buffer.
+	require.NoError(t, l.Sync())
+
 	access := readLogFile(t, filepath.Join(dir, "access.log"))
 	assert.Contains(t, access, "debug ctx")
 	assert.Contains(t, access, "debug formatted ctx")
@@ -601,7 +605,7 @@ func TestFieldTimeAndNilErr(t *testing.T) {
 // --- Default value filling ---
 
 func TestFillDefault_AllDefaults(t *testing.T) {
-	c := fillDefault(Config{})
+	c := Config{}.withDefaults()
 
 	assert.Equal(t, "console", c.Mode)
 	assert.Equal(t, "json", c.Encoding)
@@ -619,7 +623,7 @@ func TestFillDefault_AllDefaults(t *testing.T) {
 }
 
 func TestFillDefault_UserOverrides(t *testing.T) {
-	c := fillDefault(Config{
+	c := Config{
 		ServiceName:         "svc",
 		Mode:                "file",
 		Encoding:            "plain",
@@ -634,7 +638,7 @@ func TestFillDefault_UserOverrides(t *testing.T) {
 		MaxBackups:          2,
 		MaxSize:             10,
 		Rotation:            "size",
-	})
+	}.withDefaults()
 
 	assert.Equal(t, "svc", c.ServiceName)
 	assert.Equal(t, "file", c.Mode)
@@ -785,7 +789,7 @@ func TestRotatingWriter_OperationsAfterClose(t *testing.T) {
 func TestILogger_Compliance(t *testing.T) {
 	var l ILogger = New(Config{})
 	assert.NotNil(t, l)
-	_ = l.(*Logger).Close()
+	assert.NoError(t, l.Close())
 }
 
 // --- Registering and unregistering context field extractors ---
@@ -903,4 +907,71 @@ func TestLogger_MaxContentLength(t *testing.T) {
 	content := readLogFile(t, filepath.Join(dir, "access.log"))
 	assert.Contains(t, content, `"msg":"12345"`)
 	assert.NotContains(t, content, "123456789")
+}
+
+// --- Buffered sinks ---
+
+func TestLogger_BuffersUntilSync(t *testing.T) {
+	l, dir := fileLogger(t, Config{Level: "info", Encoding: "json"})
+	path := filepath.Join(dir, "access.log")
+
+	l.Info("buffered entry")
+	assert.Empty(t, readLogFile(t, path), "entries should stay buffered before Sync")
+
+	require.NoError(t, l.Sync())
+	assert.Contains(t, readLogFile(t, path), "buffered entry")
+}
+
+func TestLogger_FlushesBufferedEntriesOnClose(t *testing.T) {
+	l, dir := fileLogger(t, Config{Level: "info", Encoding: "json"})
+	l.Info("closed entry")
+	require.NoError(t, l.Close())
+
+	assert.Contains(t, readLogFile(t, filepath.Join(dir, "access.log")), "closed entry")
+}
+
+func TestLogger_PanicFlushesImmediately(t *testing.T) {
+	l, dir := fileLogger(t, Config{Level: "debug", Encoding: "json"})
+
+	assert.Panics(t, func() { l.Panic("boom") })
+
+	// No Sync/Close yet: the panic entry must already be on disk. Panic sits
+	// below Fatal, so it is written to error.log.
+	assert.Contains(t, readLogFile(t, filepath.Join(dir, "error.log")), "boom")
+}
+
+func TestLogger_ConcurrentWritesStayLineIntact(t *testing.T) {
+	l, dir := fileLogger(t, Config{Level: "info", Encoding: "json"})
+
+	const goroutines, perGoroutine = 16, 200
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for g := 0; g < goroutines; g++ {
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < perGoroutine; i++ {
+				l.Info("concurrent", Int("goroutine", g), Int("seq", i))
+			}
+		}(g)
+	}
+	wg.Wait()
+	require.NoError(t, l.Sync())
+
+	lines := strings.Split(strings.TrimSpace(readLogFile(t, filepath.Join(dir, "access.log"))), "\n")
+	require.Len(t, lines, goroutines*perGoroutine)
+	for _, line := range lines {
+		require.NotEmpty(t, parseJSONLog(t, line).Msg)
+	}
+}
+
+func TestGlobal_CloseIsIdempotent(t *testing.T) {
+	prev := GetGlobal()
+	l := New(Config{Level: "info", Mode: ModeFile, Path: t.TempDir()})
+	SetGlobal(l)
+	t.Cleanup(func() { SetGlobal(prev) })
+
+	assert.NoError(t, Close())
+	assert.NoError(t, Close())
+	// Writes after Close are dropped rather than panicking.
+	assert.NotPanics(t, func() { Info("after close") })
 }

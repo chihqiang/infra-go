@@ -81,11 +81,11 @@ type Config struct {
     Port            int           `json:",default=8080,range=[0:65535]"`
     CertFile        string        `json:",optional"`
     KeyFile         string        `json:",optional"`
-    ReadTimeout     time.Duration `json:",default=10s"`
-    WriteTimeout    time.Duration `json:",default=10s"`
-    IdleTimeout     time.Duration `json:",default=120s"`
-    ShutdownTimeout time.Duration `json:",default=10s"`
-    MaxHeaderBytes  int           `json:",default=1048576"`
+    ReadTimeout     time.Duration `json:",default=30s"`
+    WriteTimeout    time.Duration `json:",default=30s"`
+    IdleTimeout     time.Duration `json:",default=60s"`
+    ShutdownTimeout time.Duration `json:",default=30s"`
+    MaxHeaderBytes  int           `json:",default=5242880"`
     Logger          logger.Config
     Middlewares     MiddlewaresConf
     Health          HealthConfig
@@ -183,7 +183,7 @@ Middlewares: rest.MiddlewaresConf{
         IgnorePaths: []string{"/health*"},
         Config:      trace.Config{Endpoint: "localhost:4317"}, // name comes from Config.Name
     },
-    MaxBytes: resthandler.MaxBytesConfig{Enabled: true, Limit: 1 << 20},
+    MaxBytes: resthandler.MaxBytesConfig{Enabled: true, Limit: 5 << 20},
 },
 ```
 
@@ -283,7 +283,7 @@ middlewares:
     timeout: 5s
   maxBytes:
     enabled: true
-    limit: 1048576
+    limit: 5242880
 ```
 
 `middlewares` entries are typed as structs and tagged `optional` (`json:",optional"`, the key is the
@@ -660,7 +660,7 @@ agent configured through `Middlewares.Trace` (the embedded `trace.Config`) are a
 ## Notes
 
 - `Server.Stop()` waits `Config.ShutdownTimeout` before forcing connections closed; a zero value
-  falls back to 10s instead of closing connections immediately.
+  falls back to 30s instead of closing connections immediately.
 - Custom 404/405 handlers keep `http.ServeMux`'s method-aware behaviour: a path match with a
   wrong method stays 405 instead of falling through to 404.
 - `internal/response` provides `StatusWriter`, `DeferredWriter` and `BufferedWriter`; they power

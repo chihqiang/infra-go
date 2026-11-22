@@ -14,8 +14,6 @@ const RequestIDHeader = "X-Request-ID"
 // RequestIDLogField is the log field name used for the request ID.
 const RequestIDLogField = "request_id"
 
-type requestIDContextKey struct{}
-
 // init wires the request ID into every ctx-aware log call, the way core/trace
 // does for trace_id: once this package is linked, logger.XxxCtx adds
 // request_id whenever the context carries one.
@@ -52,7 +50,7 @@ func (h *RequestIDHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get(RequestIDHeader)
-		if !validRequestID(id) {
+		if !h.validRequestID(id) {
 			generated, err := uuid.NewRandom()
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
@@ -68,30 +66,9 @@ func (h *RequestIDHandler) Handle(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// ContextWithRequestID returns a context carrying requestID in the same slot
-// used by RequestIDHandler, so RequestIDFromContext and response helpers can
-// read it. An empty requestID leaves ctx unchanged.
-func ContextWithRequestID(ctx context.Context, requestID string) context.Context {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if requestID == "" {
-		return ctx
-	}
-	return context.WithValue(ctx, requestIDContextKey{}, requestID)
-}
-
-// RequestIDFromContext returns the request ID stored by RequestIDHandler or
-// ContextWithRequestID.
-func RequestIDFromContext(ctx context.Context) (string, bool) {
-	if ctx == nil {
-		return "", false
-	}
-	id, ok := ctx.Value(requestIDContextKey{}).(string)
-	return id, ok
-}
-
-func validRequestID(id string) bool {
+// validRequestID reports whether an incoming request ID is safe to echo back and
+// to log: 1-128 characters from [A-Za-z0-9._-].
+func (h *RequestIDHandler) validRequestID(id string) bool {
 	if len(id) == 0 || len(id) > 128 {
 		return false
 	}
