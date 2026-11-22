@@ -374,3 +374,54 @@ func TestRequestIDFromContextWinsOverHeader(t *testing.T) {
 	envelope := decodeEnvelope(t, recorder.Body.Bytes())
 	assert.Equal(t, "ctx-id", envelope["request_id"])
 }
+
+// TestError_WrappedStatusErrorKeepsDetail is a regression test: wrapping a
+// sentinel with fmt.Errorf("%w: detail") used to print only the sentinel text,
+// dropping the detail the caller had just added.
+func TestError_WrappedStatusErrorKeepsDetail(t *testing.T) {
+	w := httptest.NewRecorder()
+	err := fmt.Errorf("%w: app_key already exists", ErrConflict)
+	require.NoError(t, ErrorJSON(w, err))
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+	var body BaseResponse[any]
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, BusinessCodeError, body.Code)
+	assert.Contains(t, body.Msg, "app_key already exists")
+}
+
+// TestError_WrappedStatusError4xxKeepsDetail covers the 401 path, which is
+// where losing the detail hurts the most (the reason is never in the sentinel).
+func TestError_WrappedStatusError4xxKeepsDetail(t *testing.T) {
+	w := httptest.NewRecorder()
+	require.NoError(t, ErrorJSON(w, fmt.Errorf("%w: account is disabled", ErrUnauthorized)))
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Contains(t, w.Body.String(), "account is disabled")
+}
+
+// TestError_WrappedStatusError5xxStillHidden ensures the fix does not leak
+// internals: wrapping a 5xx sentinel must not expose the wrapped detail.
+func TestError_WrappedStatusError5xxStillHidden(t *testing.T) {
+	w := httptest.NewRecorder()
+	require.NoError(t, ErrorJSON(w, fmt.Errorf("%w: db password leaked here", ErrServerUnavailable)))
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.NotContains(t, w.Body.String(), "db password")
+	assert.Contains(t, w.Body.String(), http.StatusText(http.StatusServiceUnavailable))
+}
+
+// TestError_StatusErrorSubclassKeepsDetail covers a custom error that reports a
+// status through StatusCoder without being a *StatusError.
+func TestError_StatusErrorSubclassKeepsDetail(t *testing.T) {
+	w := httptest.NewRecorder()
+	require.NoError(t, ErrorJSON(w, customStatusError{}))
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "field app_key is invalid")
+}
+
+type customStatusError struct{}
+
+func (customStatusError) Error() string   { return "field app_key is invalid" }
+func (customStatusError) StatusCode() int { return http.StatusBadRequest }

@@ -178,37 +178,32 @@ func wrapBaseResponse(ctx context.Context, w http.ResponseWriter, v any) BaseRes
 		response = BaseResponse[any]{Code: int(grpcStatus.Code()), Msg: grpcStatus.Message()}
 	case error:
 		var codeMsg *CodeMsg
-		var statusErr *StatusError
 		status := StatusOf(data)
 		switch {
 		case errors.As(data, &codeMsg):
 			// Business errors are intentional and retain their code and message.
 			response = BaseResponse[any]{Code: codeMsg.Code, Msg: codeMsg.Msg}
-		case errors.As(data, &statusErr) && statusErr != nil:
-			// An explicit status error keeps its message, including 5xx.
-			response = BaseResponse[any]{Code: BusinessCodeError, Msg: statusErr.Error()}
-		case status >= http.StatusInternalServerError:
-			// Hide internal details of unexpected 5xx errors.
-			response = BaseResponse[any]{Code: BusinessCodeError, Msg: http.StatusText(status)}
 		default:
-			response = BaseResponse[any]{Code: BusinessCodeError, Msg: data.Error()}
+			// An explicit *StatusError is deliberate, so its text is kept even for
+			// 5xx; a wrapper such as fmt.Errorf("%w: detail", ErrConflict) keeps the
+			// full text because the inner sentinel alone would drop that detail.
+			// Unexpected 5xx errors stay hidden behind the status text.
+			message := data.Error()
+			if _, explicit := data.(*StatusError); !explicit && status >= http.StatusInternalServerError {
+				message = http.StatusText(status)
+			}
+			response = BaseResponse[any]{Code: BusinessCodeError, Msg: message}
 		}
 	default:
 		response = BaseResponse[any]{Code: BusinessCodeOK, Msg: BusinessMsgOK, Data: v}
 	}
-	response.RequestID = requestIDFrom(ctx, w)
-	return response
-}
-
-// requestIDFrom prefers the request context (which also covers handlers that
-// pass their own context) and falls back to the response header written by
-// RequestIDHandler, so OkJSON/ErrorJSON without a context still carry the ID.
-func requestIDFrom(ctx context.Context, w http.ResponseWriter) string {
+	// Prefer the request context (which also covers handlers that pass their own
+	// context); fall back to the response header written by RequestIDHandler so
+	// OkJSON/ErrorJSON without a context still carry the ID.
 	if id, ok := handler.RequestIDFromContext(ctx); ok && id != "" {
-		return id
+		response.RequestID = id
+	} else if w != nil {
+		response.RequestID = w.Header().Get(handler.RequestIDHeader)
 	}
-	if w != nil {
-		return w.Header().Get(handler.RequestIDHeader)
-	}
-	return ""
+	return response
 }
