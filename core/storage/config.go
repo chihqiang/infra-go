@@ -26,10 +26,11 @@ type Config struct {
 
 // LocalConfig is the local filesystem storage configuration.
 type LocalConfig struct {
-	// RootDir is the local storage root directory. Required.
+	// RootDir is the local storage root directory. Required by NewLocal when the
+	// "local" driver is used.
 	// Files are written under this directory; sub-paths in path map to relative
 	// directories below the root.
-	RootDir string `json:"root_dir"`
+	RootDir string `json:"root_dir,optional"`
 
 	// URL is the access URL prefix (optional), for example the address of a
 	// static file server such as "http://localhost:8080/static".
@@ -40,18 +41,21 @@ type LocalConfig struct {
 // OSSConfig is the Alibaba Cloud OSS storage configuration.
 type OSSConfig struct {
 	// Endpoint is the OSS access domain, for example
-	// "oss-cn-hangzhou.aliyuncs.com". Required.
+	// "oss-cn-hangzhou.aliyuncs.com". Required by NewOSS when the "oss" driver is
+	// used.
 	// Full list: https://help.aliyun.com/zh/oss/user-guide/regions-and-endpoints
-	Endpoint string `json:"endpoint"`
+	Endpoint string `json:"endpoint,optional"`
 
-	// AccessKeyID is the Alibaba Cloud AccessKey ID. Required.
-	AccessKeyID string `json:"access_key_id"`
+	// AccessKeyID is the Alibaba Cloud AccessKey ID. Required by NewOSS when the
+	// "oss" driver is used.
+	AccessKeyID string `json:"access_key_id,optional"`
 
-	// AccessKeySecret is the Alibaba Cloud AccessKey Secret. Required.
-	AccessKeySecret string `json:"access_key_secret"`
+	// AccessKeySecret is the Alibaba Cloud AccessKey Secret. Required by NewOSS
+	// when the "oss" driver is used.
+	AccessKeySecret string `json:"access_key_secret,optional"`
 
-	// Bucket is the bucket name. Required.
-	Bucket string `json:"bucket"`
+	// Bucket is the bucket name. Required by NewOSS when the "oss" driver is used.
+	Bucket string `json:"bucket,optional"`
 
 	// URL is the file access domain (CDN or custom domain) used to build the full
 	// access URL. When empty it defaults to "https://{bucket}.{endpoint}".
@@ -62,16 +66,19 @@ type OSSConfig struct {
 // COSConfig is the Tencent Cloud COS storage configuration.
 type COSConfig struct {
 	// BucketURL is the bucket access address, for example
-	// "https://bucket-name.cos.ap-beijing.myqcloud.com". Required.
+	// "https://bucket-name.cos.ap-beijing.myqcloud.com". Required by NewCOS when
+	// the "cos" driver is used.
 	// Full list: https://console.cloud.tencent.com/cos5/bucket
-	BucketURL string `json:"bucket_url"`
+	BucketURL string `json:"bucket_url,optional"`
 
-	// SecretID is the Tencent Cloud SecretID. Required.
+	// SecretID is the Tencent Cloud SecretID. Required by NewCOS when the "cos"
+	// driver is used.
 	// Reference: https://cloud.tencent.com/document/product/598/37140
-	SecretID string `json:"secret_id"`
+	SecretID string `json:"secret_id,optional"`
 
-	// SecretKey is the Tencent Cloud SecretKey. Required.
-	SecretKey string `json:"secret_key"`
+	// SecretKey is the Tencent Cloud SecretKey. Required by NewCOS when the "cos"
+	// driver is used.
+	SecretKey string `json:"secret_key,optional"`
 
 	// URL is the file access domain (CDN or custom domain) used to build the full
 	// access URL. When empty it defaults to BucketURL. Empty by default.
@@ -81,14 +88,17 @@ type COSConfig struct {
 // KODOConfig is the Qiniu Cloud KODO storage configuration.
 // Default values are defined via the `default` struct tag, following the conf standard.
 type KODOConfig struct {
-	// AccessKey is the Qiniu Cloud AccessKey. Required.
-	AccessKey string `json:"access_key"`
+	// AccessKey is the Qiniu Cloud AccessKey. Required by NewKODO when the "kodo"
+	// driver is used.
+	AccessKey string `json:"access_key,optional"`
 
-	// SecretKey is the Qiniu Cloud SecretKey. Required.
-	SecretKey string `json:"secret_key"`
+	// SecretKey is the Qiniu Cloud SecretKey. Required by NewKODO when the "kodo"
+	// driver is used.
+	SecretKey string `json:"secret_key,optional"`
 
-	// Bucket is the bucket name. Required.
-	Bucket string `json:"bucket"`
+	// Bucket is the bucket name. Required by NewKODO when the "kodo" driver is
+	// used.
+	Bucket string `json:"bucket,optional"`
 
 	// Region is the storage region, for example "z0" (East China), "z1"
 	// (North China) or "z2" (South China). Defaults to "z0".
