@@ -220,7 +220,8 @@ func (c *countingLogger) ErrorfCtx(context.Context, string, ...any) {}
 func (c *countingLogger) PanicfCtx(context.Context, string, ...any) {}
 func (c *countingLogger) FatalfCtx(context.Context, string, ...any) {}
 
-func (c *countingLogger) Sync() error { return nil }
+func (c *countingLogger) Sync() error  { return nil }
+func (c *countingLogger) Close() error { return nil }
 
 func TestLogHandlerUsesGlobalLogger(t *testing.T) {
 	counter := &countingLogger{}

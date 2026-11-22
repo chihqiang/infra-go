@@ -151,9 +151,17 @@ func FatalfCtx(ctx context.Context, format string, args ...any) {
 	GetGlobal().FatalfCtx(ctx, format, args...)
 }
 
-// --- Sync ---
+// --- Sync / Close ---
 
-// Sync flushes the buffers of the global Logger.
+// Sync flushes the buffers of the global Logger without closing it.
 func Sync() error {
 	return GetGlobal().Sync()
+}
+
+// Close flushes the global Logger, stops its background flusher and closes the
+// files it owns. It is idempotent. The global instance stays installed, so
+// later package-level calls write to a closed logger and are dropped; call it
+// only during shutdown.
+func Close() error {
+	return GetGlobal().Close()
 }

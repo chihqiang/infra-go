@@ -236,7 +236,9 @@ l := logger.New(logger.Config{
 logger.SetGlobal(l)
 ```
 
-> **About closing**: `New` returns the `ILogger` interface, and **the interface has no `Close`** (`Close` is only defined on the concrete `*logger.Logger` type). Before the global instance exits, flushing the buffer with the package-level `logger.Sync()` is enough; if you really must close an instance manually, use a type assertion `l.(*logger.Logger).Close()`. For a hot swap at runtime use `logger.ReplaceGlobal(cfg)`, which returns the replaced instance so you can close it yourself.
+> **Buffering**: entries are written through an internal `bufio.Writer` per sink (access / error / severe) and flushed when the 64 KiB buffer fills, once per second by the background flusher, and on `Sync` / `Close`. `Panic`/`Fatal` entries flush immediately before the process panics or exits. Because of the periodic flush, `logger.Info(...)` is visible in the file within about a second even without `Sync`, but always call `Sync` before exit or when a test asserts on file contents.
+
+> **About closing**: `ILogger` exposes both `Sync()` and `Close()`. `Sync` flushes buffered entries and fsyncs files but keeps the logger usable; `Close` flushes, stops the background flusher and closes the owned files, and is idempotent (later writes are dropped). Before the global instance exits, `logger.Sync()` is enough; `logger.Close()` additionally stops the flusher and releases files, so call it (or `Close` the instance you created yourself, including the one returned by `logger.ReplaceGlobal(cfg)`) when the process is shutting down.
 
 ### Context logging
 

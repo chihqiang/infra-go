@@ -38,8 +38,8 @@ type rotatingWriter struct {
 
 func newRotatingWriter(filename string, cfg Config) (*rotatingWriter, error) {
 	rotation := cfg.Rotation
-	if rotation != "size" {
-		rotation = "daily"
+	if rotation != RotationSize {
+		rotation = RotationDaily
 	}
 
 	w := &rotatingWriter{
@@ -79,7 +79,7 @@ func (w *rotatingWriter) Write(p []byte) (int, error) {
 	now := w.now()
 	rotate := false
 	switch w.rotation {
-	case "daily":
+	case RotationDaily:
 		rotate = now.Format(dateOnly) != w.currentDay
 	default:
 		rotate = w.maxSize > 0 && w.size > 0 && w.size+int64(len(p)) > w.maxSize
