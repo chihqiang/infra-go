@@ -69,6 +69,16 @@ func convertTypeOfPtr(tp reflect.Type, target reflect.Value) reflect.Value {
 		tp = tp.Elem()
 	}
 
+	// A value decoded from configuration has the plain type (string, bool,
+	// int64, ...), while a struct may declare a named type such as
+	// `type Mode string`. Those are not assignable but are convertible, so
+	// map values like map[string]Mode work. Only same-kind conversions are
+	// applied, which keeps it lossless (string to named string, int to named
+	// int) and never coerces across kinds.
+	if target.Type() != tp && target.Kind() == tp.Kind() && target.Type().ConvertibleTo(tp) {
+		target = target.Convert(tp)
+	}
+
 	return target
 }
 

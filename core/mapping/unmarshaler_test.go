@@ -978,3 +978,42 @@ func TestUnmarshal_NativeStringToIntField(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 8080, cfg.Port)
 }
+
+// TestUnmarshalMapNamedValueTypes covers map values whose element type is a
+// defined type (type Mode string). Decoded values carry the plain type, which
+// is not assignable to the named type but is convertible.
+func TestUnmarshalMapNamedValueTypes(t *testing.T) {
+	type Mode string
+	type Toggle bool
+
+	var dst struct {
+		Modes   map[string]Mode            `json:"modes"`
+		Toggles map[string]Toggle          `json:"toggles"`
+		Nested  map[string]map[string]Mode `json:"nested"`
+	}
+
+	m := map[string]any{
+		"modes":   map[string]any{"order": "read", "customer": "self"},
+		"toggles": map[string]any{"a": true, "b": false},
+		"nested":  map[string]any{"inner": map[string]any{"order": "write"}},
+	}
+	require.NoError(t, UnmarshalJsonMap(m, &dst))
+	require.Equal(t, Mode("read"), dst.Modes["order"])
+	require.Equal(t, Mode("self"), dst.Modes["customer"])
+	require.Equal(t, Toggle(true), dst.Toggles["a"])
+	require.Equal(t, Toggle(false), dst.Toggles["b"])
+	require.Equal(t, Mode("write"), dst.Nested["inner"]["order"])
+}
+
+// TestUnmarshalMapNamedValueTypeMismatch keeps cross-kind values an error: the
+// conversion is restricted to the same kind, so a bool in a map[string]Mode
+// must not be coerced into a string.
+func TestUnmarshalMapNamedValueTypeMismatch(t *testing.T) {
+	type Mode string
+
+	var dst struct {
+		Modes map[string]Mode `json:"modes"`
+	}
+	m := map[string]any{"modes": map[string]any{"order": true}}
+	require.Error(t, UnmarshalJsonMap(m, &dst))
+}
