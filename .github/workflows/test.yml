@@ -6,7 +6,7 @@ on:
       - main
 
 concurrency:
-  group:  test-group
+  group: test-group
   cancel-in-progress: true
 
 permissions:
