@@ -1,10 +1,6 @@
 package orm
 
-import (
-	"time"
-
-	"github.com/chihqiang/ten-go/core/mapping"
-)
+import "time"
 
 // Driver is the database driver type.
 type Driver string
@@ -102,27 +98,4 @@ type Config struct {
 	// original error with the sentinel, which drops the driver detail; use
 	// IsDuplicatedKey / IsForeignKeyViolation when the message must be kept.
 	TranslateError bool `json:",optional"`
-}
-
-// fillDefault fills in the default values and then overrides them with the non-zero fields
-// of the user configuration, using mapping.FillAndOverride for both steps.
-// An empty DSN, Password or Database is also treated as a valid value (it always
-// overrides); this is achieved by the optional tag with no default (in shouldOverride a
-// string that is optional and has no default always overrides).
-func fillDefault(cfg Config) Config {
-	var c Config
-	mapping.MustFillAndOverride(&c, cfg)
-	return c
-}
-
-// defaultPort returns the default port of the given driver.
-func defaultPort(driver Driver) int {
-	switch driver {
-	case DriverMySQL:
-		return 3306
-	case DriverPostgres:
-		return 5432
-	default:
-		return 0
-	}
 }

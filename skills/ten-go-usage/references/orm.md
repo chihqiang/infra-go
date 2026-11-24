@@ -137,6 +137,20 @@ db, err := orm.NewSQLite(cfg)
 db := orm.MustNewSQLite(cfg)
 ```
 
+### Driver object
+
+`NewDB` returns an exported `*orm.DB` handle whose open methods can be called explicitly:
+
+```go
+d := orm.NewDB(cfg) // applies defaults, same as New
+
+db, err := d.OpenMySQL()    // force MySQL
+db, err := d.OpenPostgres() // force PostgreSQL
+db, err := d.OpenSQLite()   // force SQLite
+```
+
+Every open method returns `*gorm.DB`, exactly like the `New*` functions.
+
 ### Helper functions
 
 ```go

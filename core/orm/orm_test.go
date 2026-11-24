@@ -26,7 +26,9 @@ type User struct {
 }
 
 func TestFillDefault_AllDefaults(t *testing.T) {
-	c := fillDefault(Config{})
+	d := &DB{cfg: Config{}}
+	d.fillDefault()
+	c := d.cfg
 
 	assert.Equal(t, Driver(""), c.Driver) // Driver is required and has no default
 	assert.Equal(t, "127.0.0.1", c.Host)
@@ -46,7 +48,7 @@ func TestFillDefault_AllDefaults(t *testing.T) {
 }
 
 func TestFillDefault_UserOverrides(t *testing.T) {
-	c := fillDefault(Config{
+	d := &DB{cfg: Config{
 		Driver:          DriverMySQL,
 		Host:            "db.example.com",
 		Port:            3307,
@@ -62,7 +64,9 @@ func TestFillDefault_UserOverrides(t *testing.T) {
 		Colorful:        true,
 		TablePrefix:     "t_",
 		SingularTable:   true,
-	})
+	}}
+	d.fillDefault()
+	c := d.cfg
 
 	assert.Equal(t, DriverMySQL, c.Driver)
 	assert.Equal(t, "db.example.com", c.Host)
@@ -82,20 +86,20 @@ func TestFillDefault_UserOverrides(t *testing.T) {
 }
 
 func TestDefaultPort(t *testing.T) {
-	assert.Equal(t, 3306, defaultPort(DriverMySQL))
-	assert.Equal(t, 5432, defaultPort(DriverPostgres))
-	assert.Equal(t, 0, defaultPort(DriverSQLite))
-	assert.Equal(t, 0, defaultPort("unknown"))
+	assert.Equal(t, 3306, (&DB{cfg: Config{Driver: DriverMySQL}}).defaultPort())
+	assert.Equal(t, 5432, (&DB{cfg: Config{Driver: DriverPostgres}}).defaultPort())
+	assert.Equal(t, 0, (&DB{cfg: Config{Driver: DriverSQLite}}).defaultPort())
+	assert.Equal(t, 0, (&DB{cfg: Config{Driver: "unknown"}}).defaultPort())
 }
 
 func TestBuildMySQLDSN(t *testing.T) {
-	dsn := buildMySQLDSN(Config{
+	dsn := NewDB(Config{
 		Host:     "localhost",
 		Port:     3306,
 		Username: "root",
 		Password: "pass",
 		Database: "testdb",
-	})
+	}).mysqlDSN()
 
 	parsed, err := mysqldriver.ParseDSN(dsn)
 	require.NoError(t, err)
@@ -108,28 +112,28 @@ func TestBuildMySQLDSN(t *testing.T) {
 }
 
 func TestBuildPostgresDSN(t *testing.T) {
-	dsn := buildPostgresDSN(Config{
+	dsn := NewDB(Config{
 		Host:     "localhost",
 		Port:     5432,
 		Username: "postgres",
 		Password: "secret",
 		Database: "testdb",
-	})
+	}).postgresDSN()
 	assert.Equal(t, "host=localhost user=postgres password=secret dbname=testdb port=5432 sslmode=disable TimeZone=Asia/Shanghai", dsn)
 }
 
 func TestBuildSQLiteDSN(t *testing.T) {
 	// An empty database path uses an in-memory database, and every call generates a unique
 	// database name (instances do not share it)
-	dsn := buildSQLiteDSN(Config{})
+	dsn := NewDB(Config{Driver: DriverSQLite}).sqliteDSN()
 	assert.Contains(t, dsn, "mode=memory")
 	assert.Contains(t, dsn, "cache=shared", "shared cache is required for pool connections to see the same DB")
 
-	dsn2 := buildSQLiteDSN(Config{})
+	dsn2 := NewDB(Config{Driver: DriverSQLite}).sqliteDSN()
 	assert.NotEqual(t, dsn, dsn2, "each instance must get its own in-memory database")
 
 	// A file path is used as is
-	dsn = buildSQLiteDSN(Config{Database: "/tmp/test.db"})
+	dsn = NewDB(Config{Driver: DriverSQLite, Database: "/tmp/test.db"}).sqliteDSN()
 	assert.Equal(t, "/tmp/test.db", dsn)
 }
 
@@ -465,21 +469,34 @@ func TestSkipDefaultTransaction(t *testing.T) {
 	assert.NotNil(t, db)
 }
 
-func TestBuildDialector_WithDSN(t *testing.T) {
+func TestDB_DialectorsWithDSN(t *testing.T) {
 	// MySQL DSN
-	d, err := buildDialector(Config{Driver: DriverMySQL, DSN: "root:pass@tcp(127.0.0.1:3306)/db"})
-	require.NoError(t, err)
-	assert.NotNil(t, d)
+	mysqlDialector := NewDB(Config{Driver: DriverMySQL, DSN: "root:pass@tcp(127.0.0.1:3306)/db"}).mysqlDialector()
+	assert.NotNil(t, mysqlDialector)
 
 	// Postgres DSN
-	d, err = buildDialector(Config{Driver: DriverPostgres, DSN: "host=127.0.0.1 user=postgres dbname=db"})
-	require.NoError(t, err)
-	assert.NotNil(t, d)
+	postgresDialector := NewDB(Config{Driver: DriverPostgres, DSN: "host=127.0.0.1 user=postgres dbname=db"}).postgresDialector()
+	assert.NotNil(t, postgresDialector)
 
 	// SQLite DSN
-	d, err = buildDialector(Config{Driver: DriverSQLite, DSN: ":memory:"})
+	sqliteDialector := NewDB(Config{Driver: DriverSQLite, DSN: ":memory:"}).sqliteDialector()
+	assert.NotNil(t, sqliteDialector)
+}
+
+// TestDB_OpenSQLite covers the exported NewDB + OpenSQLite path.
+func TestDB_OpenSQLite(t *testing.T) {
+	db, err := NewDB(Config{Database: ":memory:", LogLevel: LogSilent}).OpenSQLite()
 	require.NoError(t, err)
-	assert.NotNil(t, d)
+	t.Cleanup(func() { _ = Close(db) })
+
+	require.NoError(t, db.AutoMigrate(&User{}))
+	assert.Equal(t, "users", db.NamingStrategy.TableName("User"))
+
+	// Config.Driver was empty; OpenSQLite must still force the driver and apply
+	// the per-connection in-memory pool setting.
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	assert.Equal(t, 1, sqlDB.Stats().MaxOpenConnections)
 }
 
 // capturingLogger records the levels used by the gorm bridge; embedding the
@@ -626,7 +643,7 @@ func TestSQLiteMemoryMode(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			memory, shared := sqliteMemoryMode(tc.cfg)
+			memory, shared := NewDB(tc.cfg).sqliteMemoryMode()
 			assert.Equal(t, tc.memory, memory)
 			assert.Equal(t, tc.shared, shared)
 		})
@@ -636,14 +653,14 @@ func TestSQLiteMemoryMode(t *testing.T) {
 // TestBuildMySQLDSN_EscapesCredentials is a regression test: building the DSN with
 // fmt.Sprintf broke as soon as the password contained '@' or '/'.
 func TestBuildMySQLDSN_EscapesCredentials(t *testing.T) {
-	dsn := buildMySQLDSN(Config{
+	dsn := NewDB(Config{
 		Driver:   DriverMySQL,
 		Host:     "127.0.0.1",
 		Port:     3306,
 		Username: "user@corp",
 		Password: "p@ss/w:rd with space",
 		Database: "app",
-	})
+	}).mysqlDSN()
 
 	parsed, err := mysqldriver.ParseDSN(dsn)
 	require.NoError(t, err, "the generated DSN must be parsable")
@@ -657,14 +674,14 @@ func TestBuildMySQLDSN_EscapesCredentials(t *testing.T) {
 
 // TestBuildPostgresDSN_EscapesValues covers spaces and quotes in libpq values.
 func TestBuildPostgresDSN_EscapesValues(t *testing.T) {
-	dsn := buildPostgresDSN(Config{
+	dsn := NewDB(Config{
 		Driver:   DriverPostgres,
 		Host:     "db.internal",
 		Port:     5432,
 		Username: "postgres",
 		Password: `p a'ss\word`,
 		Database: "app db",
-	})
+	}).postgresDSN()
 
 	parsed, err := pgx.ParseConfig(dsn)
 	require.NoError(t, err, "the generated DSN must be parsable: %s", dsn)
