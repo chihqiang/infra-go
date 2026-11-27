@@ -44,9 +44,10 @@ func PathParam(r *http.Request, name string) string {
 }
 
 // PathParamValue is the cast.Value form of PathParam, for callers that want the
-// typed conversions (Int64, Uint64, Float64, Bool) or the emptiness check
-// instead of the raw string. The Or variants of those conversions take a default
-// that is used when the value is empty or cannot be converted.
+// typed conversions (Int64, Uint64, Float64, Bool, Duration, Time) or the
+// emptiness check instead of the raw string. The Or variants of those
+// conversions take a default that is used when the value is empty or cannot be
+// converted.
 //
 // The value is empty (see cast.Value.IsEmpty) when the request is nil or the
 // wildcard is absent; it is nil in the former case and the empty string in the
@@ -68,9 +69,10 @@ func QueryParam(r *http.Request, name string) string {
 }
 
 // QueryParamValue is the cast.Value form of QueryParam, for callers that want
-// the typed conversions (Int64, Uint64, Float64, Bool) or the emptiness check
-// instead of the raw string. The Or variants of those conversions take a default
-// that is used when the value is empty or cannot be converted.
+// the typed conversions (Int64, Uint64, Float64, Bool, Duration, Time) or the
+// emptiness check instead of the raw string. The Or variants of those
+// conversions take a default that is used when the value is empty or cannot be
+// converted.
 //
 // The value is empty (see cast.Value.IsEmpty) when the request or URL is nil,
 // or when the parameter is absent.

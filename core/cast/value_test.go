@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -58,6 +59,7 @@ func TestValueString(t *testing.T) {
 		{"int", 42, "42"},
 		{"bool", true, "true"},
 		{"error", errors.New("boom"), "boom"},
+		{"unmarshallable", complex(1, 2), "(1+2i)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -281,6 +283,127 @@ func TestValueBool(t *testing.T) {
 	}
 }
 
+func TestValueUint(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  uint
+	}{
+		{"uint", uint(1), 1},
+		{"uint64", uint64(2), 2},
+		{"int", 3, 3},
+		{"int64", int64(4), 4},
+		{"float_whole", 5.0, 5},
+		{"string", "6", 6},
+		{"padded_string", " 7 ", 7},
+		{"bytes", []byte("8"), 8},
+		{"json_number", json.Number("9"), 9},
+		{"bool_true", true, 1},
+		{"nil", nil, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NewValue(tt.value).Uint()
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+
+	for _, value := range []any{-1, -1.0, "abc", json.Number("-1"), struct{}{}} {
+		_, err := NewValue(value).Uint()
+		assert.Error(t, err, "%#v should not convert to uint", value)
+	}
+}
+
+func TestValueFloat32(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  float32
+	}{
+		{"int", 1, 1},
+		{"float32", float32(1.5), 1.5},
+		{"float64", 2.5, 2.5},
+		{"string", "3.5", 3.5},
+		{"bytes", []byte("4.5"), 4.5},
+		{"json_number", json.Number("5.5"), 5.5},
+		{"nil", nil, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NewValue(tt.value).Float32()
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+
+	for _, value := range []any{1e300, "abc", struct{}{}} {
+		_, err := NewValue(value).Float32()
+		assert.Error(t, err, "%#v should not convert to float32", value)
+	}
+}
+
+func TestValueDuration(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  time.Duration
+	}{
+		{"duration", 2 * time.Second, 2 * time.Second},
+		{"string", "1.5s", 1500 * time.Millisecond},
+		{"padded_string", " 300ms ", 300 * time.Millisecond},
+		{"bytes", []byte("2h"), 2 * time.Hour},
+		{"nanoseconds", int64(1000), time.Microsecond},
+		{"json_number", json.Number("2000"), 2 * time.Microsecond},
+		{"nil", nil, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NewValue(tt.value).Duration()
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+
+	for _, value := range []any{"5 seconds", json.Number("1.5"), struct{}{}} {
+		_, err := NewValue(value).Duration()
+		assert.Error(t, err, "%#v should not convert to a duration", value)
+	}
+}
+
+func TestValueTime(t *testing.T) {
+	now := time.Date(2024, 5, 6, 7, 8, 9, 0, time.UTC)
+
+	tests := []struct {
+		name  string
+		value any
+		want  time.Time
+	}{
+		{"time", now, now},
+		{"rfc3339", "2024-05-06T07:08:09Z", now},
+		{"padded_rfc3339", " 2024-05-06T07:08:09Z ", now},
+		{"unix_string", "1714979289", now},
+		{"unix_int64", int64(1714979289), now},
+		{"unix_json_number", json.Number("1714979289"), now},
+		{"bytes", []byte("2024-05-06T07:08:09Z"), now},
+		{"nil", nil, time.Time{}},
+		{"date_time_without_zone", "2024-05-06 07:08:09", now},
+		{"date_only", "2024-05-06", time.Date(2024, 5, 6, 0, 0, 0, 0, time.UTC)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NewValue(tt.value).Time()
+			require.NoError(t, err)
+			assert.True(t, tt.want.Equal(got), "got %v, want %v", got, tt.want)
+		})
+	}
+
+	for _, value := range []any{"2024-05-06T25:00:00Z", "", struct{}{}} {
+		_, err := NewValue(value).Time()
+		assert.Error(t, err, "%#v should not convert to a time", value)
+	}
+}
+
 func TestValueOrReturnsFallback(t *testing.T) {
 	t.Run("string", func(t *testing.T) {
 		assert.Equal(t, "text", NewValue("text").StringOr("fallback"))
@@ -311,6 +434,20 @@ func TestValueOrReturnsFallback(t *testing.T) {
 		assert.Equal(t, uint64(7), NewValue(nil).Uint64Or(7))
 	})
 
+	t.Run("uint", func(t *testing.T) {
+		assert.Equal(t, uint(42), NewValue("42").UintOr(7))
+		assert.Equal(t, uint(7), NewValue("").UintOr(7))
+		assert.Equal(t, uint(7), NewValue(-1).UintOr(7))
+		assert.Equal(t, uint(7), NewValue(nil).UintOr(7))
+	})
+
+	t.Run("float32", func(t *testing.T) {
+		assert.Equal(t, float32(1.5), NewValue("1.5").Float32Or(0.5))
+		assert.Equal(t, float32(0.5), NewValue("").Float32Or(0.5))
+		assert.Equal(t, float32(0.5), NewValue(1e300).Float32Or(0.5))
+		assert.Equal(t, float32(0.5), NewValue(nil).Float32Or(0.5))
+	})
+
 	t.Run("float64", func(t *testing.T) {
 		assert.Equal(t, 1.5, NewValue("1.5").Float64Or(0.5))
 		assert.Equal(t, 0.5, NewValue("").Float64Or(0.5))
@@ -324,6 +461,25 @@ func TestValueOrReturnsFallback(t *testing.T) {
 		assert.Equal(t, true, NewValue("").BoolOr(true))
 		assert.Equal(t, true, NewValue("yes").BoolOr(true))
 		assert.Equal(t, false, NewValue(nil).BoolOr(false))
+	})
+
+	t.Run("duration", func(t *testing.T) {
+		assert.Equal(t, time.Minute, NewValue("1m").DurationOr(time.Hour))
+		assert.Equal(t, time.Hour, NewValue("").DurationOr(time.Hour))
+		assert.Equal(t, time.Hour, NewValue("soon").DurationOr(time.Hour))
+		assert.Equal(t, time.Hour, NewValue(nil).DurationOr(time.Hour))
+	})
+
+	t.Run("time", func(t *testing.T) {
+		want := time.Date(2024, 5, 6, 7, 8, 9, 0, time.UTC)
+		fallback := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+
+		got := NewValue("2024-05-06T07:08:09Z").TimeOr(fallback)
+		assert.True(t, want.Equal(got), "got %v, want %v", got, want)
+
+		assert.Equal(t, fallback, NewValue("").TimeOr(fallback))
+		assert.Equal(t, fallback, NewValue("not a time").TimeOr(fallback))
+		assert.Equal(t, fallback, NewValue(nil).TimeOr(fallback))
 	})
 }
 
