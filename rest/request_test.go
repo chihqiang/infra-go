@@ -53,6 +53,45 @@ func TestQueryParam(t *testing.T) {
 	}
 }
 
+func TestPathParamValue(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/groups/42", nil)
+	request.SetPathValue("id", "42")
+
+	id, err := PathParamValue(request, "id").Int()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != 42 {
+		t.Fatalf("path param value = %d, want 42", id)
+	}
+
+	if !PathParamValue(request, "missing").IsEmpty() {
+		t.Fatal("missing path param value should be empty")
+	}
+	if !PathParamValue(nil, "id").IsEmpty() {
+		t.Fatal("path param value for nil request should be empty")
+	}
+}
+
+func TestQueryParamValue(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/groups?page=2&page=3", nil)
+
+	page, err := QueryParamValue(request, "page").Int()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page != 2 {
+		t.Fatalf("query param value = %d, want first value 2", page)
+	}
+
+	if !QueryParamValue(request, "missing").IsEmpty() {
+		t.Fatal("missing query param value should be empty")
+	}
+	if !QueryParamValue(nil, "page").IsEmpty() {
+		t.Fatal("query param value for nil request should be empty")
+	}
+}
+
 type bindPayload struct {
 	Name string `json:"name" form:"name" header:"X-Name" path:"name"`
 }

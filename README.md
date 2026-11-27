@@ -139,7 +139,7 @@ The documentation of each module is maintained centrally in
 | [hash](./skills/ten-go-usage/references/hash.md) | Hashing and encryption: MD5/SHA/Bcrypt/HMAC, AES-GCM encryption, HMAC signing/verification |
 | [trace](./skills/ten-go-usage/references/trace.md) | Tracing built on OpenTelemetry: agent / span management / gRPC and HTTP header propagation / attribute helpers. HTTP server instrumentation is `rest/handler.NewTraceHandler` |
 | [mapping](./skills/ten-go-usage/references/mapping.md) | map → struct deserialisation with a struct tag parsing engine |
-| [cast](./skills/ten-go-usage/references/cast.md) | Type-safe conversion covering basic types, time, slices and generics |
+| [cast](./skills/ten-go-usage/references/cast.md) | Type-safe conversion covering basic types, time, slices and generics, plus a `Value` wrapper for unknown values with an emptiness check and defaults |
 | [syncx](./skills/ten-go-usage/references/syncx.md) | Concurrency helpers: SingleFlight/ConcurrentMap/Semaphore |
 | [service](./skills/ten-go-usage/references/service.md) | Service group that starts and stops several Services concurrently, with sync.Once guaranteeing a single stop |
 | [taskq](./skills/ten-go-usage/references/taskq.md) | Asynchronous task queue built on asynq with a producer/consumer pattern |

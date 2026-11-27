@@ -103,6 +103,32 @@ if err != nil {
 }
 ```
 
+### Value wrapper
+
+`Value` wraps a value of unknown type, such as a request parameter, and converts
+it on demand. It adds an emptiness check and `...Or` variants that take a default,
+which is what an optional parameter usually needs.
+
+| Function | Description |
+| ------ | ------ |
+| `NewValue(v any) Value` | Wrap a value |
+| `Value() any` | The wrapped value, unchanged |
+| `IsEmpty() bool` | true for nil, the empty string, an empty `[]byte` or an empty `json.Number` |
+| `Int/Int64/Uint64/Float64/Bool() (T, error)` | Same rules as the `ToXxxE` conversions |
+| `String() string` | Same rules as `ToStringE`; never fails |
+| `IntOr/Int64Or/Uint64Or/Float64Or/BoolOr(def T) T`, `StringOr(def string) string` | The converted value, or `def` when the value is empty or cannot be converted |
+
+```go
+v := cast.NewValue(" 42 ")
+v.IsEmpty()                      // false
+v.IntOr(0)                       // 42
+cast.NewValue("").IntOr(7)       // 7
+cast.NewValue(nil).BoolOr(true)  // true
+```
+
+`rest.PathParamValue` and `rest.QueryParamValue` return a `cast.Value`, so a
+handler can write `rest.QueryParamValue(r, "page").IntOr(1)`.
+
 ### Pointer conversion
 
 | Function | Description |
