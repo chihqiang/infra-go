@@ -480,6 +480,11 @@ err = rest.BindPath(r, &payload)     // path parameters (path tags)
 
 For a single value, use `rest.PathParam(r, "id")` for a route wildcard such as
 `/groups/{id}` or `rest.QueryParam(r, "page")` for the first matching query value.
+When the caller needs typed conversions or an emptiness check instead of the raw
+string, use `rest.PathParamValue` / `rest.QueryParamValue`, which return a
+`cast.Value` (`Int`, `Int64`, `Uint64`, `Float64`, `Bool`, `String`, `IsEmpty`);
+the `...Or` variants take the fallback used when the value is empty or not
+convertible, for example `rest.QueryParamValue(r, "page").IntOr(1)`.
 
 JSON bodies are also recognised when `Content-Type` is missing or is
 `application/x-www-form-urlencoded` (the body starts with `{` or `[` after
