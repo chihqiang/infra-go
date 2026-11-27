@@ -68,16 +68,29 @@ func ToDurationE(v any) (time.Duration, error) {
 
 // --- Time conversion (time.Time) ---
 
+// timeLayouts lists the layouts ToTimeE tries for a string, in order. RFC3339
+// and RFC3339Nano cover the "2006-01-02T15:04:05Z07:00" form, including
+// fractional seconds; time.DateTime and time.DateOnly cover a plain date and
+// time, and a date on its own.
+var timeLayouts = [...]string{
+	time.RFC3339Nano,
+	time.RFC3339,
+	time.DateTime,
+	time.DateOnly,
+}
+
 // ToTime converts any to time.Time, returning the zero value if the conversion fails.
-// Supports strings (RFC3339 or a Unix timestamp) and numeric types (Unix timestamp).
+// Supports strings (see ToTimeE for the accepted layouts or as a Unix timestamp)
+// and numeric types (Unix timestamp).
 func ToTime(v any) time.Time {
 	val, _ := ToTimeE(v)
 	return val
 }
 
 // ToTimeE converts any to time.Time and returns the result along with an error.
-// Strings are parsed as RFC3339 first and then as a Unix timestamp.
-// Numeric types are treated as Unix timestamps (seconds).
+// A string is tried against every layout in timeLayouts and then parsed as a
+// Unix timestamp; a layout without a zone is read as UTC. Numeric types are
+// treated as Unix timestamps (seconds).
 func ToTimeE(v any) (time.Time, error) {
 	switch val := v.(type) {
 	case nil:
@@ -85,14 +98,14 @@ func ToTimeE(v any) (time.Time, error) {
 	case time.Time:
 		return val, nil
 	case string:
-		s := strings.TrimSpace(val)
-		// try RFC3339
-		t, err := time.Parse(time.RFC3339, s)
-		if err == nil {
-			return t, nil
+		text := strings.TrimSpace(val)
+		for _, layout := range timeLayouts {
+			if parsed, err := time.Parse(layout, text); err == nil {
+				return parsed, nil
+			}
 		}
-		// try a Unix timestamp
-		if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		// A digit-only string is read as a Unix timestamp.
+		if n, err := strconv.ParseInt(text, 10, 64); err == nil {
 			return time.Unix(n, 0), nil
 		}
 		return time.Time{}, castErr("string", "time.Time")

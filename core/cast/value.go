@@ -3,6 +3,7 @@ package cast
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // Value wraps a value of unknown type, such as a path or query parameter, and
@@ -106,6 +107,26 @@ func (v Value) Int64Or(fallback int64) int64 {
 	return value
 }
 
+// Uint returns the wrapped value as a uint, or reports why it is not one. It
+// follows ToUintE, so negative values are rejected.
+func (v Value) Uint() (uint, error) {
+	value, err := ToUintE(v.text())
+	return value, v.withValue(err)
+}
+
+// UintOr returns the wrapped value as a uint, or fallback when the value is
+// empty or cannot be read as one.
+func (v Value) UintOr(fallback uint) uint {
+	if v.IsEmpty() {
+		return fallback
+	}
+	value, err := v.Uint()
+	if err != nil {
+		return fallback
+	}
+	return value
+}
+
 // Uint64 returns the wrapped value as a uint64, or reports why it is not one.
 // It follows ToUint64E, so negative values are rejected.
 func (v Value) Uint64() (uint64, error) {
@@ -120,6 +141,26 @@ func (v Value) Uint64Or(fallback uint64) uint64 {
 		return fallback
 	}
 	value, err := v.Uint64()
+	if err != nil {
+		return fallback
+	}
+	return value
+}
+
+// Float32 returns the wrapped value as a float32, or reports why it is not one.
+// It follows ToFloat32E, which also rejects a value that overflows float32.
+func (v Value) Float32() (float32, error) {
+	value, err := ToFloat32E(v.text())
+	return value, v.withValue(err)
+}
+
+// Float32Or returns the wrapped value as a float32, or fallback when the value
+// is empty or cannot be read as one.
+func (v Value) Float32Or(fallback float32) float32 {
+	if v.IsEmpty() {
+		return fallback
+	}
+	value, err := v.Float32()
 	if err != nil {
 		return fallback
 	}
@@ -161,6 +202,49 @@ func (v Value) BoolOr(fallback bool) bool {
 		return fallback
 	}
 	value, err := v.Bool()
+	if err != nil {
+		return fallback
+	}
+	return value
+}
+
+// Duration returns the wrapped value as a time.Duration, or reports why it is
+// not one. It follows ToDurationE: a number is read as nanoseconds and a string
+// is parsed as "300ms" or "5s".
+func (v Value) Duration() (time.Duration, error) {
+	value, err := ToDurationE(v.text())
+	return value, v.withValue(err)
+}
+
+// DurationOr returns the wrapped value as a time.Duration, or fallback when the
+// value is empty or cannot be read as one.
+func (v Value) DurationOr(fallback time.Duration) time.Duration {
+	if v.IsEmpty() {
+		return fallback
+	}
+	value, err := v.Duration()
+	if err != nil {
+		return fallback
+	}
+	return value
+}
+
+// Time returns the wrapped value as a time.Time, or reports why it is not one.
+// It follows ToTimeE: a string is tried against the supported layouts (RFC 3339,
+// time.DateTime and time.DateOnly) and then as a Unix timestamp, and a number is
+// read as Unix seconds.
+func (v Value) Time() (time.Time, error) {
+	value, err := ToTimeE(v.text())
+	return value, v.withValue(err)
+}
+
+// TimeOr returns the wrapped value as a time.Time, or fallback when the value is
+// empty or cannot be read as one.
+func (v Value) TimeOr(fallback time.Time) time.Time {
+	if v.IsEmpty() {
+		return fallback
+	}
+	value, err := v.Time()
 	if err != nil {
 		return fallback
 	}

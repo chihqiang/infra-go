@@ -114,16 +114,19 @@ which is what an optional parameter usually needs.
 | `NewValue(v any) Value` | Wrap a value |
 | `Value() any` | The wrapped value, unchanged |
 | `IsEmpty() bool` | true for nil, the empty string, an empty `[]byte` or an empty `json.Number` |
-| `Int/Int64/Uint64/Float64/Bool() (T, error)` | Same rules as the `ToXxxE` conversions |
+| `Int/Int64/Uint/Uint64/Float32/Float64/Bool() (T, error)` | Same rules as the `ToXxxE` conversions |
+| `Duration/Time() (T, error)` | Same rules as `ToDurationE` / `ToTimeE`: numbers are nanoseconds / Unix seconds, strings are parsed as "5s" / RFC 3339, time.DateTime, time.DateOnly or a Unix timestamp |
 | `String() string` | Same rules as `ToStringE`; never fails |
-| `IntOr/Int64Or/Uint64Or/Float64Or/BoolOr(def T) T`, `StringOr(def string) string` | The converted value, or `def` when the value is empty or cannot be converted |
+| `IntOr/Int64Or/UintOr/Uint64Or/Float32Or/Float64Or/BoolOr/DurationOr/TimeOr(def T) T`, `StringOr(def string) string` | The converted value, or `def` when the value is empty or cannot be converted |
 
 ```go
 v := cast.NewValue(" 42 ")
-v.IsEmpty()                      // false
-v.IntOr(0)                       // 42
-cast.NewValue("").IntOr(7)       // 7
-cast.NewValue(nil).BoolOr(true)  // true
+v.IsEmpty()                               // false
+v.IntOr(0)                                // 42
+cast.NewValue("").IntOr(7)                // 7
+cast.NewValue(nil).BoolOr(true)           // true
+cast.NewValue("1.5s").DurationOr(time.Second) // 1.5s
+cast.NewValue("2024-05-06T07:08:09Z").TimeOr(time.Now())
 ```
 
 `rest.PathParamValue` and `rest.QueryParamValue` return a `cast.Value`, so a

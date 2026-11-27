@@ -126,3 +126,38 @@ func TestToTimeE_Errors(t *testing.T) {
 	_, err = ToTimeE([]int{})
 	assert.Error(t, err)
 }
+
+func TestToTimeE_StringLayouts(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  time.Time
+	}{
+		{"rfc3339_nano", "2024-05-06T07:08:09.123456789Z", time.Date(2024, 5, 6, 7, 8, 9, 123456789, time.UTC)},
+		{"rfc3339", "2024-05-06T07:08:09Z", time.Date(2024, 5, 6, 7, 8, 9, 0, time.UTC)},
+		{"rfc3339_offset", "2024-05-06T15:08:09+08:00", time.Date(2024, 5, 6, 7, 8, 9, 0, time.UTC)},
+		{"date_time", "2024-05-06 07:08:09", time.Date(2024, 5, 6, 7, 8, 9, 0, time.UTC)},
+		{"date_only", "2024-05-06", time.Date(2024, 5, 6, 0, 0, 0, 0, time.UTC)},
+		{"unix_string", "1714979289", time.Unix(1714979289, 0)},
+		{"padded", " 2024-05-06 ", time.Date(2024, 5, 6, 0, 0, 0, 0, time.UTC)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := ToTimeE(c.input)
+			require.NoError(t, err)
+			assert.True(t, c.want.Equal(got), "got %v, want %v", got, c.want)
+		})
+	}
+}
+
+func TestToTimeE_UnsupportedString(t *testing.T) {
+	for _, input := range []string{"", "06/05/2024", "2024-13-01", "2024-05-06T25:00:00Z"} {
+		_, err := ToTimeE(input)
+		require.Error(t, err, "%q should not parse as a time", input)
+
+		var castErr *ErrCastFailed
+		require.ErrorAs(t, err, &castErr)
+		assert.Equal(t, "string", castErr.From)
+		assert.Equal(t, "time.Time", castErr.To)
+	}
+}
