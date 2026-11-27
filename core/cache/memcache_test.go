@@ -59,6 +59,19 @@ func TestDel(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+// TestTakeValue 验证 TakeValue 是原子读取并删除：第一次返回值，第二次未命中。
+func TestTakeValue(t *testing.T) {
+	c := newTestCache(t, time.Minute)
+
+	assert.NoError(t, c.Set(bgCtx, "once", "v"))
+	v, err := c.TakeValue(bgCtx, "once")
+	require.NoError(t, err)
+	assert.Equal(t, "v", v)
+
+	_, err = c.TakeValue(bgCtx, "once")
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
 func TestDeleteMultipleKeys(t *testing.T) {
 	c := newTestCache(t, time.Minute)
 

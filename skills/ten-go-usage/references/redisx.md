@@ -13,6 +13,7 @@ connection pool management, key prefixes, distributed locks, and more.
   independent of the context used to acquire the lock and runs until `Unlock`; `Lost()` reports
   a lock that expired or was taken over
 - **Complete API**: covers the common String, Hash, List, and Set operations
+- **Atomic get-and-delete**: `GetDel` reads and removes a key in one command, useful for one-time tokens and locks
 - **Config-driven**: Config defines defaults through `default` struct tags, following the conf standard
 - **Unified errors**: semantic errors (`ErrNil`, `ErrLockNotAcquired`, etc.)
 
@@ -86,6 +87,8 @@ client := redisx.MustNew(redisx.Config{Addr: "127.0.0.1:6379"})
 // String operations
 client.Set(ctx, "key", "value", 10*time.Minute)
 val, err := client.Get(ctx, "key")
+// atomic get + delete; a missing key returns ErrNil (requires Redis 6.2+)
+val, err = client.GetDel(ctx, "one-time-token")
 n, _ := client.Incr(ctx, "counter")
 n, _ := client.IncrBy(ctx, "counter", 5)
 
@@ -95,6 +98,9 @@ exists, _ := client.Exists(ctx, "key")
 ok, _ := client.Expire(ctx, "key", 5*time.Minute)
 ttl, _ := client.TTL(ctx, "key")
 ```
+
+> `GetDel` uses Redis `GETDEL` (Redis 6.2+) and applies the configured key prefix. A missing key
+> returns `redisx.ErrNil`, the same as `Get`.
 
 ### Hash operations
 

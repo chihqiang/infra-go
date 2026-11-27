@@ -8,6 +8,7 @@ Unified cache interface offering two implementations — an **in-memory cache** 
 - **Expiry deletion**: supports a default expiry and per-key expiry, with a slight jitter so many keys don't expire at the same moment (avalanche protection)
 - **Cache stampede protection**: `Take` coalesces concurrent requests for the same key via SingleFlight, so the underlying fetch runs only once
 - **Cache penetration protection** (Redis): when a lookup yields no result, a short-lived placeholder is written so nonexistent keys don't repeatedly hit the DB
+- **Atomic consume**: `TakeValue` reads and deletes a key in one atomic step (mutex in memory, `GETDEL` in Redis), suited to one-time values such as captchas or nonces
 - **LRU eviction** (in-memory): `WithLimit` caps the capacity and evicts the least recently used key once exceeded
 - **Hit-rate statistics** (in-memory): periodically reports QPS, hit rate and element count (every minute by default)
 - **Numeric increment/decrement**: `Increment` / `Decrement` provide atomic counting (mutex in memory, INCRBY in Redis), auto-initializing missing keys
@@ -29,6 +30,7 @@ A miss returns `cache.ErrNotFound`; test it with the standard library `errors.Is
 | `Set(ctx, key, value any)` | Write using the default expiry |
 | `SetEx(ctx, key, value any, ttl)` | Write with an explicit time-to-live `ttl`; `ttl <= 0` falls back to the default |
 | `Delete(ctx, keys...)` | Delete one or more keys |
+| `TakeValue(ctx, key) (any, error)` | Atomically read and delete the value. Returns `ErrNotFound` on a miss. Use it for consume-once data (captchas, nonces); the value is not cached and `fetch` is not involved. Redis uses `GETDEL` (Redis 6.2+), MemCache locks the read+delete |
 | `Take(ctx, key, fetch func()(any, error)) (any, error)` | Call `fetch` on a miss, store the result, and deduplicate concurrent calls to prevent stampedes. A `(nil, nil)` result is returned as-is and **not cached**; return `ErrNotFound` for not-found rows if you want the short-lived negative placeholder |
 | `Increment(ctx, key, delta)` | Increment the numeric value at key by `delta`; initializes to `delta` when absent and (on Redis) applies the default expiry, so counters do not live forever |
 | `Decrement(ctx, key, delta)` | Decrement the numeric value at key by `delta`; initializes to `-delta` when absent |
@@ -37,9 +39,29 @@ A miss returns `cache.ErrNotFound`; test it with the standard library `errors.Is
 > The in-memory implementation ignores `ctx`; the Redis implementation uses `ctx` for timeouts and cancellation.
 > The interface uses non-generic `any`: callers don't need to instantiate a cache per value type.
 
+### Consume-once values (`TakeValue`)
+
+`TakeValue` is the atomic alternative to `Get` + `Delete` and is intended for values that may be
+used only once, such as captchas, nonces, or one-time tokens:
+
+```go
+code, err := c.TakeValue(ctx, "captcha:"+id)
+if errors.Is(err, cache.ErrNotFound) {
+    // missing, expired, or already consumed
+}
+// code has been removed from the cache
+```
+
+- It never calls `fetch` and never writes a value back; a second call returns `ErrNotFound`.
+- `MemCache` holds its write lock across the read and delete; `RedisCache` uses `GETDEL`
+  (**Redis 6.2+**), so concurrent consumers on multiple instances cannot both succeed.
+- The returned type follows the same rules as `Get` (MemCache returns the stored object;
+  RedisCache JSON-decodes, so numbers are `json.Number`). Use `GetAs[T]` only for non-consuming reads.
+- `TakeValue` is not `Take`: `Take` is read-through stampede protection and does not delete.
+
 ### ⚠️ Get's return type differs between backends
 
-`Get` / `Take` return `any`, but the two backends produce different Go types for the same value:
+`Get` / `Take` / `TakeValue` return `any`, but the two backends produce different Go types for the same value:
 
 | Written | Read back from MemCache | Read back from RedisCache |
 |------|--------------|----------------|
@@ -182,6 +204,7 @@ tags, err := cache.GetAs[[]string](ctx, c, "tags")
 ## Notes
 
 - When `Take`'s `fetch` returns an error nothing is written to the cache and the error is returned as-is; in the Redis implementation an `ErrNotFound` from fetch writes a placeholder
+- `TakeValue` consumes the key on success; a miss returns `ErrNotFound`. `RedisCache.TakeValue` requires Redis 6.2+ (`GETDEL`); a JSON decode failure is logged and returned as `ErrNotFound` after the key has been deleted
 - The in-memory cache is shared **within a single process** only; use `RedisCache` for cross-instance sharing
 - The effective expiry is randomized within `[0.95, 1.05] * expire`, avoiding simultaneous expiry
 - `Expire` (Redis) passes `ttl` straight through (EXPIRE has second-level precision) with no jitter; the in-memory implementation applies jitter

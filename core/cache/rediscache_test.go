@@ -63,6 +63,22 @@ func TestRedisGetMiss(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+// TestRedisTakeValue 验证 RedisCache.TakeValue 使用 GETDEL 一次性消费。
+func TestRedisTakeValue(t *testing.T) {
+	ctx := context.Background()
+	rds, mr := newMiniRedis(t)
+	c := NewRedisCache(rds)
+
+	require.NoError(t, c.Set(ctx, "once", "v"))
+	v, err := c.TakeValue(ctx, "once")
+	require.NoError(t, err)
+	assert.Equal(t, "v", v)
+	assert.False(t, mr.Exists("once"), "GETDEL 后 Redis key 应被删除")
+
+	_, err = c.TakeValue(ctx, "once")
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
 // TestRedisSetStruct, without generics: a struct is stored as JSON and Get returns a
 // map[string]any.
 // To get the concrete struct back, either assert on the map fields or restore it with
