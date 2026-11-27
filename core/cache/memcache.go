@@ -199,6 +199,30 @@ func (c *MemCache) Delete(ctx context.Context, keys ...string) error {
 	return nil
 }
 
+// TakeValue atomically reads and deletes key. A miss or an expired entry
+// returns ErrNotFound.
+func (c *MemCache) TakeValue(_ context.Context, key string) (any, error) {
+	c.lock.Lock()
+	entry, ok := c.data[key]
+	if ok && isExpired(entry) {
+		delete(c.data, key)
+		c.lru.remove(key)
+		ok = false
+	}
+	if ok {
+		delete(c.data, key)
+		c.lru.remove(key)
+	}
+	c.lock.Unlock()
+
+	if !ok {
+		c.stats.IncrementMiss()
+		return nil, ErrNotFound
+	}
+	c.stats.IncrementHit()
+	return entry.value, nil
+}
+
 // Take returns the value of key; on a miss it calls fetch, writes the result to the
 // cache and returns it, protecting against cache stampedes. A nil result from fetch
 // is returned as-is and is not cached.

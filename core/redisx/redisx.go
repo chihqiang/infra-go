@@ -144,6 +144,15 @@ func (c *Client) Get(ctx context.Context, key string) (string, error) {
 	return val, nil
 }
 
+// GetDel atomically gets and deletes key. A missing key returns ErrNil.
+func (c *Client) GetDel(ctx context.Context, key string) (string, error) {
+	val, err := c.client.GetDel(ctx, c.wrapKey(key)).Result()
+	if err != nil {
+		return "", wrapErr(err)
+	}
+	return val, nil
+}
+
 // Set stores a string value with an expiration.
 func (c *Client) Set(ctx context.Context, key string, value any, expiration time.Duration) error {
 	if err := c.client.Set(ctx, c.wrapKey(key), value, expiration).Err(); err != nil {

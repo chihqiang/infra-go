@@ -28,6 +28,9 @@ type Cache interface {
 	Set(ctx context.Context, key string, value any) error
 	SetEx(ctx context.Context, key string, value any, ttl time.Duration) error
 	Delete(ctx context.Context, keys ...string) error
+	// TakeValue atomically reads and deletes key. It is the consume-once
+	// primitive for one-time tokens such as captchas; a miss returns ErrNotFound.
+	TakeValue(ctx context.Context, key string) (any, error)
 	Take(ctx context.Context, key string, fetch func() (any, error)) (any, error)
 	// Increment adds delta to the numeric value of key; a missing key is initialized to delta.
 	Increment(ctx context.Context, key string, delta int64) error

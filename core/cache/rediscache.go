@@ -120,6 +120,27 @@ func (c *RedisCache) Get(ctx context.Context, key string) (any, error) {
 	return v, err
 }
 
+// TakeValue atomically reads and deletes key via Redis GETDEL. A miss or a
+// placeholder hit returns ErrNotFound.
+func (c *RedisCache) TakeValue(ctx context.Context, key string) (any, error) {
+	data, err := c.rds.GetDel(ctx, key)
+	if errors.Is(err, redisx.ErrNil) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if data == notFoundPlaceholder {
+		return nil, ErrNotFound
+	}
+	var v any
+	if err := decodeUseNumber(data, &v); err != nil {
+		logger.InfofCtx(ctx, "cache(%s): unmarshal cache failed, key: %s, error: %v", c.name, key, err)
+		return nil, ErrNotFound
+	}
+	return v, nil
+}
+
 // Set writes value to the cache using the default expiry.
 func (c *RedisCache) Set(ctx context.Context, key string, value any) error {
 	return c.SetEx(ctx, key, value, c.expiry)

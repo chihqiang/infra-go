@@ -92,6 +92,21 @@ func TestSetWithExpiration(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNil)
 }
 
+// TestGetDel 验证 GetDel 原子读取并删除，且遵守 keyPrefix。
+func TestGetDel(t *testing.T) {
+	ctx := context.Background()
+	c, mr := newMiniClient(t, "myapp")
+
+	require.NoError(t, c.Set(ctx, "k", "v", 0))
+	val, err := c.GetDel(ctx, "k")
+	require.NoError(t, err)
+	assert.Equal(t, "v", val)
+	assert.False(t, mr.Exists("myapp:k"))
+
+	_, err = c.GetDel(ctx, "k")
+	assert.ErrorIs(t, err, ErrNil)
+}
+
 func TestSetNX(t *testing.T) {
 	ctx := context.Background()
 	c, _ := newMiniClient(t, "")
